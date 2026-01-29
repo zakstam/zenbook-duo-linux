@@ -1,5 +1,8 @@
 # Linux for the ASUS Zenbook Duo
 
+![Zenbook Duo Control USB](sc.png)
+![Zenbook Duo Control BLUETOOTH](sc2.png)
+
 A script to manage features on the Zenbook Duo.
 
 ## Features
@@ -13,6 +16,7 @@ A script to manage features on the Zenbook Duo.
 | Screen brightness sync | ✅ | ✅ |
 | Reset airplane mode on keyboard attach/detach | ✅ | N/A |
 | Keyboard backlight set on boot/attach | ✅ | ✅ |
+| Keyboard backlight sync across attach/detach | ✅ | ✅ |
 | Keyboard backlight cycle (F4) | ✅ | ✅ |
 | Correct state on boot/resume (suspend & hibernate) | ✅ | ✅ |
 | Auto rotation | ✅ | ✅ |
@@ -20,28 +24,104 @@ A script to manage features on the Zenbook Duo.
 | Function keys (F5 brightness down, F6 brightness up) | ✅ | ✅ |
 | Function keys (F7 swap displays) | ✅ | ✅ |
 | Function keys (F9 mic mute) | ✅ | ❌ |
-| Function keys (F8 airplane mode, F11 emojis, F12 ASUS software) | ❌ | ❌ |
+| Function keys (F11 emojis) | ✅ | ✅ (Fn+F11) |
+| Function keys (F8 airplane mode, F12 ASUS software) | ❌ | ❌ |
+| Correct state on lock/unlock | ✅ | ✅ |
+| Fn key | ❌ | ✅ |
 
-### Tested on
+## Requirements
 
-- **Models**
-    - 2025 Zenbook Duo (UX8406CA)
-
-- **Distros**
-    - Ubuntu 25.10
-    - Fedora
-
-While I typically recommend Debian installs, and many items worked out of the box with `debian-backports`, Ubuntu 25.10 has so far proven to be the best option for compatibility of newer hardware, such as the Bluetooth module. Once Backports incorporates kernel 6.14, I may personally redo testing in Debian Bookworm.
+- ASUS Zenbook Duo (USB vendor `0B05`, product `1B2C`)
+- Linux with GNOME on Wayland (tested with Fedora)
+- `systemd` for service management
+- `gdctl` (part of `mutter`) for display configuration
 
 ## Installation
 
-Run the setup script, choose a default keyboard backlight level of 0 (off) to 3 (high), and a default resolution scale (1 = 100%, 1.5 = 150%, 1.66 = 166%, 2 = 200%).
+1. Clone the repository:
+
+```bash
+git clone https://github.com/zakstam/zenbook-duo-linux.git
+cd zenbook-duo-linux
+```
+
+2. Run the setup script:
 
 ```bash
 ./setup.sh
-What would you like to use for the default keyboard backlight brightness [0-3]? 1
-What would you like to use for monitor scale (1 = 100%, 1.5 = 150%, 2=200%) [1-2]? 1
-...
 ```
 
-This will set up the required systemd services to handle all the above functionality. A log file will be created in `/tmp/duo/` when the services are running.
+The setup script will:
+
+- Prompt you for your preferred **keyboard backlight level** (0-3) and **display scale** (1-2)
+- Install required packages (`inotify-tools`, `usbutils`, `mutter`/`gdctl`, `iio-sensor-proxy`, `python3-usb`, `evtest`)
+- Copy `duo.sh` to `/usr/local/bin/duo`
+- Configure passwordless `sudo` for brightness and backlight commands
+- Add your user to the `input` group (logout/login required)
+- Install udev rules and hwdb key remapping for the Zenbook Duo keyboard
+- Create systemd services for boot/shutdown and user session events
+
+3. Log out and back in (required for the `input` group change to take effect).
+
+### Supported Distros
+
+| Distro | Package Manager |
+|--------|----------------|
+| Fedora / RHEL-based | `dnf` |
+| Debian / Ubuntu-based | `apt` |
+
+For other distributions, install the dependencies manually and run the setup script — it will warn you and exit if it cannot detect your package manager.
+
+## Uninstallation
+
+Run the uninstall script from the repository:
+
+```bash
+./uninstall.sh
+```
+
+This removes all systemd services, udev/hwdb rules, sudoers entries, the installed script, and runtime files. Your user will not be removed from the `input` group automatically — the script prints instructions for that.
+
+## Control Panel UI
+
+An optional desktop control panel is available in the `ui-tauri-react/` directory, built with Tauri and React.
+
+### Install from package
+
+Build the package and install it:
+
+```bash
+cd ui-tauri-react
+npm install
+npm run build
+```
+
+Then install the package for your distro:
+
+```bash
+# Fedora / RHEL-based
+sudo dnf install src-tauri/target/release/bundle/rpm/Zenbook\ Duo\ Control-0.1.0-1.x86_64.rpm
+
+# Debian / Ubuntu-based
+sudo dpkg -i src-tauri/target/release/bundle/deb/Zenbook\ Duo\ Control_0.1.0_amd64.deb
+```
+
+### Run in development mode
+
+```bash
+cd ui-tauri-react
+npm install
+npm run dev
+```
+
+This launches the app with hot reload. The daemon must already be running (via `./setup.sh`).
+
+## Development
+
+To iterate on `duo.sh` without reinstalling, use dev mode:
+
+```bash
+./setup.sh --dev-mode
+```
+
+This skips package installation and configures systemd to run `duo.sh` directly from the repository directory instead of `/usr/local/bin/duo`.

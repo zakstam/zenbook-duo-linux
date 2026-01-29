@@ -63,8 +63,8 @@ if [ "${DEV_MODE}" = false ]; then
     sudo mkdir -p /usr/local/bin
     sudo cp ./duo.sh ${INSTALL_LOCATION}
     sudo chmod a+x ${INSTALL_LOCATION}
-    sudo sed -i "s/DEFAULT_BACKLIGHT=1/DEFAULT_BACKLIGHT=${DEFAULT_BACKLIGHT}/g" ${INSTALL_LOCATION}
-    sudo sed -i "s/DEFAULT_SCALE=1/DEFAULT_SCALE=${DEFAULT_SCALE}/g" ${INSTALL_LOCATION}
+    sudo sed -i "s/^DEFAULT_BACKLIGHT=.*/DEFAULT_BACKLIGHT=${DEFAULT_BACKLIGHT}/" ${INSTALL_LOCATION}
+    sudo sed -i "s/^DEFAULT_SCALE=.*/DEFAULT_SCALE=${DEFAULT_SCALE}/" ${INSTALL_LOCATION}
 fi
 
 # ============================================================================

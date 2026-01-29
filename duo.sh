@@ -23,6 +23,15 @@ trap 'echo "Ctrl+C captured. Exiting..."; pkill -P $$; exit 1' INT
 # Create temp directory for runtime state files (backlight level, status, logs, scripts)
 mkdir -p /tmp/duo
 
+# Make /tmp/duo usable across multiple users/processes (daemon + UI).
+# Best-effort: may fail if owned by a different user.
+chmod 1777 /tmp/duo 2>/dev/null || true
+touch /tmp/duo/duo.log /tmp/duo/status /tmp/duo/kb_backlight_level \
+    /tmp/duo/kb_backlight_lock /tmp/duo/kb_backlight_last_cycle 2>/dev/null || true
+chmod 666 /tmp/duo/status /tmp/duo/kb_backlight_level \
+    /tmp/duo/kb_backlight_lock /tmp/duo/kb_backlight_last_cycle 2>/dev/null || true
+chmod 666 /tmp/duo/duo.log 2>/dev/null || true
+
 # Use the configured default scale (dynamic detection via gdctl is commented out)
 # SCALE=$(gdctl show |grep Scale: |sed 's/│//g' |awk '{print $2}' |head -n1)
 # if [ -z "${SCALE}" ]; then
@@ -32,70 +41,64 @@ SCALE=${DEFAULT_SCALE}
 
 # Locate the python3 interpreter for running USB/HID helper scripts
 PYTHON3=$(which python3)
-# Detect if the Zenbook Duo keyboard is connected via USB and extract its vendor:product ID
-KEYBOARD_DEV=$(lsusb | grep 'Zenbook Duo Keyboard' |awk '{print $6}')
+
+function duo-usb-keyboard-id() {
+    lsusb 2>/dev/null | awk '/Zenbook Duo Keyboard/ {print $6; exit}'
+}
+
+function duo-usb-keyboard-present() {
+    [ -n "$(duo-usb-keyboard-id)" ]
+}
 
 # ============================================================================
 # EMBEDDED PYTHON SCRIPTS
 # ============================================================================
 
-# Generate the USB backlight control Python script if keyboard is connected and script doesn't exist
-if [ -n "${KEYBOARD_DEV}" ] && [ ! -f /tmp/duo/backlight.py ]; then
-    # Extract vendor and product IDs from the "VVVV:PPPP" format
-    VENDOR_ID=${KEYBOARD_DEV%:*}
-    PRODUCT_ID=${KEYBOARD_DEV#*:}
-    echo "#!/usr/bin/env python3
-
-# BSD 2-Clause License
-#
-# Copyright (c) 2024, Alesya Huzik
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice, this
-#    list of conditions and the following disclaimer.
-
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-#    this list of conditions and the following disclaimer in the documentation
-#    and/or other materials provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Generate the USB backlight control Python script.
+# (We pass vendor/product IDs at runtime so it works across attach/detach.)
+cat > /tmp/duo/backlight.py << 'PYEOF'
+#!/usr/bin/env python3
 
 import sys
 import usb.core
 import usb.util
 
-# USB Parameters
-VENDOR_ID = 0x${VENDOR_ID}
-PRODUCT_ID = 0x${PRODUCT_ID}
 REPORT_ID = 0x5A
 WVALUE = 0x035A
 WINDEX = 4
 WLENGTH = 16
 
-if len(sys.argv) != 2:
-    print(f\"Usage: {sys.argv[0]} <level>\")
+
+def usage():
+    print(f"Usage: {sys.argv[0]} <level 0-3> <vendor_id_hex> <product_id_hex>")
     sys.exit(1)
+
+
+def parse_hex(s: str) -> int:
+    s = s.strip().lower()
+    if s.startswith("0x"):
+        s = s[2:]
+    return int(s, 16)
+
+
+if len(sys.argv) != 4:
+    usage()
 
 try:
     level = int(sys.argv[1])
     if level < 0 or level > 3:
         raise ValueError
 except ValueError:
-    print(\"Invalid level. Must be an integer between 0 and 3.\")
+    print("Invalid level. Must be an integer between 0 and 3.")
     sys.exit(1)
 
-# Prepare the data packet
+try:
+    vendor_id = parse_hex(sys.argv[2])
+    product_id = parse_hex(sys.argv[3])
+except ValueError:
+    print("Invalid vendor/product. Expected hex like 0B05 1B2C (or 0x0B05 0x1B2C).")
+    sys.exit(1)
+
 data = [0] * WLENGTH
 data[0] = REPORT_ID
 data[1] = 0xBA
@@ -103,55 +106,39 @@ data[2] = 0xC5
 data[3] = 0xC4
 data[4] = level
 
-# Find the device
-dev = usb.core.find(idVendor=VENDOR_ID, idProduct=PRODUCT_ID)
-
+dev = usb.core.find(idVendor=vendor_id, idProduct=product_id)
 if dev is None:
-    print(f\"Device not found (Vendor ID: 0x{VENDOR_ID:04X}, Product ID: 0x{PRODUCT_ID:04X})\")
+    print(f"Device not found (Vendor ID: 0x{vendor_id:04X}, Product ID: 0x{product_id:04X})")
     sys.exit(1)
 
-# Detach kernel driver if necessary
-if dev.is_kernel_driver_active(WINDEX):
-    try:
+detached = False
+try:
+    if dev.is_kernel_driver_active(WINDEX):
         dev.detach_kernel_driver(WINDEX)
-    except usb.core.USBError as e:
-        print(f\"Could not detach kernel driver: {str(e)}\")
-        sys.exit(1)
+        detached = True
 
-# try:
-#     dev.set_configuration()
-#     usb.util.claim_interface(dev, WINDEX)
-# except usb.core.USBError as e:
-#     print(f\"Could not set configuration or claim interface: {str(e)}\")
-#     sys.exit(1)
-
-# Send the control transfer
-try:
     bmRequestType = 0x21  # Host to Device | Class | Interface
-    bRequest = 0x09       # SET_REPORT
-    wValue = WVALUE       # 0x035A
-    wIndex = WINDEX       # Interface number
-    ret = dev.ctrl_transfer(bmRequestType, bRequest, wValue, wIndex, data, timeout=1000)
+    bRequest = 0x09  # SET_REPORT
+    ret = dev.ctrl_transfer(bmRequestType, bRequest, WVALUE, WINDEX, data, timeout=1000)
     if ret != WLENGTH:
-        print(f\"Warning: Only {ret} bytes sent out of {WLENGTH}.\")
-    else:
-        print(\"Data packet sent successfully.\")
+        print(f"Warning: Only {ret} bytes sent out of {WLENGTH}.")
 except usb.core.USBError as e:
-    print(f\"Control transfer failed: {str(e)}\")
-    usb.util.release_interface(dev, WINDEX)
+    print(f"Control transfer failed: {e}")
     sys.exit(1)
-
-# Release the interface
-usb.util.release_interface(dev, WINDEX)
-# Reattach the kernel driver if necessary
-try:
-    dev.attach_kernel_driver(WINDEX)
-except usb.core.USBError:
-    pass  # Ignore if we can't reattach the driver
+finally:
+    try:
+        usb.util.release_interface(dev, WINDEX)
+    except Exception:
+        pass
+    if detached:
+        try:
+            dev.attach_kernel_driver(WINDEX)
+        except Exception:
+            pass
 
 sys.exit(0)
-" > /tmp/duo/backlight.py
-fi
+PYEOF
+chmod a+x /tmp/duo/backlight.py 2>/dev/null || true
 
 # Generate the virtual key injection script (for Wayland, uses /dev/uinput).
 # This creates a virtual keyboard device to inject brightness key events,
@@ -271,9 +258,6 @@ function duo-set-status() {
 }
 duo-set-status
 
-# Initialize the keyboard backlight level tracking file
-echo "${DEFAULT_BACKLIGHT}" > /tmp/duo/kb_backlight_level
-
 # ============================================================================
 # DEVICE DISCOVERY
 # ============================================================================
@@ -333,33 +317,86 @@ function duo-find-kb-abs-devices() {
 # KEYBOARD BACKLIGHT
 # ============================================================================
 
+# Read the persisted keyboard backlight level from disk.
+# Falls back to DEFAULT_BACKLIGHT if missing/invalid.
+function duo-read-kb-backlight-level() {
+    local fallback=${1:-${DEFAULT_BACKLIGHT}}
+    local level
+    level=$(cat /tmp/duo/kb_backlight_level 2>/dev/null || true)
+    if [[ "${level}" =~ ^[0-3]$ ]]; then
+        echo "${level}"
+    else
+        echo "${fallback}"
+    fi
+}
+
 # Set the keyboard backlight to a given level (0-3).
 # Persists the level to a file and sends the command via USB or Bluetooth
 # depending on how the keyboard is connected.
 function duo-set-kb-backlight() {
-    echo "${1}" > /tmp/duo/kb_backlight_level
-    if [ -n "${KEYBOARD_DEV}" ]; then
-        # USB mode: use libusb control transfer via backlight.py
-        /usr/bin/sudo ${PYTHON3} /tmp/duo/backlight.py ${1} >/dev/null
-    else
+    local LEVEL="${1}"
+    if ! [[ "${LEVEL}" =~ ^[0-3]$ ]]; then
+        LEVEL=${DEFAULT_BACKLIGHT}
+    fi
+
+    if ! echo "${LEVEL}" > /tmp/duo/kb_backlight_level 2>/dev/null; then
+        echo "$(date) - KBLIGHT - ERROR: Failed to write /tmp/duo/kb_backlight_level"
+    fi
+
+    local APPLIED=false
+
+    # Prefer USB when docked; fall back to Bluetooth if USB fails.
+    local USB_ID=$(duo-usb-keyboard-id)
+    if [ -n "${USB_ID}" ]; then
+        local VENDOR_ID=${USB_ID%:*}
+        local PRODUCT_ID=${USB_ID#*:}
+        local BL_OUTPUT
+        if BL_OUTPUT=$(/usr/bin/sudo ${PYTHON3} /tmp/duo/backlight.py ${LEVEL} ${VENDOR_ID} ${PRODUCT_ID} 2>&1); then
+            APPLIED=true
+        else
+            echo "$(date) - KBLIGHT - ERROR: Failed to set USB backlight to ${LEVEL}: ${BL_OUTPUT}"
+        fi
+    fi
+
+    if [ "${APPLIED}" != "true" ]; then
         # Bluetooth mode: use hidraw feature report via bt_backlight.py
         local BT_HIDRAW=$(duo-find-kb-hidraw)
         if [ -n "${BT_HIDRAW}" ]; then
-            /usr/bin/sudo ${PYTHON3} /tmp/duo/bt_backlight.py ${1} ${BT_HIDRAW} >/dev/null
+            local BL_OUTPUT
+            if ! BL_OUTPUT=$(/usr/bin/sudo ${PYTHON3} /tmp/duo/bt_backlight.py ${LEVEL} ${BT_HIDRAW} 2>&1); then
+                echo "$(date) - KBLIGHT - ERROR: Failed to set BT backlight to ${LEVEL} via ${BT_HIDRAW}: ${BL_OUTPUT}"
+            fi
         fi
     fi
 }
 
 # Cycle the keyboard backlight to the next level (0->1->2->3->0).
-# Uses a file lock to prevent concurrent execution from multiple event sources.
+# Uses a file lock for atomicity and a timestamp-based debounce to
+# deduplicate events from multiple input devices for the same key press,
+# while still allowing real subsequent presses through quickly.
 function duo-cycle-kb-backlight() {
-    (
-        flock -n 9 || return  # Non-blocking lock; skip if already cycling
-        local LEVEL=$(cat /tmp/duo/kb_backlight_level 2>/dev/null || echo 0)
-        LEVEL=$(( (LEVEL + 1) % 4 ))  # Wrap around from 3 back to 0
-        echo "$(date) - KBLIGHT - Cycling to level ${LEVEL}"
-        duo-set-kb-backlight ${LEVEL}
-    ) 9>/tmp/duo/kb_backlight_lock
+    local LEVEL
+    {
+        flock -n 9 || return
+
+        # Debounce: ignore if last cycle was less than 600ms ago
+        local NOW=$(date +%s%3N)
+        local LAST=$(cat /tmp/duo/kb_backlight_last_cycle 2>/dev/null || echo 0)
+        if (( NOW - LAST < 600 )) && (( NOW - LAST >= 0 )); then
+            return
+        fi
+        echo "${NOW}" > /tmp/duo/kb_backlight_last_cycle
+
+        LEVEL=$(cat /tmp/duo/kb_backlight_level 2>/dev/null || echo 0)
+        if ! [[ "${LEVEL}" =~ ^[0-3]$ ]]; then
+            LEVEL=0
+        fi
+        LEVEL=$(( (LEVEL + 1) % 4 ))
+        echo "${LEVEL}" > /tmp/duo/kb_backlight_level
+    } 9>/tmp/duo/kb_backlight_lock
+
+    echo "$(date) - KBLIGHT - Cycling to level ${LEVEL}"
+    duo-set-kb-backlight ${LEVEL}
 }
 
 # ============================================================================
@@ -374,7 +411,22 @@ BRIGHTNESS=0
 function duo-step-brightness() {
     local DIRECTION=${1}  # "up" or "down"
     echo "$(date) - BRIGHTNESS - ${DIRECTION}"
-    /usr/bin/sudo ${PYTHON3} /tmp/duo/inject_key.py "brightness${DIRECTION}" >/dev/null
+    local KEY_OUTPUT
+    if ! KEY_OUTPUT=$(/usr/bin/sudo ${PYTHON3} /tmp/duo/inject_key.py "brightness${DIRECTION}" 2>&1); then
+        echo "$(date) - BRIGHTNESS - ERROR: Failed to inject brightness ${DIRECTION} key: ${KEY_OUTPUT}"
+    fi
+}
+
+# Open an emoji picker.
+# On GNOME this is `gnome-characters`.
+function duo-open-emoji-picker() {
+    if command -v gnome-characters >/dev/null 2>&1; then
+        # Avoid spawning multiple windows on repeat key events
+        if pgrep -x gnome-characters >/dev/null 2>&1; then
+            return
+        fi
+        nohup gnome-characters >/dev/null 2>&1 &
+    fi
 }
 
 # Sync the bottom display (eDP-2) brightness to match the top display (eDP-1/intel_backlight).
@@ -385,7 +437,11 @@ function duo-sync-display-backlight() {
         CUR_BRIGHTNESS=$(cat /sys/class/backlight/intel_backlight/brightness)
         if [ "${CUR_BRIGHTNESS}" != "${BRIGHTNESS}" ]; then
             BRIGHTNESS=${CUR_BRIGHTNESS}
-            echo "$(date) - DISPLAY - Setting brightness to $(echo ${BRIGHTNESS} |sudo tee /sys/class/backlight/card1-eDP-2-backlight/brightness)"
+            if ! echo "${BRIGHTNESS}" | sudo tee /sys/class/backlight/card1-eDP-2-backlight/brightness >/dev/null 2>&1; then
+                echo "$(date) - DISPLAY - ERROR: Failed to set eDP-2 brightness to ${BRIGHTNESS}"
+            else
+                echo "$(date) - DISPLAY - Setting brightness to ${BRIGHTNESS}"
+            fi
         fi
     fi
 }
@@ -400,6 +456,7 @@ function duo-sync-display-backlight() {
 #   - Keyboard detached: enable bottom screen, enable Bluetooth, restore Wi-Fi
 function duo-check-monitor() {
     . /tmp/duo/status
+    local PREV_KEYBOARD_ATTACHED=${KEYBOARD_ATTACHED}
 
     # Re-detect keyboard connection state
     KEYBOARD_ATTACHED=false
@@ -416,56 +473,109 @@ function duo-check-monitor() {
     if [ ${KEYBOARD_ATTACHED} = true ]; then
         # --- Keyboard attached: laptop is in "laptop mode" with physical keyboard ---
         echo "$(date) - MONITOR - Keyboard attached"
-        duo-set-kb-backlight ${DEFAULT_BACKLIGHT}
+        # Restore the last requested backlight on a fresh keyboard attach.
+        # The keyboard can briefly disconnect/reconnect during backlight commands.
+        if [ "${PREV_KEYBOARD_ATTACHED}" != "true" ]; then
+            local RESTORE_LEVEL=$(duo-read-kb-backlight-level "${DEFAULT_BACKLIGHT}")
+            duo-set-kb-backlight ${RESTORE_LEVEL}
+        fi
 
         # Restore Wi-Fi to whatever state it was in before detach
         if [ "${WIFI_BEFORE}" = enabled ]; then
             echo "$(date) - MONITOR - Turning on WIFI"
-            nmcli radio wifi on
+            if ! nmcli radio wifi on 2>&1; then
+                echo "$(date) - MONITOR - ERROR: Failed to turn on WIFI"
+            fi
         fi
         # Restore Bluetooth to its previous state
         if [ "${BLUETOOTH_BEFORE}" = unblocked ]; then
             echo "$(date) - MONITOR - Turning on Bluetooth"
-            rfkill unblock bluetooth
+            if ! rfkill unblock bluetooth 2>&1; then
+                echo "$(date) - MONITOR - ERROR: Failed to unblock Bluetooth"
+            fi
         else
             echo "$(date) - MONITOR - Turning off Bluetooth"
-            rfkill block bluetooth
+            if ! rfkill block bluetooth 2>&1; then
+                echo "$(date) - MONITOR - ERROR: Failed to block Bluetooth"
+            fi
         fi
         # Disable the bottom screen (eDP-2) since keyboard covers it
         if ((${MONITOR_COUNT} > 1)); then
             echo "$(date) - MONITOR - Disabling bottom monitor"
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1
+            local GDCTL_OUTPUT
+            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 2>&1); then
+                echo "$(date) - MONITOR - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            fi
             NEW_MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
+            MONITOR_COUNT=${NEW_MONITOR_COUNT}
+            duo-set-status
             if ((${NEW_MONITOR_COUNT} == 1)); then
                 MESSAGE="Disabled bottom display"
             else
                 MESSAGE="ERROR: Bottom display still on"
             fi
+            echo "$(date) - MONITOR - ${MESSAGE}"
             notify-send -a "Zenbook Duo" -t 1000 --hint=int:transient:1 -i "preferences-desktop-display" "${MESSAGE}"
         fi
     else
         # --- Keyboard detached: laptop is in "tablet/dual-screen mode" ---
         echo "$(date) - MONITOR - Keyboard detached"
 
+        # On a fresh detach, the keyboard can power-cycle and reset its backlight.
+        # Re-apply the last requested level once Bluetooth is ready.
+        if [ "${PREV_KEYBOARD_ATTACHED}" = "true" ]; then
+            local RESTORE_LEVEL=$(duo-read-kb-backlight-level "${DEFAULT_BACKLIGHT}")
+            if [ "${RESTORE_LEVEL}" != "0" ]; then
+                (
+                    local tries=0
+                    while (( tries < 20 )); do
+                        # Stop retrying if the keyboard is docked again
+                        if duo-usb-keyboard-present; then
+                            exit 0
+                        fi
+                        # Wait until BT hidraw appears
+                        if [ -n "$(duo-find-kb-hidraw)" ]; then
+                            echo "$(date) - KBLIGHT - Re-applying level ${RESTORE_LEVEL} after detach"
+                            duo-set-kb-backlight ${RESTORE_LEVEL}
+                            exit 0
+                        fi
+                        tries=$((tries + 1))
+                        sleep 0.25
+                    done
+                    echo "$(date) - KBLIGHT - WARN: Bluetooth not ready; could not re-apply backlight after detach"
+                ) &
+            fi
+        fi
+
         # Restore Wi-Fi to its previous state
         if [ "${WIFI_BEFORE}" = enabled ]; then
             echo "$(date) - MONITOR - Turning on WIFI"
-            nmcli radio wifi on
+            if ! nmcli radio wifi on 2>&1; then
+                echo "$(date) - MONITOR - ERROR: Failed to turn on WIFI"
+            fi
         fi
         # Always enable Bluetooth when keyboard is detached (needed for BT keyboard)
         echo "$(date) - MONITOR - Turning on Bluetooth"
-        rfkill unblock bluetooth
+        if ! rfkill unblock bluetooth 2>&1; then
+            echo "$(date) - MONITOR - ERROR: Failed to unblock Bluetooth"
+        fi
 
         # Enable the bottom screen (eDP-2) positioned below the top screen
         if ((${MONITOR_COUNT} < 2)); then
             echo "$(date) - MONITOR - Enabling bottom monitor"
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1
+            local GDCTL_OUTPUT
+            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1 2>&1); then
+                echo "$(date) - MONITOR - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            fi
             NEW_MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
+            MONITOR_COUNT=${NEW_MONITOR_COUNT}
+            duo-set-status
             if ((${NEW_MONITOR_COUNT} == 2)); then
                 MESSAGE="Enabled bottom display"
             else
                 MESSAGE="ERROR: Bottom display still off"
             fi
+            echo "$(date) - MONITOR - ${MESSAGE}"
             notify-send -a "Zenbook Duo" -t 1000 --hint=int:transient:1 -i "preferences-desktop-display" "${MESSAGE}"
         fi
     fi
@@ -499,6 +609,13 @@ function duo-watch-display-backlight() {
 # Monitors input events via evtest on both KEY and ABS_MISC sub-devices.
 # Automatically reconnects when the keyboard is disconnected and reconnected.
 function duo-watch-kb-backlight-key() {
+    # Ensure only one watcher instance runs (prevents duplicate evtest consumers)
+    exec 8>/tmp/duo/watch_kb_backlight_key.lock
+    flock -n 8 || {
+        echo "$(date) - KBLIGHT - Watcher already running"
+        return
+    }
+
     echo "$(date) - KBLIGHT - Watching for backlight key (F4)"
     while true; do
         # Locate keyboard input devices (KEY device for USB, ABS devices for Bluetooth Fn keys)
@@ -516,6 +633,8 @@ function duo-watch-kb-backlight-key() {
             stdbuf -oL evtest "${KB_DEV}" 2>/dev/null | while read -r line; do
                 if echo "$line" | grep -q "KEY_F4.*value 1"; then
                     duo-cycle-kb-backlight
+                elif echo "$line" | grep -q "KEY_F11.*value 1"; then
+                    duo-open-emoji-picker
                 fi
             done &
             EVTEST_PIDS="$!"
@@ -633,7 +752,8 @@ function duo-cli() {
     post|thaw|boot)
         # System waking up or booting: restore backlight and reconfigure monitors
         echo "$(date) - ACPI - $@"
-        duo-set-kb-backlight ${DEFAULT_BACKLIGHT}
+        local RESTORE_LEVEL=$(duo-read-kb-backlight-level "${DEFAULT_BACKLIGHT}")
+        duo-set-kb-backlight ${RESTORE_LEVEL}
         duo-check-monitor
     ;;
     kbb)
@@ -644,42 +764,62 @@ function duo-cli() {
     left-up)
         # Accelerometer: device rotated with left side up (90° clockwise)
         echo "$(date) - ROTATE - Left-up"
+        local GDCTL_OUTPUT
         if [ ${KEYBOARD_ATTACHED} = true ]; then
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 90
+            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 90 2>&1); then
+                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            fi
         else
             # Dual-screen mode: rotate both displays, place eDP-2 to the left
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 90 --logical-monitor --scale ${SCALE} --monitor eDP-2 --left-of eDP-1 --transform 90
+            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 90 --logical-monitor --scale ${SCALE} --monitor eDP-2 --left-of eDP-1 --transform 90 2>&1); then
+                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            fi
         fi
 
         ;;
     right-up)
         # Accelerometer: device rotated with right side up (270° clockwise)
         echo "$(date) - ROTATE - Right-up"
+        local GDCTL_OUTPUT
         if [ ${KEYBOARD_ATTACHED} = true ]; then
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 270
+            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 270 2>&1); then
+                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            fi
         else
             # Dual-screen mode: rotate both displays, place eDP-2 to the right
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 270 --logical-monitor --scale ${SCALE} --monitor eDP-2 --right-of eDP-1 --transform 270
+            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 270 --logical-monitor --scale ${SCALE} --monitor eDP-2 --right-of eDP-1 --transform 270 2>&1); then
+                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            fi
         fi
         ;;
     bottom-up)
         # Accelerometer: device rotated upside down (180°)
         echo "$(date) - ROTATE - Bottom-up"
+        local GDCTL_OUTPUT
         if [ ${KEYBOARD_ATTACHED} = true ]; then
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 180
+            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 180 2>&1); then
+                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            fi
         else
             # Dual-screen mode: rotate both displays, place eDP-2 above
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 180 --logical-monitor --scale ${SCALE} --monitor eDP-2 --above eDP-1 --transform 180
+            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 180 --logical-monitor --scale ${SCALE} --monitor eDP-2 --above eDP-1 --transform 180 2>&1); then
+                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            fi
         fi
         ;;
     normal)
         # Accelerometer: device in normal upright orientation (0°)
         echo "$(date) - ROTATE - Normal"
+        local GDCTL_OUTPUT
         if [ ${KEYBOARD_ATTACHED} = true ]; then
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1
+            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 2>&1); then
+                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            fi
         else
             # Dual-screen mode: standard layout with eDP-2 below eDP-1
-            gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1
+            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1 2>&1); then
+                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            fi
         fi
         ;;
     *)
@@ -695,7 +835,8 @@ function duo-cli() {
 # Main entry point: initialize hardware state and launch all background watchers.
 # Each watcher runs as a background process monitoring a specific subsystem.
 function main() {
-    duo-set-kb-backlight ${DEFAULT_BACKLIGHT}  # Set initial keyboard backlight
+    local INITIAL_LEVEL=$(duo-read-kb-backlight-level "${DEFAULT_BACKLIGHT}")
+    duo-set-kb-backlight ${INITIAL_LEVEL}      # Set initial keyboard backlight
     duo-check-monitor                          # Configure displays based on current state
     duo-watch-monitor &                        # Watch USB hotplug (keyboard attach/detach)
     duo-watch-rotate &                         # Watch accelerometer for screen rotation
@@ -713,6 +854,8 @@ else
     # When run as root (e.g., from systemd sleep hook), fix permissions so
     # the user session can read/write the shared state files
     if [ "${USER}" = root ]; then
-        chmod a+w /tmp/duo /tmp/duo/duo.log /tmp/duo/status
+        chmod 1777 /tmp/duo
+        chmod 666 /tmp/duo/duo.log /tmp/duo/status /tmp/duo/kb_backlight_level \
+            /tmp/duo/kb_backlight_lock /tmp/duo/kb_backlight_last_cycle 2>/dev/null || true
     fi
 fi
