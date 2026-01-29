@@ -278,21 +278,29 @@ function duo-find-kb-hidraw() {
     done
 }
 
-# Find the /dev/input/eventN device for the keyboard that supports LED events.
-# Filters by name match and checks that the event capability bitmask includes
-# bit 20 (EV_LED = 0x100000), which identifies the correct keyboard sub-device.
-function duo-find-kb-device() {
+# Find all /dev/input/eventN devices for the keyboard that report EV_KEY.
+# The Zenbook Duo keyboard exposes multiple USB interfaces; some keys (notably
+# Fn-layer behavior) can appear on different event nodes.
+function duo-find-kb-key-devices() {
+    declare -A seen
     for devpath in /sys/class/input/event*/device/name; do
         if grep -q "ASUS Zenbook Duo Keyboard$" "$devpath" 2>/dev/null; then
             local evname=$(basename $(dirname $(dirname "$devpath")))
             local evcaps=$(cat "/sys/class/input/${evname}/device/capabilities/ev" 2>/dev/null)
-            # Check for EV_LED capability (bit 20) to identify the right sub-device
-            if [ -n "${evcaps}" ] && (( 0x${evcaps} & 0x100000 )); then
-                echo "/dev/input/${evname}"
-                return
+            if [ -n "${evcaps}" ] && (( 0x${evcaps} & 0x2 )); then
+                local node="/dev/input/${evname}"
+                if [ -z "${seen[${node}]}" ]; then
+                    echo "${node}"
+                    seen[${node}]=1
+                fi
             fi
         fi
     done
+}
+
+# Back-compat: return the first key device.
+function duo-find-kb-device() {
+    duo-find-kb-key-devices | head -n1
 }
 
 # Find all ABS_MISC input devices belonging to the Bluetooth keyboard.
@@ -618,18 +626,18 @@ function duo-watch-kb-backlight-key() {
 
     echo "$(date) - KBLIGHT - Watching for backlight key (F4)"
     while true; do
-        # Locate keyboard input devices (KEY device for USB, ABS devices for Bluetooth Fn keys)
-        local KB_DEV=$(duo-find-kb-device)
+        # Locate keyboard input devices (KEY devices for USB, ABS devices for Bluetooth Fn keys)
+        local KB_DEVS=$(duo-find-kb-key-devices)
         local KB_ABS_DEVS=$(duo-find-kb-abs-devices)
-        if [ -z "${KB_DEV}" ] && [ -z "${KB_ABS_DEVS}" ]; then
+        if [ -z "${KB_DEVS}" ] && [ -z "${KB_ABS_DEVS}" ]; then
             echo "$(date) - KBLIGHT - Keyboard device not found, retrying in 5s"
             sleep 5
             continue
         fi
         local EVTEST_PIDS=""
-        # Monitor the KEY sub-device for F4 key press (USB keyboard backlight toggle)
-        if [ -n "${KB_DEV}" ]; then
-            echo "$(date) - KBLIGHT - Monitoring ${KB_DEV} (KEY_F4)"
+        # Monitor KEY sub-devices for F4 key press (USB keyboard backlight toggle)
+        for KB_DEV in ${KB_DEVS}; do
+            echo "$(date) - KBLIGHT - Monitoring ${KB_DEV} (EV_KEY)"
             stdbuf -oL evtest "${KB_DEV}" 2>/dev/null | while read -r line; do
                 if echo "$line" | grep -q "KEY_F4.*value 1"; then
                     duo-cycle-kb-backlight
@@ -637,8 +645,8 @@ function duo-watch-kb-backlight-key() {
                     duo-open-emoji-picker
                 fi
             done &
-            EVTEST_PIDS="$!"
-        fi
+            EVTEST_PIDS="${EVTEST_PIDS} $!"
+        done
         # Monitor ABS_MISC sub-devices for Bluetooth Fn key events:
         #   value 199 = backlight cycle, value 16 = brightness down, value 32 = brightness up
         for KB_ABS_DEV in ${KB_ABS_DEVS}; do

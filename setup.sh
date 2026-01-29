@@ -111,19 +111,14 @@ fi
 # Install udev rule: grant input group read/write access to the Zenbook Duo keyboard device nodes
 echo 'SUBSYSTEM=="input", ATTRS{name}=="*ASUS Zenbook Duo Keyboard", MODE="0660", GROUP="input"' | sudo tee /etc/udev/rules.d/90-zenbook-duo-keyboard.rules
 
-# Install hwdb rule: remap the keyboard's HID usage codes to standard media keycodes.
-# This maps Fn key combos (F1-F8) to mute, volume, brightness, video switch, mic mute, bluetooth.
-# The match pattern targets USB bus (b0003), ASUS vendor (v0B05), Zenbook Duo product (p1B2C).
-echo "evdev:input:b0003v0B05p1B2C*
- KEYBOARD_KEY_7003a=mute
- KEYBOARD_KEY_7003b=volumedown
- KEYBOARD_KEY_7003c=volumeup
- KEYBOARD_KEY_7003e=brightnessdown
- KEYBOARD_KEY_7003f=brightnessup
- KEYBOARD_KEY_70041=switchvideomode
- KEYBOARD_KEY_70042=micmute
- KEYBOARD_KEY_70043=bluetooth
-" | sudo tee /etc/udev/hwdb.d/90-zenbook-duo-keyboard.hwdb
+# NOTE: We intentionally do NOT install a hwdb key remap for the Zenbook Duo
+# keyboard. On USB, the keyboard exposes both consumer (media) scancodes and
+# keyboard-page (F1-F12) scancodes depending on whether Fn is held. Installing
+# a hwdb remap for KEYBOARD_KEY_7003* would override the Fn layer and make
+# Fn+F keys behave like media keys.
+#
+# If you have an old version installed, remove its hwdb remap.
+sudo rm -f /etc/udev/hwdb.d/90-zenbook-duo-keyboard.hwdb
 
 # Rebuild the hardware database and trigger udev to apply the new rules immediately
 sudo systemd-hwdb update

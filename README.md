@@ -27,7 +27,11 @@ A script to manage features on the Zenbook Duo.
 | Function keys (F11 emojis) | ✅ | ✅ (Fn+F11) |
 | Function keys (F8 airplane mode, F12 ASUS software) | ❌ | ❌ |
 | Correct state on lock/unlock | ✅ | ✅ |
-| Fn key | ❌ | ✅ |
+| Fn layer (top row) | ✅ | ✅ |
+
+Notes:
+- USB top row defaults to media keys; hold `Fn` for `F1`-`F12`.
+- Do not install hwdb remaps for `KEYBOARD_KEY_7003*` on USB (it overrides the Fn layer).
 
 ## Requirements
 
@@ -58,8 +62,18 @@ The setup script will:
 - Copy `duo.sh` to `/usr/local/bin/duo`
 - Configure passwordless `sudo` for brightness and backlight commands
 - Add your user to the `input` group (logout/login required)
-- Install udev rules and hwdb key remapping for the Zenbook Duo keyboard
+- Install udev rules for the Zenbook Duo keyboard
 - Create systemd services for boot/shutdown and user session events
+
+### Upgrading from older versions
+
+If you previously installed a hwdb key remap, remove it so `Fn`+`F1`-`F12` works on USB:
+
+```bash
+sudo rm -f /etc/udev/hwdb.d/90-zenbook-duo-keyboard.hwdb
+sudo systemd-hwdb update
+sudo udevadm trigger
+```
 
 3. Log out and back in (required for the `input` group change to take effect).
 
