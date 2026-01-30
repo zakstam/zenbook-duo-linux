@@ -78,6 +78,10 @@ export const usbMediaRemapStatus = () =>
 export const usbMediaRemapStart = () => invoke<void>("usb_media_remap_start");
 export const usbMediaRemapStop = () => invoke<void>("usb_media_remap_stop");
 
+// Hotkeys
+export const applyUsbMediaRemapHotkey = (enabled: boolean, accelerator: string) =>
+  invoke<void>("apply_usb_media_remap_hotkey", { enabled, accelerator });
+
 
 // Tauri event listeners
 export const onStatusChanged = (cb: () => void): Promise<UnlistenFn> =>

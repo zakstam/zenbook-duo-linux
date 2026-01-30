@@ -1,7 +1,7 @@
 use chrono::Local;
 use evdev::uinput::VirtualDeviceBuilder;
 use evdev::{AttributeSet, Device, EventType, InputEvent, Key};
-use nix::fcntl::{flock, FlockArg};
+use nix::fcntl::{Flock, FlockArg};
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::{Pid, Uid};
 use signal_hook::flag;
@@ -9,7 +9,6 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -280,9 +279,10 @@ fn cycle_backlight() {
         Err(_) => return,
     };
 
-    if flock(lock.as_raw_fd(), FlockArg::LockExclusiveNonblock).is_err() {
-        return;
-    }
+    let _lock = match Flock::lock(lock, FlockArg::LockExclusiveNonblock) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
 
     let now = current_time_ms();
     if let Some(last) = fs::read_to_string(&kbl_last_cycle_path)

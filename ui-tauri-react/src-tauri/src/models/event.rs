@@ -46,6 +46,7 @@ impl HardwareEvent {
         }
     }
 
+    #[allow(dead_code)]
     pub fn warning(
         category: EventCategory,
         message: impl Into<String>,
@@ -60,6 +61,7 @@ impl HardwareEvent {
         }
     }
 
+    #[allow(dead_code)]
     pub fn error(
         category: EventCategory,
         message: impl Into<String>,

@@ -40,6 +40,8 @@ export interface DuoSettings {
   syncBrightness: boolean;
   theme: ThemePreference;
   usbMediaRemapEnabled: boolean;
+  usbMediaRemapHotkey: string;
+  usbMediaRemapHotkeyEnabled: boolean;
   setupCompleted: boolean;
 }
 

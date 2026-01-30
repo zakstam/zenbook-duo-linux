@@ -100,6 +100,22 @@ This removes all systemd services, udev/hwdb rules, sudoers entries, the install
 
 An optional desktop control panel is available in the `ui-tauri-react/` directory, built with Tauri and React.
 
+### Install (recommended)
+
+Use the helper script to install prerequisites, build, and install the package for your distro:
+
+```bash
+./install-ui.sh
+```
+
+### One-line install (curl)
+
+If you just want to install the UI without cloning the repo manually:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install-ui.sh | bash
+```
+
 ### Install from package
 
 Build the package and install it:
@@ -107,7 +123,9 @@ Build the package and install it:
 ```bash
 cd ui-tauri-react
 npm install
-npm run build
+npm run build -- --bundles rpm   # Fedora / RHEL-based
+# or:
+# npm run build -- --bundles deb # Debian / Ubuntu-based
 ```
 
 Then install the package for your distro:
@@ -129,6 +147,15 @@ npm run dev
 ```
 
 This launches the app with hot reload. The daemon must already be running (via `./setup.sh`).
+
+### Hotkey note (Fedora Workstation / GNOME Wayland)
+
+GNOME Wayland generally does not allow apps to register global hotkeys directly.
+Instead, create a GNOME custom shortcut that runs:
+
+```bash
+zenbook-duo-control --toggle-usb-media-remap
+```
 
 ## Development
 

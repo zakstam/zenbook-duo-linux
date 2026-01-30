@@ -15,5 +15,19 @@ fn main() {
         }
     }
 
+    // CLI mode: allow the compositor (GNOME on Wayland) to bind a shortcut that runs a command.
+    if std::env::args().any(|a| a == "--toggle-usb-media-remap") {
+        // Keep logging behavior consistent with the GUI app.
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        match zenbook_duo_control_lib::toggle_usb_media_remap_cli() {
+            Ok(()) => std::process::exit(0),
+            Err(err) => {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     zenbook_duo_control_lib::run()
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore, useDispatch, refreshSettings } from "@/lib/store";
 import {
+  applyUsbMediaRemapHotkey,
   saveSettings,
   usbMediaRemapStart,
   usbMediaRemapStatus,
@@ -10,7 +11,9 @@ import type { DuoSettings, ThemePreference, UsbMediaRemapStatus } from "@/types/
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -26,6 +29,7 @@ export default function Settings() {
   const store = useStore();
   const dispatch = useDispatch();
   const { setTheme } = useTheme();
+  const isUsb = store.status.connectionType === "usb";
   const [saving, setSaving] = useState(false);
   const [remapBusy, setRemapBusy] = useState(false);
   const [remapStatus, setRemapStatus] = useState<UsbMediaRemapStatus>({
@@ -52,6 +56,22 @@ export default function Settings() {
     setSaving(true);
     try {
       await saveSettings(localSettings);
+      // Apply the global hotkey immediately (best-effort) so the user doesn't have to restart.
+      try {
+        await applyUsbMediaRemapHotkey(
+          localSettings.usbMediaRemapHotkeyEnabled,
+          localSettings.usbMediaRemapHotkey
+        );
+      } catch (err) {
+        console.error("Failed to apply hotkey:", err);
+        const msg =
+          typeof err === "string"
+            ? err
+            : err && typeof err === "object" && "message" in err
+              ? String((err as { message?: unknown }).message)
+              : "Failed to apply hotkey";
+        toast.error(msg);
+      }
       await refreshSettings(dispatch);
 
       const themeMap: Record<ThemePreference, string> = {
@@ -84,6 +104,10 @@ export default function Settings() {
   };
 
   const handleRemapToggle = async (nextEnabled: boolean) => {
+    if (!isUsb) {
+      toast.error("USB Media Remap is only available when the keyboard is connected via USB.");
+      return;
+    }
     setRemapBusy(true);
     const opId = (remapOpIdRef.current += 1);
     setRemapDesired(nextEnabled);
@@ -137,9 +161,15 @@ export default function Settings() {
       </div>
 
       <div className="glass-card animate-stagger-in stagger-1 rounded-xl p-5">
-        <h3 className="mb-5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-          Defaults
-        </h3>
+        <div className="mb-5 flex items-center justify-between gap-4">
+          <h3 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Defaults
+          </h3>
+          <Button onClick={handleSave} disabled={saving} size="sm" className="gap-2">
+            <IconDeviceFloppy className="size-4" stroke={1.5} />
+            {saving ? "Saving..." : "Save"}
+          </Button>
+        </div>
 
         <div className="space-y-5">
           <SettingRow label="Default Backlight Level" description="Applied when the keyboard connects">
@@ -208,12 +238,21 @@ export default function Settings() {
           <SettingRow
             label="USB Media Remap"
             description="Maps F1-F3/F5-F6 to media and brightness keys while docked"
+            labelExtra={
+              store.status.connectionType === "bluetooth" ? (
+                <Badge
+                  className="border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200"
+                >
+                  Unavailable on bluetooth
+                </Badge>
+              ) : null
+            }
           >
             <div className="flex items-center gap-3">
               <Switch
                 checked={remapDesired ?? remapStatus.running}
                 onCheckedChange={handleRemapToggle}
-                disabled={remapBusy || remapDesired !== null}
+                disabled={!isUsb || remapBusy || remapDesired !== null}
               />
               <span className="text-[12px] text-muted-foreground">
                 {remapDesired !== null
@@ -231,15 +270,45 @@ export default function Settings() {
           <p className="text-[12px] text-muted-foreground">
             Requires admin approval and restarts input handling while enabled.
           </p>
+
+          <div className="h-px bg-border/50" />
+
+          <SettingRow
+            label="USB Media Remap Hotkey"
+            description="Global keyboard shortcut to toggle USB media remap"
+          >
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={localSettings.usbMediaRemapHotkeyEnabled}
+                onCheckedChange={(v) => updateLocal("usbMediaRemapHotkeyEnabled", v)}
+                disabled={saving}
+              />
+              <span className="text-[12px] text-muted-foreground">
+                {localSettings.usbMediaRemapHotkeyEnabled ? "On" : "Off"}
+              </span>
+            </div>
+          </SettingRow>
+
+          <SettingRow label="Hotkey" description='Example: "Ctrl+Alt+M"'>
+            <div className="flex items-center gap-3">
+              <Input
+                className="w-48"
+                value={localSettings.usbMediaRemapHotkey}
+                onChange={(e) => updateLocal("usbMediaRemapHotkey", e.target.value)}
+                disabled={saving || !localSettings.usbMediaRemapHotkeyEnabled}
+                placeholder="Ctrl+Alt+M"
+              />
+            </div>
+          </SettingRow>
+
+          <p className="text-[12px] text-muted-foreground">
+            Note: On Wayland (including Fedora Workstation GNOME), app-registered global hotkeys
+            are typically not supported. Use GNOME custom shortcuts to run
+            <span className="font-mono"> zenbook-duo-control --toggle-usb-media-remap</span>.
+          </p>
         </div>
       </div>
 
-      <div className="mt-5 flex justify-end animate-stagger-in stagger-3">
-        <Button onClick={handleSave} disabled={saving} className="gap-2">
-          <IconDeviceFloppy className="size-4" stroke={1.5} />
-          {saving ? "Saving..." : "Save Settings"}
-        </Button>
-      </div>
     </div>
   );
 }
@@ -247,16 +316,21 @@ export default function Settings() {
 function SettingRow({
   label,
   description,
+  labelExtra,
   children,
 }: {
   label: string;
   description?: string;
+  labelExtra?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex items-center justify-between gap-4">
       <div>
-        <Label className="text-[13px] font-medium">{label}</Label>
+        <div className="flex items-center gap-2">
+          <Label className="text-[13px] font-medium">{label}</Label>
+          {labelExtra}
+        </div>
         {description && (
           <p className="mt-0.5 text-[12px] text-muted-foreground">{description}</p>
         )}

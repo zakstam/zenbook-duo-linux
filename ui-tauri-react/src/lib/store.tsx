@@ -51,6 +51,8 @@ const defaultSettings: DuoSettings = {
   syncBrightness: true,
   theme: "system",
   usbMediaRemapEnabled: true,
+  usbMediaRemapHotkey: "Ctrl+Alt+M",
+  usbMediaRemapHotkeyEnabled: true,
   setupCompleted: false,
 };
 
