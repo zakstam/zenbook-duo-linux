@@ -38,6 +38,39 @@ while [ "$#" -gt 0 ]; do
 done
 
 # ============================================================================
+# USER CONTEXT
+# ============================================================================
+
+TARGET_USER="${USER}"
+if [ "${EUID}" = "0" ]; then
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        TARGET_USER="${SUDO_USER}"
+    else
+        echo "ERROR: uninstall.sh must be run from a real user session."
+        echo "Run: ./uninstall.sh"
+        exit 1
+    fi
+fi
+
+TARGET_UID="$(id -u "${TARGET_USER}" 2>/dev/null || true)"
+TARGET_HOME="$(getent passwd "${TARGET_USER}" 2>/dev/null | cut -d: -f6)"
+if [ -z "${TARGET_UID}" ] || [ -z "${TARGET_HOME}" ]; then
+    echo "ERROR: failed to resolve TARGET_USER=${TARGET_USER}"
+    exit 1
+fi
+
+function run_user_systemctl() {
+    if [ "${TARGET_USER}" = "${USER}" ] && [ "${EUID}" != "0" ]; then
+        systemctl --user "$@"
+        return
+    fi
+    sudo -u "${TARGET_USER}" \
+        XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+        systemctl --user "$@"
+}
+
+# ============================================================================
 # STOP RUNNING UI (BEST-EFFORT)
 # ============================================================================
 
@@ -50,11 +83,11 @@ pkill -f zenbook-duo-control 2>/dev/null || true
 
 # Stop running services
 sudo systemctl stop zenbook-duo.service 2>/dev/null
-systemctl --user stop zenbook-duo-user.service 2>/dev/null
+run_user_systemctl stop zenbook-duo-user.service 2>/dev/null
 
 # Disable services
 sudo systemctl disable zenbook-duo.service 2>/dev/null
-systemctl --user disable zenbook-duo-user.service 2>/dev/null
+run_user_systemctl disable zenbook-duo-user.service 2>/dev/null
 sudo systemctl --global disable zenbook-duo-user.service 2>/dev/null
 
 # Remove service files and sleep hook
@@ -64,7 +97,7 @@ sudo rm -f /usr/lib/systemd/system-sleep/duo
 
 # Reload systemd
 sudo systemctl daemon-reload
-systemctl --user daemon-reload
+run_user_systemctl daemon-reload
 
 # ============================================================================
 # UDEV & HWDB RULES
@@ -79,9 +112,12 @@ sudo udevadm trigger
 # SUDOERS ENTRIES
 # ============================================================================
 
-# Remove sudoers lines added by setup.sh (matching /tmp/duo/ paths)
+# Remove sudoers lines added by setup.sh (matching duo helper script paths)
 if sudo grep -q "/tmp/duo/" /etc/sudoers; then
     sudo sed -i '\|/tmp/duo/|d' /etc/sudoers
+fi
+if sudo grep -q "/usr/local/libexec/zenbook-duo/" /etc/sudoers; then
+    sudo sed -i '\|/usr/local/libexec/zenbook-duo/|d' /etc/sudoers
 fi
 if sudo grep -q "card1-eDP-2-backlight/brightness" /etc/sudoers; then
     sudo sed -i '\|card1-eDP-2-backlight/brightness|d' /etc/sudoers
@@ -95,12 +131,10 @@ fi
 # ============================================================================
 
 sudo rm -f /usr/local/bin/duo
+sudo rm -rf /usr/local/libexec/zenbook-duo
 rm -rf /tmp/duo
-# Newer versions use a per-user directory (/tmp/duo-$UID). Remove only for current user.
-UID_NUM="$(id -u 2>/dev/null || echo "")"
-if [ -n "$UID_NUM" ]; then
-    rm -rf "/tmp/duo-$UID_NUM"
-fi
+# Newer versions use a per-user directory (/tmp/duo-$UID). Remove only for target user.
+rm -rf "/tmp/duo-${TARGET_UID}"
 
 # ============================================================================
 # UI APP (RPM/DEB) + DESKTOP ENTRIES
@@ -120,8 +154,8 @@ if [ "$KEEP_UI" = false ]; then
     fi
 
     # Remove any legacy user-local desktop entry created by older install-ui.sh versions.
-    rm -f "$HOME/.local/share/applications/zenbook-duo-control.desktop" 2>/dev/null || true
-    update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+    rm -f "$TARGET_HOME/.local/share/applications/zenbook-duo-control.desktop" 2>/dev/null || true
+    update-desktop-database "$TARGET_HOME/.local/share/applications" 2>/dev/null || true
 fi
 
 # ============================================================================
@@ -129,7 +163,7 @@ fi
 # ============================================================================
 
 if [ "$KEEP_CONFIG" = false ]; then
-    rm -rf "$HOME/.config/zenbook-duo" 2>/dev/null || true
+    rm -rf "$TARGET_HOME/.config/zenbook-duo" 2>/dev/null || true
 fi
 
 # ============================================================================

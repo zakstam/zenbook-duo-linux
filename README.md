@@ -20,6 +20,9 @@ This project adds better Linux support for the Zenbook Duo by running a small ba
 ./setup.sh
 ```
 
+Notes:
+- If you prefer to run it with sudo, use `sudo -E ./setup.sh` (so per-user setup targets your user session).
+
 4. Log out and back in (needed for permission changes).
 
 ### Optional: install the Control Panel app (UI)
@@ -97,12 +100,18 @@ Notes:
 
 - Installs dependencies (`inotify-tools`, `usbutils`, `mutter`/`gdctl`, `iio-sensor-proxy`, `python3-usb`/`python3-pyusb`, `evtest`)
 - Installs `duo.sh` to `/usr/local/bin/duo` (or uses repo path in `--dev-mode`)
-- Adds sudoers rules for a small set of brightness/backlight helper commands
+- Installs helper scripts to `/usr/local/libexec/zenbook-duo` and adds sudoers rules for brightness/backlight helper commands
 - Adds your user to the `input` group (logout/login required)
 - Installs a udev rule for the Zenbook Duo keyboard
 - Installs/enables systemd units:
   - `zenbook-duo.service` (system boot/shutdown)
   - `zenbook-duo-user.service` (user session)
+
+### Troubleshooting
+
+- Nothing happens when docking/undocking:
+  - Check the user service is running: `systemctl --user status zenbook-duo-user.service`
+  - Watch logs while docking/undocking: `journalctl --user -u zenbook-duo-user.service -f`
 
 ### Upgrading from older versions
 
@@ -141,3 +150,15 @@ To iterate on `duo.sh` without reinstalling:
 ```bash
 ./setup.sh --dev-mode
 ```
+
+---
+
+## Fedora: “Nobara-like” setup helper
+
+If you’re on Fedora and want a more “Nobara-like” out-of-box experience (RPM Fusion, codecs, common gaming tools), there’s an optional helper script:
+
+```bash
+./nobara-like.sh
+```
+
+It can also add the Nobara COPR repo definitions **disabled by default**, so you can cherry-pick packages without mixing repos during normal upgrades.

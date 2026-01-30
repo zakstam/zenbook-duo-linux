@@ -17,8 +17,41 @@ DEFAULT_SCALE=1.66
 # INITIALIZATION
 # ============================================================================
 
-# Trap Ctrl+C to cleanly terminate all child processes (watchers) before exiting
-trap 'echo "Ctrl+C captured. Exiting..."; pkill -P $$; exit 1' INT
+DUO_CLEANED_UP=false
+
+function duo-cleanup() {
+    # Best-effort: avoid double cleanup.
+    if [ "${DUO_CLEANED_UP}" = "true" ]; then
+        return
+    fi
+    DUO_CLEANED_UP=true
+
+    # Stop any background jobs started by this shell (watchers, retry helpers).
+    local JOB_PIDS
+    JOB_PIDS="$(jobs -pr 2>/dev/null || true)"
+    if [ -n "${JOB_PIDS}" ]; then
+        kill -TERM ${JOB_PIDS} 2>/dev/null || true
+    fi
+
+    # Also kill any remaining direct children (process substitutions, helpers).
+    pkill -TERM -P $$ 2>/dev/null || true
+
+    # Give processes a moment to exit cleanly, then hard-kill stragglers.
+    sleep 0.2
+    if [ -n "${JOB_PIDS}" ]; then
+        kill -KILL ${JOB_PIDS} 2>/dev/null || true
+    fi
+    pkill -KILL -P $$ 2>/dev/null || true
+}
+
+function duo-handle-signal() {
+    echo "$(date) - SERVICE - Signal received, shutting down..."
+    duo-cleanup
+    exit 0
+}
+
+trap duo-handle-signal INT TERM HUP QUIT
+trap duo-cleanup EXIT
 
 # Create temp directory for runtime state files (backlight level, status, logs, scripts)
 mkdir -p /tmp/duo
@@ -39,8 +72,40 @@ chmod 666 /tmp/duo/duo.log 2>/dev/null || true
 # fi
 SCALE=${DEFAULT_SCALE}
 
-# Locate the python3 interpreter for running USB/HID helper scripts
-PYTHON3=$(which python3)
+# Locate the python3 interpreter for running USB/HID helper scripts.
+# Prefer /usr/bin/python3 to match typical sudoers entries.
+if [ -x /usr/bin/python3 ]; then
+    PYTHON3=/usr/bin/python3
+else
+    PYTHON3=$(command -v python3 2>/dev/null || true)
+fi
+
+function duo-timeout() {
+    local DURATION="${1}"
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+        timeout --preserve-status "${DURATION}" "$@"
+    else
+        "$@"
+    fi
+}
+
+function duo-has-graphical-session() {
+    # Avoid doing GNOME session work from root/system services (boot/shutdown hooks).
+    if [ "${EUID}" = "0" ]; then
+        return 1
+    fi
+
+    # Systemd user services often don't have DISPLAY/WAYLAND env set, but they
+    # can still talk to the user D-Bus. Prefer that as a signal.
+    if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/bus" ]; then
+        return 0
+    fi
+
+    # Best-effort fallback: if we can't prove it, still allow trying (all GNOME
+    # calls are wrapped with timeouts and should fail fast).
+    return 0
+}
 
 function duo-usb-keyboard-id() {
     lsusb 2>/dev/null | awk '/Zenbook Duo Keyboard/ {print $6; exit}'
@@ -51,181 +116,100 @@ function duo-usb-keyboard-present() {
 }
 
 # ============================================================================
-# EMBEDDED PYTHON SCRIPTS
+# USB MEDIA REMAP (optional UI helper)
 # ============================================================================
 
-# Generate the USB backlight control Python script.
-# (We pass vendor/product IDs at runtime so it works across attach/detach.)
-cat > /tmp/duo/backlight.py << 'PYEOF'
-#!/usr/bin/env python3
+function duo-usb-media-remap-pidfile() {
+    echo "/tmp/duo-${UID}/usb_media_remap.pid"
+}
 
-import sys
-import usb.core
-import usb.util
+function duo-usb-media-remap-enabled() {
+    # Default to enabled if not configured (matches UI default).
+    local settings_file="${XDG_CONFIG_HOME:-$HOME/.config}/zenbook-duo/settings.json"
+    if [ -z "${PYTHON3}" ] || [ ! -f "${settings_file}" ]; then
+        echo "true"
+        return 0
+    fi
 
-REPORT_ID = 0x5A
-WVALUE = 0x035A
-WINDEX = 4
-WLENGTH = 16
+    "${PYTHON3}" - <<PY 2>/dev/null || echo "true"
+import json
+from pathlib import Path
 
-
-def usage():
-    print(f"Usage: {sys.argv[0]} <level 0-3> <vendor_id_hex> <product_id_hex>")
-    sys.exit(1)
-
-
-def parse_hex(s: str) -> int:
-    s = s.strip().lower()
-    if s.startswith("0x"):
-        s = s[2:]
-    return int(s, 16)
-
-
-if len(sys.argv) != 4:
-    usage()
-
+p = Path("${settings_file}")
 try:
-    level = int(sys.argv[1])
-    if level < 0 or level > 3:
-        raise ValueError
-except ValueError:
-    print("Invalid level. Must be an integer between 0 and 3.")
-    sys.exit(1)
+    data = json.loads(p.read_text())
+    v = data.get("usbMediaRemapEnabled", True)
+    print("true" if bool(v) else "false")
+except Exception:
+    print("true")
+PY
+}
 
-try:
-    vendor_id = parse_hex(sys.argv[2])
-    product_id = parse_hex(sys.argv[3])
-except ValueError:
-    print("Invalid vendor/product. Expected hex like 0B05 1B2C (or 0x0B05 0x1B2C).")
-    sys.exit(1)
+function duo-usb-media-remap-running() {
+    local pid_file
+    pid_file="$(duo-usb-media-remap-pidfile)"
+    if [ ! -f "${pid_file}" ]; then
+        return 1
+    fi
+    local pid
+    pid="$(cat "${pid_file}" 2>/dev/null || true)"
+    if ! [[ "${pid}" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    kill -0 "${pid}" 2>/dev/null
+}
 
-data = [0] * WLENGTH
-data[0] = REPORT_ID
-data[1] = 0xBA
-data[2] = 0xC5
-data[3] = 0xC4
-data[4] = level
+function duo-usb-media-remap-start() {
+    local helper=()
+    if command -v usb-media-remap >/dev/null 2>&1; then
+        helper=(usb-media-remap)
+    elif command -v zenbook-duo-control >/dev/null 2>&1; then
+        helper=(zenbook-duo-control --usb-media-remap-helper)
+    else
+        return 0
+    fi
+    if duo-usb-media-remap-running; then
+        return 0
+    fi
 
-dev = usb.core.find(idVendor=vendor_id, idProduct=product_id)
-if dev is None:
-    print(f"Device not found (Vendor ID: 0x{vendor_id:04X}, Product ID: 0x{product_id:04X})")
-    sys.exit(1)
+    local pid_file
+    pid_file="$(duo-usb-media-remap-pidfile)"
+    mkdir -p "$(dirname "${pid_file}")" 2>/dev/null || true
 
-detached = False
-try:
-    if dev.is_kernel_driver_active(WINDEX):
-        dev.detach_kernel_driver(WINDEX)
-        detached = True
+    echo "$(date) - USB-REMAP - Starting (pid file: ${pid_file})"
+    "${helper[@]}" --pid-file "${pid_file}" --user "${USER}" >/dev/null 2>&1 &
+}
 
-    bmRequestType = 0x21  # Host to Device | Class | Interface
-    bRequest = 0x09  # SET_REPORT
-    ret = dev.ctrl_transfer(bmRequestType, bRequest, WVALUE, WINDEX, data, timeout=1000)
-    if ret != WLENGTH:
-        print(f"Warning: Only {ret} bytes sent out of {WLENGTH}.")
-except usb.core.USBError as e:
-    print(f"Control transfer failed: {e}")
-    sys.exit(1)
-finally:
-    try:
-        usb.util.release_interface(dev, WINDEX)
-    except Exception:
-        pass
-    if detached:
-        try:
-            dev.attach_kernel_driver(WINDEX)
-        except Exception:
-            pass
+function duo-usb-media-remap-stop() {
+    local helper=()
+    if command -v usb-media-remap >/dev/null 2>&1; then
+        helper=(usb-media-remap)
+    elif command -v zenbook-duo-control >/dev/null 2>&1; then
+        helper=(zenbook-duo-control --usb-media-remap-helper)
+    else
+        return 0
+    fi
+    if ! duo-usb-media-remap-running; then
+        return 0
+    fi
 
-sys.exit(0)
-PYEOF
-chmod a+x /tmp/duo/backlight.py 2>/dev/null || true
+    local pid_file
+    pid_file="$(duo-usb-media-remap-pidfile)"
+    echo "$(date) - USB-REMAP - Stopping (pid file: ${pid_file})"
+    duo-timeout 3s "${helper[@]}" --stop --pid-file "${pid_file}" >/dev/null 2>&1 || true
+}
 
-# Generate the virtual key injection script (for Wayland, uses /dev/uinput).
-# This creates a virtual keyboard device to inject brightness key events,
-# allowing GNOME to display its native on-screen brightness indicator.
-if [ ! -f /tmp/duo/inject_key.py ]; then
-    cat > /tmp/duo/inject_key.py << 'IKEOF'
-#!/usr/bin/env python3
-"""Inject a key event via /dev/uinput so GNOME handles it natively with OSD."""
-import struct, os, sys, time, fcntl
+# ============================================================================
+# HELPER SCRIPTS
+# ============================================================================
 
-# Map human-readable key names to Linux input event key codes
-KEYS = {"brightnessdown": 224, "brightnessup": 225}
-key = KEYS.get(sys.argv[1])
-if key is None:
-    sys.exit(1)
+DUO_LIBEXEC_DIR="${DUO_LIBEXEC_DIR:-/usr/local/libexec/zenbook-duo}"
+DUO_BACKLIGHT_USB_PY="${DUO_LIBEXEC_DIR}/backlight.py"
+DUO_BACKLIGHT_BT_PY="${DUO_LIBEXEC_DIR}/bt_backlight.py"
+DUO_INJECT_KEY_PY="${DUO_LIBEXEC_DIR}/inject_key.py"
 
-# ioctl constants for uinput device setup
-UI_SET_EVBIT  = 0x40045564
-UI_SET_KEYBIT = 0x40045565
-UI_DEV_SETUP  = 0x405C5503
-UI_DEV_CREATE = 0x5501
-UI_DEV_DESTROY = 0x5502
-# Linux input event types
-EV_SYN = 0x00  # Synchronization event
-EV_KEY = 0x01  # Key press/release event
-
-def ev(typ, code, value):
-    """Build a raw input_event struct with current timestamp."""
-    t = time.time()
-    return struct.pack("llHHi", int(t), int((t % 1) * 1e6), typ, code, value)
-
-# Open the uinput device for writing
-fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
-# Enable key events and register the specific key code
-fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
-fcntl.ioctl(fd, UI_SET_KEYBIT, key)
-
-# Configure the virtual device identity (bus type 0x06 = virtual)
-# struct uinput_setup { struct input_id { u16 bustype, vendor, product, version }; char name[80]; u32 ff_effects_max; }
-setup = struct.pack("HHHH80sI", 0x06, 0, 0, 0, b"duo-virtual-kbd", 0)
-fcntl.ioctl(fd, UI_DEV_SETUP, setup)
-fcntl.ioctl(fd, UI_DEV_CREATE)
-time.sleep(0.1)  # Allow time for device registration
-
-# Simulate a full key press: key down -> sync -> key up -> sync
-os.write(fd, ev(EV_KEY, key, 1))   # Key press
-os.write(fd, ev(EV_SYN, 0, 0))     # Sync
-os.write(fd, ev(EV_KEY, key, 0))   # Key release
-os.write(fd, ev(EV_SYN, 0, 0))     # Sync
-
-time.sleep(0.1)  # Allow time for event processing
-# Clean up: destroy virtual device and close file descriptor
-fcntl.ioctl(fd, UI_DEV_DESTROY)
-os.close(fd)
-IKEOF
-fi
-
-# Generate the Bluetooth backlight control script (uses hidraw Feature Report).
-# Unlike USB mode which uses libusb control transfers, Bluetooth uses the
-# HID feature report interface via the hidraw device node.
-if [ ! -f /tmp/duo/bt_backlight.py ]; then
-    cat > /tmp/duo/bt_backlight.py << 'BTEOF'
-#!/usr/bin/env python3
-"""Send backlight feature report via hidraw (Bluetooth HID)."""
-import sys, fcntl, os
-
-def HIDIOCSFEATURE(length):
-    """Build the HIDIOCSFEATURE ioctl number for the given data length."""
-    return (3 << 30) | (length << 16) | (0x48 << 8) | 0x06
-
-WLENGTH = 16  # Feature report packet length
-level = int(sys.argv[1])   # Backlight level (0-3)
-hidraw = sys.argv[2]       # Path to hidraw device (e.g., /dev/hidraw0)
-
-# Build the feature report data packet (same format as USB control transfer)
-data = bytearray(WLENGTH)
-data[0] = 0x5A  # Report ID
-data[1] = 0xBA  # Command bytes
-data[2] = 0xC5
-data[3] = 0xC4
-data[4] = level  # Brightness level
-
-# Send the feature report via ioctl on the hidraw device
-fd = os.open(hidraw, os.O_RDWR)
-fcntl.ioctl(fd, HIDIOCSFEATURE(WLENGTH), bytes(data))
-os.close(fd)
-BTEOF
+if [ -z "${PYTHON3}" ]; then
+    echo "$(date) - INIT - ERROR: python3 not found in PATH"
 fi
 
 # ============================================================================
@@ -235,8 +219,15 @@ fi
 # Capture current Wi-Fi and Bluetooth states on startup so they can be
 # restored after keyboard attach/detach events (the keyboard dock controls
 # airplane mode which may toggle these radios)
-WIFI_BEFORE=$(nmcli radio wifi)
-BLUETOOTH_BEFORE=$(rfkill -n -o SOFT list bluetooth |head -n1)
+WIFI_BEFORE=$(duo-timeout 2s nmcli radio wifi 2>/dev/null | head -n1 || true)
+if [ "${WIFI_BEFORE}" != "enabled" ] && [ "${WIFI_BEFORE}" != "disabled" ]; then
+    WIFI_BEFORE=unknown
+fi
+
+BLUETOOTH_BEFORE=$(duo-timeout 2s rfkill -n -o SOFT list bluetooth 2>/dev/null | head -n1 || true)
+if [ "${BLUETOOTH_BEFORE}" != "blocked" ] && [ "${BLUETOOTH_BEFORE}" != "unblocked" ]; then
+    BLUETOOTH_BEFORE=unknown
+fi
 
 # Check if the keyboard dock is currently connected via USB
 KEYBOARD_ATTACHED=false
@@ -245,7 +236,12 @@ if [ -n "$(lsusb | grep 'Zenbook Duo Keyboard')" ]; then
 fi
 
 # Count the number of active logical monitors (1=top only, 2=both screens)
-MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
+MONITOR_COUNT=0
+if command -v gdctl >/dev/null 2>&1; then
+    if duo-has-graphical-session; then
+        MONITOR_COUNT=$(duo-timeout 2s gdctl show | grep 'Logical monitor #' | wc -l)
+    fi
+fi
 
 # Write current state to a shared status file that other functions can source
 function duo-set-status() {
@@ -359,10 +355,20 @@ function duo-set-kb-backlight() {
         local VENDOR_ID=${USB_ID%:*}
         local PRODUCT_ID=${USB_ID#*:}
         local BL_OUTPUT
-        if BL_OUTPUT=$(/usr/bin/sudo ${PYTHON3} /tmp/duo/backlight.py ${LEVEL} ${VENDOR_ID} ${PRODUCT_ID} 2>&1); then
-            APPLIED=true
+        if [ -z "${PYTHON3}" ] || [ ! -f "${DUO_BACKLIGHT_USB_PY}" ]; then
+            echo "$(date) - KBLIGHT - ERROR: Missing helper script ${DUO_BACKLIGHT_USB_PY}"
         else
-            echo "$(date) - KBLIGHT - ERROR: Failed to set USB backlight to ${LEVEL}: ${BL_OUTPUT}"
+            local RUNNER=()
+            if [ "${EUID}" = "0" ]; then
+                RUNNER=("${PYTHON3}")
+            else
+                RUNNER=("/usr/bin/sudo" "${PYTHON3}")
+            fi
+            if BL_OUTPUT=$(duo-timeout 3s "${RUNNER[@]}" "${DUO_BACKLIGHT_USB_PY}" ${LEVEL} ${VENDOR_ID} ${PRODUCT_ID} 2>&1); then
+                APPLIED=true
+            else
+                echo "$(date) - KBLIGHT - ERROR: Failed to set USB backlight to ${LEVEL}: ${BL_OUTPUT}"
+            fi
         fi
     fi
 
@@ -371,8 +377,18 @@ function duo-set-kb-backlight() {
         local BT_HIDRAW=$(duo-find-kb-hidraw)
         if [ -n "${BT_HIDRAW}" ]; then
             local BL_OUTPUT
-            if ! BL_OUTPUT=$(/usr/bin/sudo ${PYTHON3} /tmp/duo/bt_backlight.py ${LEVEL} ${BT_HIDRAW} 2>&1); then
-                echo "$(date) - KBLIGHT - ERROR: Failed to set BT backlight to ${LEVEL} via ${BT_HIDRAW}: ${BL_OUTPUT}"
+            if [ -z "${PYTHON3}" ] || [ ! -f "${DUO_BACKLIGHT_BT_PY}" ]; then
+                echo "$(date) - KBLIGHT - ERROR: Missing helper script ${DUO_BACKLIGHT_BT_PY}"
+            else
+                local RUNNER=()
+                if [ "${EUID}" = "0" ]; then
+                    RUNNER=("${PYTHON3}")
+                else
+                    RUNNER=("/usr/bin/sudo" "${PYTHON3}")
+                fi
+                if ! BL_OUTPUT=$(duo-timeout 3s "${RUNNER[@]}" "${DUO_BACKLIGHT_BT_PY}" ${LEVEL} ${BT_HIDRAW} 2>&1); then
+                    echo "$(date) - KBLIGHT - ERROR: Failed to set BT backlight to ${LEVEL} via ${BT_HIDRAW}: ${BL_OUTPUT}"
+                fi
             fi
         fi
     fi
@@ -420,7 +436,17 @@ function duo-step-brightness() {
     local DIRECTION=${1}  # "up" or "down"
     echo "$(date) - BRIGHTNESS - ${DIRECTION}"
     local KEY_OUTPUT
-    if ! KEY_OUTPUT=$(/usr/bin/sudo ${PYTHON3} /tmp/duo/inject_key.py "brightness${DIRECTION}" 2>&1); then
+    if [ -z "${PYTHON3}" ] || [ ! -f "${DUO_INJECT_KEY_PY}" ]; then
+        echo "$(date) - BRIGHTNESS - ERROR: Missing helper script ${DUO_INJECT_KEY_PY}"
+        return 0
+    fi
+    local RUNNER=()
+    if [ "${EUID}" = "0" ]; then
+        RUNNER=("${PYTHON3}")
+    else
+        RUNNER=("/usr/bin/sudo" "${PYTHON3}")
+    fi
+    if ! KEY_OUTPUT=$(duo-timeout 3s "${RUNNER[@]}" "${DUO_INJECT_KEY_PY}" "brightness${DIRECTION}" 2>&1); then
         echo "$(date) - BRIGHTNESS - ERROR: Failed to inject brightness ${DIRECTION} key: ${KEY_OUTPUT}"
     fi
 }
@@ -466,13 +492,33 @@ function duo-check-monitor() {
     . /tmp/duo/status
     local PREV_KEYBOARD_ATTACHED=${KEYBOARD_ATTACHED}
 
+    # Don't try to drive GNOME from root/system hooks.
+    if [ "${EUID}" = "0" ]; then
+        echo "$(date) - MONITOR - Running as root; skipping monitor configuration"
+        return 0
+    fi
+
     # Re-detect keyboard connection state
     KEYBOARD_ATTACHED=false
     if [ -n "$(lsusb | grep 'Zenbook Duo Keyboard')" ]; then
         KEYBOARD_ATTACHED=true
     fi
+
+    # Start/stop USB media remap helper (optional; provided by the UI package).
+    # This is responsible for making the top-row keys behave as intended on USB
+    # and also handles the keyboard backlight toggle key in USB mode.
+    if [ "${KEYBOARD_ATTACHED}" = true ]; then
+        if [ "$(duo-usb-media-remap-enabled)" = "true" ]; then
+            duo-usb-media-remap-start
+        else
+            duo-usb-media-remap-stop
+        fi
+    else
+        duo-usb-media-remap-stop
+    fi
+
     # Re-count active logical monitors
-    MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
+    MONITOR_COUNT=$(duo-timeout 2s gdctl show | grep 'Logical monitor #' | wc -l)
     duo-set-status
 
     echo "$(date) - MONITOR - WIFI before: ${WIFI_BEFORE}, Bluetooth before: ${BLUETOOTH_BEFORE}"
@@ -491,19 +537,19 @@ function duo-check-monitor() {
         # Restore Wi-Fi to whatever state it was in before detach
         if [ "${WIFI_BEFORE}" = enabled ]; then
             echo "$(date) - MONITOR - Turning on WIFI"
-            if ! nmcli radio wifi on 2>&1; then
+            if ! duo-timeout 3s nmcli radio wifi on 2>&1; then
                 echo "$(date) - MONITOR - ERROR: Failed to turn on WIFI"
             fi
         fi
         # Restore Bluetooth to its previous state
         if [ "${BLUETOOTH_BEFORE}" = unblocked ]; then
             echo "$(date) - MONITOR - Turning on Bluetooth"
-            if ! rfkill unblock bluetooth 2>&1; then
+            if ! duo-timeout 3s rfkill unblock bluetooth 2>&1; then
                 echo "$(date) - MONITOR - ERROR: Failed to unblock Bluetooth"
             fi
-        else
+        elif [ "${BLUETOOTH_BEFORE}" = blocked ]; then
             echo "$(date) - MONITOR - Turning off Bluetooth"
-            if ! rfkill block bluetooth 2>&1; then
+            if ! duo-timeout 3s rfkill block bluetooth 2>&1; then
                 echo "$(date) - MONITOR - ERROR: Failed to block Bluetooth"
             fi
         fi
@@ -511,10 +557,10 @@ function duo-check-monitor() {
         if ((${MONITOR_COUNT} > 1)); then
             echo "$(date) - MONITOR - Disabling bottom monitor"
             local GDCTL_OUTPUT
-            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 2>&1); then
+            if ! GDCTL_OUTPUT=$(duo-timeout 3s gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 2>&1); then
                 echo "$(date) - MONITOR - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
             fi
-            NEW_MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
+            NEW_MONITOR_COUNT=$(duo-timeout 2s gdctl show | grep 'Logical monitor #' | wc -l)
             MONITOR_COUNT=${NEW_MONITOR_COUNT}
             duo-set-status
             if ((${NEW_MONITOR_COUNT} == 1)); then
@@ -523,7 +569,7 @@ function duo-check-monitor() {
                 MESSAGE="ERROR: Bottom display still on"
             fi
             echo "$(date) - MONITOR - ${MESSAGE}"
-            notify-send -a "Zenbook Duo" -t 1000 --hint=int:transient:1 -i "preferences-desktop-display" "${MESSAGE}"
+            duo-timeout 2s notify-send -a "Zenbook Duo" -t 1000 --hint=int:transient:1 -i "preferences-desktop-display" "${MESSAGE}" || true
         fi
     else
         # --- Keyboard detached: laptop is in "tablet/dual-screen mode" ---
@@ -558,13 +604,13 @@ function duo-check-monitor() {
         # Restore Wi-Fi to its previous state
         if [ "${WIFI_BEFORE}" = enabled ]; then
             echo "$(date) - MONITOR - Turning on WIFI"
-            if ! nmcli radio wifi on 2>&1; then
+            if ! duo-timeout 3s nmcli radio wifi on 2>&1; then
                 echo "$(date) - MONITOR - ERROR: Failed to turn on WIFI"
             fi
         fi
         # Always enable Bluetooth when keyboard is detached (needed for BT keyboard)
         echo "$(date) - MONITOR - Turning on Bluetooth"
-        if ! rfkill unblock bluetooth 2>&1; then
+        if ! duo-timeout 3s rfkill unblock bluetooth 2>&1; then
             echo "$(date) - MONITOR - ERROR: Failed to unblock Bluetooth"
         fi
 
@@ -572,10 +618,10 @@ function duo-check-monitor() {
         if ((${MONITOR_COUNT} < 2)); then
             echo "$(date) - MONITOR - Enabling bottom monitor"
             local GDCTL_OUTPUT
-            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1 2>&1); then
+            if ! GDCTL_OUTPUT=$(duo-timeout 3s gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1 2>&1); then
                 echo "$(date) - MONITOR - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
             fi
-            NEW_MONITOR_COUNT=$(gdctl show | grep 'Logical monitor #' | wc -l)
+            NEW_MONITOR_COUNT=$(duo-timeout 2s gdctl show | grep 'Logical monitor #' | wc -l)
             MONITOR_COUNT=${NEW_MONITOR_COUNT}
             duo-set-status
             if ((${NEW_MONITOR_COUNT} == 2)); then
@@ -584,7 +630,7 @@ function duo-check-monitor() {
                 MESSAGE="ERROR: Bottom display still off"
             fi
             echo "$(date) - MONITOR - ${MESSAGE}"
-            notify-send -a "Zenbook Duo" -t 1000 --hint=int:transient:1 -i "preferences-desktop-display" "${MESSAGE}"
+            duo-timeout 2s notify-send -a "Zenbook Duo" -t 1000 --hint=int:transient:1 -i "preferences-desktop-display" "${MESSAGE}" || true
         fi
     fi
 }
@@ -597,10 +643,18 @@ function duo-check-monitor() {
 # Uses inotifywait on /dev/bus/usb/ to detect when USB devices are connected
 # or disconnected, then triggers a full monitor configuration check.
 function duo-watch-monitor() {
+    echo "$(date) - MONITOR - Watching keyboard dock state"
+    local last_present="unknown"
     while true; do
-        echo "$(date) - MONITOR - Waiting for USB event"
-        inotifywait -e attrib /dev/bus/usb/*/ >/dev/null 2>&1
-        duo-check-monitor
+        local present="false"
+        if duo-usb-keyboard-present; then
+            present="true"
+        fi
+        if [ "${last_present}" != "${present}" ]; then
+            last_present="${present}"
+            duo-check-monitor
+        fi
+        sleep 1
     done
 }
 
@@ -640,7 +694,7 @@ function duo-watch-kb-backlight-key() {
         for KB_DEV in ${KB_DEVS}; do
             echo "$(date) - KBLIGHT - Monitoring ${KB_DEV} (EV_KEY)"
             stdbuf -oL evtest "${KB_DEV}" 2>/dev/null | while read -r line; do
-                if echo "$line" | grep -q "KEY_F4.*value 1"; then
+                if echo "$line" | grep -qE "KEY_F4.*value 1|KEY_KBDILLUMTOGGLE.*value 1"; then
                     duo-cycle-kb-backlight
                 elif echo "$line" | grep -q "KEY_F11.*value 1"; then
                     duo-open-emoji-picker
@@ -857,9 +911,11 @@ function main() {
 
 # Dispatch: no arguments = run as daemon, with arguments = run as CLI command.
 if [ -z "${1}" ]; then
-    main | tee -a /tmp/duo/duo.log
+    exec > >(tee -a /tmp/duo/duo.log) 2>&1
+    main
 else
-    duo-cli $@ | tee -a /tmp/duo/duo.log
+    exec > >(tee -a /tmp/duo/duo.log) 2>&1
+    duo-cli "$@"
     # When run as root (e.g., from systemd sleep hook), fix permissions so
     # the user session can read/write the shared state files
     if [ "${USER}" = root ]; then

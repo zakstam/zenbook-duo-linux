@@ -45,6 +45,44 @@ while [ "$#" -gt 0 ]; do
 done
 
 # ============================================================================
+# USER CONTEXT
+# ============================================================================
+
+# setup.sh is frequently run with `sudo`. In that case we still want all
+# per-user config (sudoers, input group, systemctl --user enable, settings.json)
+# to apply to the *real* user session, not root.
+TARGET_USER="${USER}"
+if [ "${EUID}" = "0" ]; then
+    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+        TARGET_USER="${SUDO_USER}"
+    else
+        echo "ERROR: setup.sh must be run from a real user session."
+        echo "Run: ./setup.sh"
+        exit 1
+    fi
+fi
+
+TARGET_UID="$(id -u "${TARGET_USER}" 2>/dev/null || true)"
+TARGET_HOME="$(getent passwd "${TARGET_USER}" 2>/dev/null | cut -d: -f6)"
+if [ -z "${TARGET_UID}" ] || [ -z "${TARGET_HOME}" ]; then
+    echo "ERROR: failed to resolve TARGET_USER=${TARGET_USER}"
+    exit 1
+fi
+
+function run_user_systemctl() {
+    if [ "${TARGET_USER}" = "${USER}" ] && [ "${EUID}" != "0" ]; then
+        systemctl --user "$@"
+        return
+    fi
+
+    # Best-effort: use the login session bus.
+    sudo -u "${TARGET_USER}" \
+        XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+        systemctl --user "$@"
+}
+
+# ============================================================================
 # PACKAGE INSTALLATION & SCRIPT DEPLOYMENT
 # ============================================================================
 
@@ -88,13 +126,22 @@ if [ "${DEV_MODE}" = false ]; then
         exit 1
     fi
 
-    # Copy the main script to the install location and apply user-chosen defaults
-    sudo mkdir -p /usr/local/bin
-    sudo cp ./duo.sh ${INSTALL_LOCATION}
-    sudo chmod a+x ${INSTALL_LOCATION}
-    sudo sed -i "s/^DEFAULT_BACKLIGHT=.*/DEFAULT_BACKLIGHT=${DEFAULT_BACKLIGHT}/" ${INSTALL_LOCATION}
-    sudo sed -i "s/^DEFAULT_SCALE=.*/DEFAULT_SCALE=${DEFAULT_SCALE}/" ${INSTALL_LOCATION}
-fi
+	    # Copy the main script to the install location and apply user-chosen defaults
+	    sudo mkdir -p /usr/local/bin
+	    sudo cp ./duo.sh ${INSTALL_LOCATION}
+	    sudo chmod a+x ${INSTALL_LOCATION}
+	    sudo sed -i "s/^DEFAULT_BACKLIGHT=.*/DEFAULT_BACKLIGHT=${DEFAULT_BACKLIGHT}/" ${INSTALL_LOCATION}
+	    sudo sed -i "s/^DEFAULT_SCALE=.*/DEFAULT_SCALE=${DEFAULT_SCALE}/" ${INSTALL_LOCATION}
+
+	    # Install helper scripts (invoked via sudoers) to a stable root-owned location.
+	    sudo mkdir -p /usr/local/libexec/zenbook-duo
+	    sudo cp ./libexec/backlight.py /usr/local/libexec/zenbook-duo/backlight.py
+	    sudo cp ./libexec/bt_backlight.py /usr/local/libexec/zenbook-duo/bt_backlight.py
+	    sudo cp ./libexec/inject_key.py /usr/local/libexec/zenbook-duo/inject_key.py
+	    sudo chmod 0644 /usr/local/libexec/zenbook-duo/backlight.py \
+	        /usr/local/libexec/zenbook-duo/bt_backlight.py \
+	        /usr/local/libexec/zenbook-duo/inject_key.py
+	fi
 
 # ============================================================================
 # SUDOERS CONFIGURATION
@@ -113,13 +160,17 @@ function addSudoers() {
 # - USB/BT backlight control scripts
 # - Display brightness sysfs writes
 # - Virtual key injection script
-PYTHON3=$(which python3)
-if [ -n "${PYTHON3}" ] && [ -n "${USER}" ]; then
-    addSudoers "${USER} ALL=NOPASSWD:${PYTHON3} /tmp/duo/backlight.py *"
-    addSudoers "${USER} ALL=NOPASSWD:${PYTHON3} /tmp/duo/bt_backlight.py *"
-    addSudoers "${USER} ALL=NOPASSWD:/usr/bin/tee /sys/class/backlight/card1-eDP-2-backlight/brightness"
-    addSudoers "${USER} ALL=NOPASSWD:${PYTHON3} /tmp/duo/inject_key.py *"
-    addSudoers "${USER} ALL=NOPASSWD:/usr/bin/tee /sys/class/backlight/intel_backlight/brightness"
+if [ -x /usr/bin/python3 ]; then
+    PYTHON3=/usr/bin/python3
+else
+    PYTHON3=$(command -v python3 2>/dev/null || true)
+fi
+if [ -n "${PYTHON3}" ] && [ -n "${TARGET_USER}" ]; then
+    addSudoers "${TARGET_USER} ALL=NOPASSWD:${PYTHON3} /usr/local/libexec/zenbook-duo/backlight.py *"
+    addSudoers "${TARGET_USER} ALL=NOPASSWD:${PYTHON3} /usr/local/libexec/zenbook-duo/bt_backlight.py *"
+    addSudoers "${TARGET_USER} ALL=NOPASSWD:/usr/bin/tee /sys/class/backlight/card1-eDP-2-backlight/brightness"
+    addSudoers "${TARGET_USER} ALL=NOPASSWD:${PYTHON3} /usr/local/libexec/zenbook-duo/inject_key.py *"
+    addSudoers "${TARGET_USER} ALL=NOPASSWD:/usr/bin/tee /sys/class/backlight/intel_backlight/brightness"
 fi
 
 # ============================================================================
@@ -128,17 +179,19 @@ fi
 
 # Add user to the "input" group so evtest can read keyboard input events
 # without requiring root (requires logout/login to take effect)
-if [ -n "${USER}" ] && ! groups "${USER}" | grep -q '\binput\b'; then
-    sudo usermod -aG input "${USER}"
-    echo "Added ${USER} to input group (logout/login required for full effect)"
+if [ -n "${TARGET_USER}" ] && ! groups "${TARGET_USER}" | grep -q '\binput\b'; then
+    sudo usermod -aG input "${TARGET_USER}"
+    echo "Added ${TARGET_USER} to input group (logout/login required for full effect)"
 fi
 
 # ============================================================================
 # UDEV & HWDB RULES
 # ============================================================================
 
-# Install udev rule: grant input group read/write access to the Zenbook Duo keyboard device nodes
-echo 'SUBSYSTEM=="input", ATTRS{name}=="*ASUS Zenbook Duo Keyboard", MODE="0660", GROUP="input"' | sudo tee /etc/udev/rules.d/90-zenbook-duo-keyboard.rules
+# Install udev rule:
+# - Grant the active local user access via logind ACLs (TAG+="uaccess")
+# - Also keep input group access (for setups that rely on group membership)
+echo 'SUBSYSTEM=="input", ATTRS{name}=="*ASUS Zenbook Duo Keyboard", TAG+="uaccess", MODE="0660", GROUP="input"' | sudo tee /etc/udev/rules.d/90-zenbook-duo-keyboard.rules
 
 # NOTE: We intentionally do NOT install a hwdb key remap for the Zenbook Duo
 # keyboard. On USB, the keyboard exposes both consumer (media) scancodes and
@@ -176,6 +229,8 @@ Type=oneshot
 ExecStart=${INSTALL_LOCATION} boot
 ExecStop=${INSTALL_LOCATION} shutdown
 RemainAfterExit=yes
+TimeoutStartSec=10
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -194,7 +249,11 @@ Type=simple
 ExecStart=${INSTALL_LOCATION}
 Restart=on-failure
 RestartSec=1
+TimeoutStopSec=5
+KillMode=control-group
+KillSignal=SIGTERM
 Environment=XDG_CURRENT_DESKTOP=GNOME
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 
 [Install]
 WantedBy=graphical-session.target
@@ -208,12 +267,12 @@ WantedBy=graphical-session.target
 sudo systemctl daemon-reexec      # Reload system systemd manager
 sudo systemctl daemon-reload      # Reload system unit files
 sudo systemctl enable zenbook-duo.service  # Enable system-level boot/shutdown service
-systemctl --user daemon-reexec    # Reload user systemd manager
-systemctl --user daemon-reload    # Reload user unit files
+run_user_systemctl daemon-reexec  # Reload user systemd manager
+run_user_systemctl daemon-reload  # Reload user unit files
 # Older installs enabled the user service globally, which also starts it under `gdm`.
 # Disable that so only the real logged-in user runs the daemon.
 sudo systemctl --global disable zenbook-duo-user.service 2>/dev/null || true
-systemctl --user enable zenbook-duo-user.service  # Enable user-level service for the current user
+run_user_systemctl enable --now zenbook-duo-user.service  # Enable + start user-level service for the current user
 
 # ============================================================================
 # UI DEFAULTS (settings.json)
@@ -222,29 +281,25 @@ systemctl --user enable zenbook-duo-user.service  # Enable user-level service fo
 # The optional Tauri UI reads settings from ~/.config/zenbook-duo/settings.json.
 # We write defaults here so the UI is ready immediately after install.
 PYTHON3=$(command -v python3 || true)
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zenbook-duo"
+CONFIG_DIR="${TARGET_HOME}/.config/zenbook-duo"
 SETTINGS_FILE="${CONFIG_DIR}/settings.json"
 
-if [ -n "${PYTHON3}" ] && [ -n "${HOME}" ]; then
-    export ZENBOOK_DUO_DEFAULT_BACKLIGHT="${DEFAULT_BACKLIGHT}"
-    export ZENBOOK_DUO_DEFAULT_SCALE="${DEFAULT_SCALE}"
-    export ZENBOOK_DUO_USB_MEDIA_REMAP_ENABLED="${USB_MEDIA_REMAP_ENABLED}"
-    export ZENBOOK_DUO_SETTINGS_FILE="${SETTINGS_FILE}"
+if [ -n "${PYTHON3}" ] && [ -n "${TARGET_HOME}" ]; then
+    mkdir -p "${CONFIG_DIR}" 2>/dev/null || true
 
-    "${PYTHON3}" - <<'PY'
+    # Write settings as the target user (avoid sudo dropping env vars).
+    if [ "${TARGET_USER}" = "${USER}" ] && [ "${EUID}" != "0" ]; then
+        "${PYTHON3}" - "${SETTINGS_FILE}" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}" <<'PY'
 import json
-import os
+import sys
 from pathlib import Path
 
-settings_file = Path(os.environ["ZENBOOK_DUO_SETTINGS_FILE"])
+settings_file = Path(sys.argv[1])
+default_backlight = int(sys.argv[2])
+default_scale = float(sys.argv[3])
+usb_media_remap_enabled = sys.argv[4].strip().lower() in ("1", "true", "yes", "y", "on")
+
 settings_file.parent.mkdir(parents=True, exist_ok=True)
-
-def parse_bool(s: str) -> bool:
-    return s.strip().lower() in ("1", "true", "yes", "y", "on")
-
-default_backlight = int(os.environ["ZENBOOK_DUO_DEFAULT_BACKLIGHT"])
-default_scale = float(os.environ["ZENBOOK_DUO_DEFAULT_SCALE"])
-usb_media_remap_enabled = parse_bool(os.environ["ZENBOOK_DUO_USB_MEDIA_REMAP_ENABLED"])
 
 data = {}
 if settings_file.exists():
@@ -255,7 +310,6 @@ if settings_file.exists():
     except Exception:
         data = {}
 
-# Keep existing keys unless we explicitly set them below.
 data.setdefault("autoDualScreen", True)
 data.setdefault("syncBrightness", True)
 data.setdefault("theme", "system")
@@ -267,6 +321,40 @@ data["setupCompleted"] = True
 
 settings_file.write_text(json.dumps(data, indent=2) + "\n")
 PY
+    else
+        sudo -u "${TARGET_USER}" "${PYTHON3}" - "${SETTINGS_FILE}" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+settings_file = Path(sys.argv[1])
+default_backlight = int(sys.argv[2])
+default_scale = float(sys.argv[3])
+usb_media_remap_enabled = sys.argv[4].strip().lower() in ("1", "true", "yes", "y", "on")
+
+settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+data = {}
+if settings_file.exists():
+    try:
+        loaded = json.loads(settings_file.read_text())
+        if isinstance(loaded, dict):
+            data = loaded
+    except Exception:
+        data = {}
+
+data.setdefault("autoDualScreen", True)
+data.setdefault("syncBrightness", True)
+data.setdefault("theme", "system")
+
+data["defaultBacklight"] = default_backlight
+data["defaultScale"] = default_scale
+data["usbMediaRemapEnabled"] = usb_media_remap_enabled
+data["setupCompleted"] = True
+
+settings_file.write_text(json.dumps(data, indent=2) + "\n")
+PY
+    fi
 fi
 
 echo "Install complete."
