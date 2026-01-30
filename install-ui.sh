@@ -82,38 +82,12 @@ start_app_background() {
 }
 
 ensure_shortcut() {
-  if [ -z "${HOME:-}" ]; then
-    return 0
-  fi
-
-  local apps_dir="$HOME/.local/share/applications"
-  local desktop_file="$apps_dir/zenbook-duo-control.desktop"
-
-  mkdir -p "$apps_dir"
-  cat >"$desktop_file" <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=Zenbook Duo Control
-Comment=Zenbook Duo Linux Control Panel
-Exec=zenbook-duo-control
-Terminal=false
-Categories=Utility;Settings;
-StartupNotify=true
-Icon=zenbook-duo-control
-EOF
-
-  # Optional: create a desktop icon if the user has a Desktop folder.
-  local desktop_dir=""
-  if [ -d "$HOME/Desktop" ]; then
-    desktop_dir="$HOME/Desktop"
-  elif [ -d "$HOME/desktop" ]; then
-    desktop_dir="$HOME/desktop"
-  fi
-
-  if [ -n "$desktop_dir" ]; then
-    cp -f "$desktop_file" "$desktop_dir/Zenbook Duo Control.desktop"
-    chmod +x "$desktop_dir/Zenbook Duo Control.desktop" || true
-  fi
+  # The RPM/DEB already installs a system .desktop file (and icons). Creating another entry in
+  # ~/.local/share/applications results in duplicate app launchers in GNOME.
+  #
+  # Keep this as a no-op for now. If we want a desktop icon in the future, we should create it
+  # conditionally and only when there isn't already a system-installed desktop entry.
+  return 0
 }
 
 need_cmd() {
