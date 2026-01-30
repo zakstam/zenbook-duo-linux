@@ -1,4 +1,5 @@
 import type { Page } from "@/App";
+import { useEffect, useState } from "react";
 import ThemeToggle from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import {
@@ -28,6 +29,24 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
+  const [version, setVersion] = useState<string>("v0.1.1");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { getVersion } = await import("@tauri-apps/api/app");
+        const v = await getVersion();
+        if (!cancelled && v) setVersion(`v${v}`);
+      } catch {
+        // Non-Tauri context or restricted API; keep fallback.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <nav className="flex h-full w-[220px] shrink-0 flex-col bg-sidebar">
       {/* Brand */}
@@ -93,7 +112,7 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       </div>
       <div className="px-5 pb-4">
         <span className="font-mono text-[10px] text-muted-foreground/50">
-          v0.1.0
+          {version}
         </span>
       </div>
     </nav>
