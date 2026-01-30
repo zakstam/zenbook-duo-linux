@@ -203,13 +203,76 @@ function duo-usb-media-remap-stop() {
 # HELPER SCRIPTS
 # ============================================================================
 
-DUO_LIBEXEC_DIR="${DUO_LIBEXEC_DIR:-/usr/local/libexec/zenbook-duo}"
+if [ -z "${DUO_LIBEXEC_DIR:-}" ]; then
+    DUO_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -d "${DUO_SCRIPT_DIR}/libexec" ]; then
+        DUO_LIBEXEC_DIR="${DUO_SCRIPT_DIR}/libexec"
+    else
+        DUO_LIBEXEC_DIR="/usr/local/libexec/zenbook-duo"
+    fi
+fi
 DUO_BACKLIGHT_USB_PY="${DUO_LIBEXEC_DIR}/backlight.py"
 DUO_BACKLIGHT_BT_PY="${DUO_LIBEXEC_DIR}/bt_backlight.py"
 DUO_INJECT_KEY_PY="${DUO_LIBEXEC_DIR}/inject_key.py"
 
 if [ -z "${PYTHON3}" ]; then
     echo "$(date) - INIT - ERROR: python3 not found in PATH"
+fi
+
+# ============================================================================
+# DISPLAY BACKEND (GNOME/KDE)
+# ============================================================================
+
+DUO_DISPLAY_BACKEND=""
+DUO_DISPLAY_BACKEND_FILE=""
+
+function duo-detect-display-backend() {
+    local kde_ok=false
+    local gnome_ok=false
+
+    if command -v kscreen-doctor >/dev/null 2>&1; then
+        if duo-timeout 2s kscreen-doctor -j >/dev/null 2>&1; then
+            kde_ok=true
+        fi
+    fi
+
+    if command -v gdctl >/dev/null 2>&1; then
+        if duo-has-graphical-session; then
+            if duo-timeout 2s gdctl show >/dev/null 2>&1; then
+                gnome_ok=true
+            fi
+        fi
+    fi
+
+    if [[ "${XDG_CURRENT_DESKTOP:-}" =~ KDE ]] || [[ "${XDG_SESSION_DESKTOP:-}" =~ KDE ]]; then
+        if [ "${kde_ok}" = true ]; then
+            DUO_DISPLAY_BACKEND="kde"
+        fi
+    elif [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]] || [[ "${XDG_SESSION_DESKTOP:-}" =~ GNOME ]]; then
+        if [ "${gnome_ok}" = true ]; then
+            DUO_DISPLAY_BACKEND="gnome"
+        fi
+    fi
+
+    if [ -z "${DUO_DISPLAY_BACKEND}" ]; then
+        if [ "${kde_ok}" = true ]; then
+            DUO_DISPLAY_BACKEND="kde"
+        elif [ "${gnome_ok}" = true ]; then
+            DUO_DISPLAY_BACKEND="gnome"
+        fi
+    fi
+
+    if [ -n "${DUO_DISPLAY_BACKEND}" ]; then
+        DUO_DISPLAY_BACKEND_FILE="${DUO_LIBEXEC_DIR}/display-${DUO_DISPLAY_BACKEND}.sh"
+    fi
+}
+
+duo-detect-display-backend
+if [ -n "${DUO_DISPLAY_BACKEND_FILE}" ] && [ -f "${DUO_DISPLAY_BACKEND_FILE}" ]; then
+    # shellcheck source=/dev/null
+    . "${DUO_DISPLAY_BACKEND_FILE}"
+else
+    echo "$(date) - INIT - WARN: display backend not available (backend=${DUO_DISPLAY_BACKEND})"
 fi
 
 # ============================================================================
@@ -237,10 +300,8 @@ fi
 
 # Count the number of active logical monitors (1=top only, 2=both screens)
 MONITOR_COUNT=0
-if command -v gdctl >/dev/null 2>&1; then
-    if duo-has-graphical-session; then
-        MONITOR_COUNT=$(duo-timeout 2s gdctl show | grep 'Logical monitor #' | wc -l)
-    fi
+if declare -F duo-display-count >/dev/null 2>&1; then
+    MONITOR_COUNT=$(duo-display-count 2>/dev/null || echo 0)
 fi
 
 # Write current state to a shared status file that other functions can source
@@ -497,6 +558,10 @@ function duo-check-monitor() {
         echo "$(date) - MONITOR - Running as root; skipping monitor configuration"
         return 0
     fi
+    if ! declare -F duo-display-count >/dev/null 2>&1; then
+        echo "$(date) - MONITOR - Display backend not available; skipping monitor configuration"
+        return 0
+    fi
 
     # Re-detect keyboard connection state
     KEYBOARD_ATTACHED=false
@@ -518,7 +583,7 @@ function duo-check-monitor() {
     fi
 
     # Re-count active logical monitors
-    MONITOR_COUNT=$(duo-timeout 2s gdctl show | grep 'Logical monitor #' | wc -l)
+    MONITOR_COUNT=$(duo-display-count 2>/dev/null || echo 0)
     duo-set-status
 
     echo "$(date) - MONITOR - WIFI before: ${WIFI_BEFORE}, Bluetooth before: ${BLUETOOTH_BEFORE}"
@@ -556,11 +621,11 @@ function duo-check-monitor() {
         # Disable the bottom screen (eDP-2) since keyboard covers it
         if ((${MONITOR_COUNT} > 1)); then
             echo "$(date) - MONITOR - Disabling bottom monitor"
-            local GDCTL_OUTPUT
-            if ! GDCTL_OUTPUT=$(duo-timeout 3s gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 2>&1); then
-                echo "$(date) - MONITOR - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            local DISPLAY_OUTPUT
+            if ! DISPLAY_OUTPUT=$(duo-display-set-single 2>&1); then
+                echo "$(date) - MONITOR - ERROR: display set failed: ${DISPLAY_OUTPUT}"
             fi
-            NEW_MONITOR_COUNT=$(duo-timeout 2s gdctl show | grep 'Logical monitor #' | wc -l)
+            NEW_MONITOR_COUNT=$(duo-display-count 2>/dev/null || echo 0)
             MONITOR_COUNT=${NEW_MONITOR_COUNT}
             duo-set-status
             if ((${NEW_MONITOR_COUNT} == 1)); then
@@ -617,11 +682,11 @@ function duo-check-monitor() {
         # Enable the bottom screen (eDP-2) positioned below the top screen
         if ((${MONITOR_COUNT} < 2)); then
             echo "$(date) - MONITOR - Enabling bottom monitor"
-            local GDCTL_OUTPUT
-            if ! GDCTL_OUTPUT=$(duo-timeout 3s gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1 2>&1); then
-                echo "$(date) - MONITOR - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            local DISPLAY_OUTPUT
+            if ! DISPLAY_OUTPUT=$(duo-display-set-dual-below 2>&1); then
+                echo "$(date) - MONITOR - ERROR: display set failed: ${DISPLAY_OUTPUT}"
             fi
-            NEW_MONITOR_COUNT=$(duo-timeout 2s gdctl show | grep 'Logical monitor #' | wc -l)
+            NEW_MONITOR_COUNT=$(duo-display-count 2>/dev/null || echo 0)
             MONITOR_COUNT=${NEW_MONITOR_COUNT}
             duo-set-status
             if ((${NEW_MONITOR_COUNT} == 2)); then
@@ -827,15 +892,16 @@ function duo-cli() {
     left-up)
         # Accelerometer: device rotated with left side up (90° clockwise)
         echo "$(date) - ROTATE - Left-up"
-        local GDCTL_OUTPUT
-        if [ ${KEYBOARD_ATTACHED} = true ]; then
-            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 90 2>&1); then
-                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+        if ! declare -F duo-display-rotate-single >/dev/null 2>&1; then
+            echo "$(date) - ROTATE - ERROR: display backend not available"
+        elif [ ${KEYBOARD_ATTACHED} = true ]; then
+            if ! ROT_OUTPUT=$(duo-display-rotate-single left 2>&1); then
+                echo "$(date) - ROTATE - ERROR: display set failed: ${ROT_OUTPUT}"
             fi
         else
             # Dual-screen mode: rotate both displays, place eDP-2 to the left
-            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 90 --logical-monitor --scale ${SCALE} --monitor eDP-2 --left-of eDP-1 --transform 90 2>&1); then
-                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            if ! ROT_OUTPUT=$(duo-display-rotate-dual left 2>&1); then
+                echo "$(date) - ROTATE - ERROR: display set failed: ${ROT_OUTPUT}"
             fi
         fi
 
@@ -843,45 +909,48 @@ function duo-cli() {
     right-up)
         # Accelerometer: device rotated with right side up (270° clockwise)
         echo "$(date) - ROTATE - Right-up"
-        local GDCTL_OUTPUT
-        if [ ${KEYBOARD_ATTACHED} = true ]; then
-            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 270 2>&1); then
-                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+        if ! declare -F duo-display-rotate-single >/dev/null 2>&1; then
+            echo "$(date) - ROTATE - ERROR: display backend not available"
+        elif [ ${KEYBOARD_ATTACHED} = true ]; then
+            if ! ROT_OUTPUT=$(duo-display-rotate-single right 2>&1); then
+                echo "$(date) - ROTATE - ERROR: display set failed: ${ROT_OUTPUT}"
             fi
         else
             # Dual-screen mode: rotate both displays, place eDP-2 to the right
-            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 270 --logical-monitor --scale ${SCALE} --monitor eDP-2 --right-of eDP-1 --transform 270 2>&1); then
-                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            if ! ROT_OUTPUT=$(duo-display-rotate-dual right 2>&1); then
+                echo "$(date) - ROTATE - ERROR: display set failed: ${ROT_OUTPUT}"
             fi
         fi
         ;;
     bottom-up)
         # Accelerometer: device rotated upside down (180°)
         echo "$(date) - ROTATE - Bottom-up"
-        local GDCTL_OUTPUT
-        if [ ${KEYBOARD_ATTACHED} = true ]; then
-            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 180 2>&1); then
-                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+        if ! declare -F duo-display-rotate-single >/dev/null 2>&1; then
+            echo "$(date) - ROTATE - ERROR: display backend not available"
+        elif [ ${KEYBOARD_ATTACHED} = true ]; then
+            if ! ROT_OUTPUT=$(duo-display-rotate-single bottom 2>&1); then
+                echo "$(date) - ROTATE - ERROR: display set failed: ${ROT_OUTPUT}"
             fi
         else
             # Dual-screen mode: rotate both displays, place eDP-2 above
-            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --transform 180 --logical-monitor --scale ${SCALE} --monitor eDP-2 --above eDP-1 --transform 180 2>&1); then
-                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            if ! ROT_OUTPUT=$(duo-display-rotate-dual bottom 2>&1); then
+                echo "$(date) - ROTATE - ERROR: display set failed: ${ROT_OUTPUT}"
             fi
         fi
         ;;
     normal)
         # Accelerometer: device in normal upright orientation (0°)
         echo "$(date) - ROTATE - Normal"
-        local GDCTL_OUTPUT
-        if [ ${KEYBOARD_ATTACHED} = true ]; then
-            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 2>&1); then
-                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+        if ! declare -F duo-display-rotate-single >/dev/null 2>&1; then
+            echo "$(date) - ROTATE - ERROR: display backend not available"
+        elif [ ${KEYBOARD_ATTACHED} = true ]; then
+            if ! ROT_OUTPUT=$(duo-display-rotate-single normal 2>&1); then
+                echo "$(date) - ROTATE - ERROR: display set failed: ${ROT_OUTPUT}"
             fi
         else
             # Dual-screen mode: standard layout with eDP-2 below eDP-1
-            if ! GDCTL_OUTPUT=$(gdctl set --logical-monitor --primary --scale ${SCALE} --monitor eDP-1 --logical-monitor --scale ${SCALE} --monitor eDP-2 --below eDP-1 2>&1); then
-                echo "$(date) - ROTATE - ERROR: gdctl set failed: ${GDCTL_OUTPUT}"
+            if ! ROT_OUTPUT=$(duo-display-rotate-dual normal 2>&1); then
+                echo "$(date) - ROTATE - ERROR: display set failed: ${ROT_OUTPUT}"
             fi
         fi
         ;;

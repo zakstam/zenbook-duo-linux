@@ -1,6 +1,6 @@
 #!/bin/bash
 # Uninstallation script for ASUS Zenbook Duo Linux dual-screen management.
-# Reverses everything installed by setup.sh and (optionally) the UI app.
+# Reverses everything installed by setup-gnome.sh/setup-kde.sh and (optionally) the UI app.
 
 echo "Uninstalling Zenbook Duo Linux..."
 
@@ -112,7 +112,7 @@ sudo udevadm trigger
 # SUDOERS ENTRIES
 # ============================================================================
 
-# Remove sudoers lines added by setup.sh (matching duo helper script paths)
+# Remove sudoers lines added by setup-gnome.sh/setup-kde.sh (matching duo helper script paths)
 if sudo grep -q "/tmp/duo/" /etc/sudoers; then
     sudo sed -i '\|/tmp/duo/|d' /etc/sudoers
 fi

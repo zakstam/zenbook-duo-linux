@@ -7,7 +7,7 @@ This project adds better Linux support for the Zenbook Duo by running a small ba
 ### What you need
 
 - An ASUS Zenbook Duo
-- GNOME on Wayland (tested on Fedora; Ubuntu GNOME should also work)
+- GNOME on Wayland or KDE Plasma on Wayland (tested on Fedora; Ubuntu GNOME should also work)
 - A Terminal and your sudo password (the installer needs to change system settings)
 
 ### Install (recommended)
@@ -16,18 +16,18 @@ This project adds better Linux support for the Zenbook Duo by running a small ba
 2. Open a Terminal in the extracted folder.
 3. Run the installer and answer the prompts:
 
-```bash
-./setup.sh
-```
+- GNOME: `./setup-gnome.sh`
+- KDE: `./setup-kde.sh`
 
 Notes:
-- If you prefer to run it with sudo, use `sudo -E ./setup.sh` (so per-user setup targets your user session).
+- If you prefer to run it with sudo, use `sudo -E ./setup-gnome.sh` or `sudo -E ./setup-kde.sh` (so per-user setup targets your user session).
+- If you re-run the installer, restart the user service: `systemctl --user restart zenbook-duo-user.service`
 
 4. Log out and back in (needed for permission changes).
 
 ### Optional: install the Control Panel app (UI)
 
-If you want a desktop app to toggle settings easily (run `./setup.sh` first):
+If you want a desktop app to toggle settings easily (run the appropriate setup script first):
 
 ```bash
 ./install-ui.sh
@@ -92,13 +92,17 @@ Notes:
 ### Requirements
 
 - ASUS Zenbook Duo (USB vendor `0B05`, product `1B2C`)
-- Linux with GNOME on Wayland (tested with Fedora)
+- Linux with GNOME on Wayland or KDE Plasma on Wayland (tested with Fedora)
 - `systemd` for service management
-- `gdctl` (part of `mutter`) for display configuration
+- GNOME: `gdctl` (part of `mutter`) for display configuration
+- KDE: `kscreen-doctor` (part of `kscreen`) for display configuration
 
-### What `./setup.sh` changes
+### What `./setup-gnome.sh` / `./setup-kde.sh` change
 
-- Installs dependencies (`inotify-tools`, `usbutils`, `mutter`/`gdctl`, `iio-sensor-proxy`, `python3-usb`/`python3-pyusb`, `evtest`)
+- Installs dependencies:
+  - Common: `inotify-tools`, `usbutils`, `iio-sensor-proxy`, `python3-usb`/`python3-pyusb`, `evtest`
+  - GNOME: `mutter`/`gdctl` (via `setup-gnome.sh`)
+  - KDE: `kscreen`/`kscreen-doctor` (via `setup-kde.sh`)
 - Installs `duo.sh` to `/usr/local/bin/duo` (or uses repo path in `--dev-mode`)
 - Installs helper scripts to `/usr/local/libexec/zenbook-duo` and adds sudoers rules for brightness/backlight helper commands
 - Adds your user to the `input` group (logout/login required)
@@ -112,6 +116,8 @@ Notes:
 - Nothing happens when docking/undocking:
   - Check the user service is running: `systemctl --user status zenbook-duo-user.service`
   - Watch logs while docking/undocking: `journalctl --user -u zenbook-duo-user.service -f`
+- `KBLIGHT - Device lost, re-scanning` in a loop:
+  - You likely need to log out and back in so your session gets the `input` group membership
 
 ### Upgrading from older versions
 
@@ -130,7 +136,7 @@ sudo udevadm trigger
 | Fedora / RHEL-based | `dnf` |
 | Debian / Ubuntu-based | `apt` |
 
-Other distros: install dependencies manually and run `./setup.sh` (it exits if it cannot detect your package manager).
+Other distros: install dependencies manually and run `./setup-gnome.sh` or `./setup-kde.sh` (it exits if it cannot detect your package manager).
 
 ### Control Panel UI (Tauri + React)
 
@@ -148,7 +154,7 @@ npm run dev
 To iterate on `duo.sh` without reinstalling:
 
 ```bash
-./setup.sh --dev-mode
+./setup-gnome.sh --dev-mode
 ```
 
 ---

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installation script for ASUS Zenbook Duo Linux dual-screen management.
+# Installation script for ASUS Zenbook Duo Linux dual-screen management (GNOME).
 # Installs dependencies, configures sudoers, udev rules, hwdb key remapping,
 # and systemd services for automatic startup.
 
@@ -48,7 +48,7 @@ done
 # USER CONTEXT
 # ============================================================================
 
-# setup.sh is frequently run with `sudo`. In that case we still want all
+# setup-gnome.sh is frequently run with `sudo`. In that case we still want all
 # per-user config (sudoers, input group, systemctl --user enable, settings.json)
 # to apply to the *real* user session, not root.
 TARGET_USER="${USER}"
@@ -56,8 +56,8 @@ if [ "${EUID}" = "0" ]; then
     if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
         TARGET_USER="${SUDO_USER}"
     else
-        echo "ERROR: setup.sh must be run from a real user session."
-        echo "Run: ./setup.sh"
+        echo "ERROR: setup-gnome.sh must be run from a real user session."
+        echo "Run: ./setup-gnome.sh"
         exit 1
     fi
 fi
@@ -138,9 +138,11 @@ if [ "${DEV_MODE}" = false ]; then
 	    sudo cp ./libexec/backlight.py /usr/local/libexec/zenbook-duo/backlight.py
 	    sudo cp ./libexec/bt_backlight.py /usr/local/libexec/zenbook-duo/bt_backlight.py
 	    sudo cp ./libexec/inject_key.py /usr/local/libexec/zenbook-duo/inject_key.py
+	    sudo cp ./libexec/display-gnome.sh /usr/local/libexec/zenbook-duo/display-gnome.sh
 	    sudo chmod 0644 /usr/local/libexec/zenbook-duo/backlight.py \
 	        /usr/local/libexec/zenbook-duo/bt_backlight.py \
-	        /usr/local/libexec/zenbook-duo/inject_key.py
+	        /usr/local/libexec/zenbook-duo/inject_key.py \
+	        /usr/local/libexec/zenbook-duo/display-gnome.sh
 	fi
 
 # ============================================================================
@@ -252,7 +254,6 @@ RestartSec=1
 TimeoutStopSec=5
 KillMode=control-group
 KillSignal=SIGTERM
-Environment=XDG_CURRENT_DESKTOP=GNOME
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 
 [Install]
