@@ -65,6 +65,11 @@ pub fn start_remap() -> Result<(), String> {
         return Ok(());
     }
 
+    // `pkexec` can take a few seconds before the auth prompt appears, and the user then needs
+    // time to enter their password. Treat this as part of "startup" so the UI doesn't show a
+    // spurious timeout error before authentication is even possible.
+    const START_TIMEOUT_SECS: u64 = 90;
+
     let pid_path = pid_path();
     ensure_duo_dir_for_pid(&pid_path)?;
 
@@ -81,7 +86,7 @@ pub fn start_remap() -> Result<(), String> {
         .arg("--user")
         .arg(user);
 
-    start_remap_spawn_and_wait(cmd, Duration::from_secs(2))
+    start_remap_spawn_and_wait(cmd, Duration::from_secs(START_TIMEOUT_SECS))
 }
 
 pub fn stop_remap() -> Result<(), String> {
@@ -125,36 +130,6 @@ pub fn stop_remap() -> Result<(), String> {
     Ok(())
 }
 
-/// Spawn pkexec and keep the current process alive until either:
-/// - the remapper is observed running, or
-/// - pkexec exits with an error, or
-/// - timeout elapses.
-///
-/// This is important for "command launcher" contexts (e.g. GNOME custom shortcuts),
-/// where exiting too early can result in the auth dialog being dismissed.
-pub fn start_remap_wait(timeout: Duration) -> Result<(), String> {
-    if get_status().running {
-        return Ok(());
-    }
-
-    let pid_path = pid_path();
-    ensure_duo_dir_for_pid(&pid_path)?;
-
-    let helper_path =
-        std::env::current_exe().map_err(|e| log_error(format!("Failed to find current exe: {e}")))?;
-    let user = current_username().map_err(log_error)?;
-
-    let mut cmd = Command::new("pkexec");
-    cmd.arg(helper_path)
-        .arg(HELPER_FLAG)
-        .arg("--pid-file")
-        .arg(&pid_path)
-        .arg("--user")
-        .arg(user);
-
-    start_remap_spawn_and_wait(cmd, timeout)
-}
-
 fn start_remap_spawn_and_wait(mut cmd: Command, timeout: Duration) -> Result<(), String> {
     let mut child = cmd
         .spawn()
@@ -183,7 +158,7 @@ fn start_remap_spawn_and_wait(mut cmd: Command, timeout: Duration) -> Result<(),
     });
 
     Err(log_error(format!(
-        "Timed out waiting for remapper to start (waited {}s)",
+        "Timed out waiting for remapper to start (waited {}s). If an authentication prompt appeared, complete it and try again.",
         timeout.as_secs()
     )))
 }

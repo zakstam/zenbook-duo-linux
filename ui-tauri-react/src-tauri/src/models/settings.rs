@@ -15,10 +15,6 @@ pub struct DuoSettings {
     pub theme: ThemePreference,
     #[serde(default = "default_usb_media_remap_enabled")]
     pub usb_media_remap_enabled: bool,
-    #[serde(default = "default_usb_media_remap_hotkey")]
-    pub usb_media_remap_hotkey: String,
-    #[serde(default = "default_usb_media_remap_hotkey_enabled")]
-    pub usb_media_remap_hotkey_enabled: bool,
     #[serde(default)]
     pub setup_completed: bool,
 }
@@ -32,8 +28,6 @@ impl Default for DuoSettings {
             sync_brightness: true,
             theme: ThemePreference::System,
             usb_media_remap_enabled: default_usb_media_remap_enabled(),
-            usb_media_remap_hotkey: default_usb_media_remap_hotkey(),
-            usb_media_remap_hotkey_enabled: default_usb_media_remap_hotkey_enabled(),
             setup_completed: false,
         }
     }
@@ -57,14 +51,5 @@ fn default_scale() -> f64 {
 }
 
 fn default_usb_media_remap_enabled() -> bool {
-    true
-}
-
-fn default_usb_media_remap_hotkey() -> String {
-    // Avoid Super/Meta defaults on GNOME since it's often reserved for shell actions.
-    "Ctrl+Alt+M".to_string()
-}
-
-fn default_usb_media_remap_hotkey_enabled() -> bool {
     true
 }

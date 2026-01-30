@@ -7,5 +7,4 @@ pub mod profiles;
 pub mod service;
 pub mod settings;
 pub mod status;
-pub mod hotkeys;
 pub mod usb_media_remap;

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore, useDispatch, refreshSettings } from "@/lib/store";
 import {
-  applyUsbMediaRemapHotkey,
   saveSettings,
   usbMediaRemapStart,
   usbMediaRemapStatus,
@@ -13,7 +12,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -56,22 +54,6 @@ export default function Settings() {
     setSaving(true);
     try {
       await saveSettings(localSettings);
-      // Apply the global hotkey immediately (best-effort) so the user doesn't have to restart.
-      try {
-        await applyUsbMediaRemapHotkey(
-          localSettings.usbMediaRemapHotkeyEnabled,
-          localSettings.usbMediaRemapHotkey
-        );
-      } catch (err) {
-        console.error("Failed to apply hotkey:", err);
-        const msg =
-          typeof err === "string"
-            ? err
-            : err && typeof err === "object" && "message" in err
-              ? String((err as { message?: unknown }).message)
-              : "Failed to apply hotkey";
-        toast.error(msg);
-      }
       await refreshSettings(dispatch);
 
       const themeMap: Record<ThemePreference, string> = {
@@ -272,40 +254,6 @@ export default function Settings() {
           </p>
 
           <div className="h-px bg-border/50" />
-
-          <SettingRow
-            label="USB Media Remap Hotkey"
-            description="Global keyboard shortcut to toggle USB media remap"
-          >
-            <div className="flex items-center gap-3">
-              <Switch
-                checked={localSettings.usbMediaRemapHotkeyEnabled}
-                onCheckedChange={(v) => updateLocal("usbMediaRemapHotkeyEnabled", v)}
-                disabled={saving}
-              />
-              <span className="text-[12px] text-muted-foreground">
-                {localSettings.usbMediaRemapHotkeyEnabled ? "On" : "Off"}
-              </span>
-            </div>
-          </SettingRow>
-
-          <SettingRow label="Hotkey" description='Example: "Ctrl+Alt+M"'>
-            <div className="flex items-center gap-3">
-              <Input
-                className="w-48"
-                value={localSettings.usbMediaRemapHotkey}
-                onChange={(e) => updateLocal("usbMediaRemapHotkey", e.target.value)}
-                disabled={saving || !localSettings.usbMediaRemapHotkeyEnabled}
-                placeholder="Ctrl+Alt+M"
-              />
-            </div>
-          </SettingRow>
-
-          <p className="text-[12px] text-muted-foreground">
-            Note: On Wayland (including Fedora Workstation GNOME), app-registered global hotkeys
-            are typically not supported. Use GNOME custom shortcuts to run
-            <span className="font-mono"> zenbook-duo-control --toggle-usb-media-remap</span>.
-          </p>
         </div>
       </div>
 

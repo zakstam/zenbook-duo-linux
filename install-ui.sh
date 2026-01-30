@@ -27,8 +27,7 @@ Examples:
   ./install-ui.sh --repo https://github.com/zakstam/zenbook-duo-linux.git --branch main
 
 Notes:
-  - On GNOME Wayland, prefer binding a GNOME custom shortcut to:
-      zenbook-duo-control --toggle-usb-media-remap
+  - The Control Panel can be launched from your app menu after install.
 EOF
 }
 

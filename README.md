@@ -134,12 +134,6 @@ npm install
 npm run dev
 ```
 
-Hotkey note (GNOME Wayland): create a GNOME custom shortcut that runs:
-
-```bash
-zenbook-duo-control --toggle-usb-media-remap
-```
-
 ### Development
 
 To iterate on `duo.sh` without reinstalling:

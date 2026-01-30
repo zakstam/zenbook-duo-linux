@@ -18,14 +18,10 @@ DEV_INSTALL_LOCATION=$(cd "$(dirname "$0")" && pwd)/duo.sh
 DEFAULT_BACKLIGHT=0
 DEFAULT_SCALE=1.66
 USB_MEDIA_REMAP_ENABLED=true
-USB_MEDIA_REMAP_HOTKEY_ENABLED=true
-USB_MEDIA_REMAP_HOTKEY="Ctrl+Alt+M"
 
 # Flags:
 # --dev-mode: skip package installation and use the local duo.sh directly
 # --usb-media-remap / --no-usb-media-remap: default setting written for the UI (default: enabled)
-# --usb-media-remap-hotkey / --no-usb-media-remap-hotkey: enable/disable global hotkey
-# --usb-media-remap-hotkey=CTRL+ALT+M or --usb-media-remap-hotkey "Ctrl+Alt+M": set hotkey value
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --dev-mode)
@@ -39,25 +35,6 @@ while [ "$#" -gt 0 ]; do
             ;;
         --no-usb-media-remap)
             USB_MEDIA_REMAP_ENABLED=false
-            shift
-            ;;
-        --usb-media-remap-hotkey)
-            USB_MEDIA_REMAP_HOTKEY_ENABLED=true
-            # Optional: value in next arg (if present and not another flag)
-            if [ -n "${2}" ] && [ "${2#--}" = "${2}" ]; then
-                USB_MEDIA_REMAP_HOTKEY="$2"
-                shift 2
-            else
-                shift
-            fi
-            ;;
-        --no-usb-media-remap-hotkey)
-            USB_MEDIA_REMAP_HOTKEY_ENABLED=false
-            shift
-            ;;
-        --usb-media-remap-hotkey=*)
-            USB_MEDIA_REMAP_HOTKEY_ENABLED=true
-            USB_MEDIA_REMAP_HOTKEY="${1#*=}"
             shift
             ;;
         *)
@@ -85,23 +62,6 @@ if [ "${DEV_MODE}" = false ]; then
             USB_MEDIA_REMAP_ENABLED=true
             ;;
     esac
-
-    read -p "Enable global hotkey to toggle USB Media Remap? [Y/n] " ENABLE_USB_MEDIA_REMAP_HOTKEY_ANSWER
-    case "${ENABLE_USB_MEDIA_REMAP_HOTKEY_ANSWER}" in
-        [nN]|[nN][oO])
-            USB_MEDIA_REMAP_HOTKEY_ENABLED=false
-            ;;
-        *)
-            USB_MEDIA_REMAP_HOTKEY_ENABLED=true
-            ;;
-    esac
-
-    if [ "${USB_MEDIA_REMAP_HOTKEY_ENABLED}" = true ]; then
-        read -p "Hotkey for toggling USB Media Remap (example: Ctrl+Alt+M) [Ctrl+Alt+M]: " USB_MEDIA_REMAP_HOTKEY_ANSWER
-        if [ -n "${USB_MEDIA_REMAP_HOTKEY_ANSWER}" ]; then
-            USB_MEDIA_REMAP_HOTKEY="${USB_MEDIA_REMAP_HOTKEY_ANSWER}"
-        fi
-    fi
 
     # Detect distro package manager and install required dependencies
     if command -v dnf &>/dev/null; then
@@ -225,15 +185,18 @@ WantedBy=multi-user.target
 # Runs after the graphical session starts and launches all background watchers.
 echo "[Unit]
 Description=Zenbook Duo User Handler
+Wants=graphical-session.target
 After=graphical-session.target
 
 [Service]
+Type=simple
 ExecStart=${INSTALL_LOCATION}
-Restart=no
+Restart=on-failure
+RestartSec=1
 Environment=XDG_CURRENT_DESKTOP=GNOME
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 " | sudo tee /etc/systemd/user/zenbook-duo-user.service
 
 # ============================================================================
@@ -262,8 +225,6 @@ if [ -n "${PYTHON3}" ] && [ -n "${HOME}" ]; then
     export ZENBOOK_DUO_DEFAULT_BACKLIGHT="${DEFAULT_BACKLIGHT}"
     export ZENBOOK_DUO_DEFAULT_SCALE="${DEFAULT_SCALE}"
     export ZENBOOK_DUO_USB_MEDIA_REMAP_ENABLED="${USB_MEDIA_REMAP_ENABLED}"
-    export ZENBOOK_DUO_USB_MEDIA_REMAP_HOTKEY_ENABLED="${USB_MEDIA_REMAP_HOTKEY_ENABLED}"
-    export ZENBOOK_DUO_USB_MEDIA_REMAP_HOTKEY="${USB_MEDIA_REMAP_HOTKEY}"
     export ZENBOOK_DUO_SETTINGS_FILE="${SETTINGS_FILE}"
 
     "${PYTHON3}" - <<'PY'
@@ -280,8 +241,6 @@ def parse_bool(s: str) -> bool:
 default_backlight = int(os.environ["ZENBOOK_DUO_DEFAULT_BACKLIGHT"])
 default_scale = float(os.environ["ZENBOOK_DUO_DEFAULT_SCALE"])
 usb_media_remap_enabled = parse_bool(os.environ["ZENBOOK_DUO_USB_MEDIA_REMAP_ENABLED"])
-usb_media_remap_hotkey_enabled = parse_bool(os.environ["ZENBOOK_DUO_USB_MEDIA_REMAP_HOTKEY_ENABLED"])
-usb_media_remap_hotkey = os.environ["ZENBOOK_DUO_USB_MEDIA_REMAP_HOTKEY"].strip()
 
 data = {}
 if settings_file.exists():
@@ -300,8 +259,6 @@ data.setdefault("theme", "system")
 data["defaultBacklight"] = default_backlight
 data["defaultScale"] = default_scale
 data["usbMediaRemapEnabled"] = usb_media_remap_enabled
-data["usbMediaRemapHotkeyEnabled"] = usb_media_remap_hotkey_enabled
-data["usbMediaRemapHotkey"] = usb_media_remap_hotkey if usb_media_remap_hotkey else "Ctrl+Alt+M"
 data["setupCompleted"] = True
 
 settings_file.write_text(json.dumps(data, indent=2) + "\n")
@@ -309,12 +266,3 @@ PY
 fi
 
 echo "Install complete."
-
-if [ "${USB_MEDIA_REMAP_HOTKEY_ENABLED}" = true ]; then
-    echo ""
-    echo "Global hotkey note (Wayland):"
-    echo "  GNOME on Wayland does not allow apps to register global hotkeys directly."
-    echo "  Create a GNOME custom shortcut that runs:"
-    echo "    zenbook-duo-control --toggle-usb-media-remap"
-    echo "  And set the shortcut to: ${USB_MEDIA_REMAP_HOTKEY}"
-fi

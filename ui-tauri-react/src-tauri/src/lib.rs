@@ -1,11 +1,8 @@
 mod commands;
-mod hotkeys;
 pub mod hardware;
 mod models;
 pub mod usb_media_remap_helper;
 mod watchers;
-
-use std::io::Write;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -14,7 +11,6 @@ use tauri::{
 };
 
 use commands::events::create_event_buffer;
-use hotkeys::HotkeyState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -23,26 +19,13 @@ pub fn run() {
     let event_buffer = create_event_buffer();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .manage(event_buffer.clone())
-        .manage(HotkeyState::default())
         .setup(move |app| {
             let handle = app.handle().clone();
 
             // Build tray menu
             build_tray(&handle)?;
-
-            // Apply hotkey from saved settings (best-effort).
-            let settings = commands::settings::load_settings();
-            let hotkeys = app.state::<HotkeyState>();
-            if let Err(e) = hotkeys.set_usb_media_remap_hotkey(
-                &handle,
-                settings.usb_media_remap_hotkey_enabled,
-                &settings.usb_media_remap_hotkey,
-            ) {
-                eprintln!("Failed to register hotkey: {e}");
-            }
 
             // Start background watchers
             watchers::start_all_watchers(&handle, event_buffer.clone());
@@ -83,48 +66,9 @@ pub fn run() {
             commands::usb_media_remap::usb_media_remap_status,
             commands::usb_media_remap::usb_media_remap_start,
             commands::usb_media_remap::usb_media_remap_stop,
-            commands::hotkeys::apply_usb_media_remap_hotkey,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-// Small CLI helper used by the main binary when invoked with flags.
-pub fn toggle_usb_media_remap_cli() -> Result<(), String> {
-    // Don't rely on stdout/stderr visibility (e.g. GNOME custom shortcuts). Log to /tmp so users
-    // can verify the command actually ran.
-    fn log_line(msg: &str) {
-        let uid = nix::unistd::Uid::current().as_raw();
-        let path = format!("/tmp/zenbook-duo-control-hotkey-{uid}.log");
-        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(f, "{ts} - {msg}");
-        }
-    }
-
-    log_line("toggle requested");
-
-    let status = commands::usb_media_remap::get_status();
-    log_line(&format!("current running={}", status.running));
-
-    let res = if status.running {
-        commands::usb_media_remap::stop_remap()
-    } else {
-        // Keep the process alive long enough for the polkit auth dialog to be completed when
-        // launched from GNOME custom shortcuts.
-        commands::usb_media_remap::start_remap_wait(std::time::Duration::from_secs(180))
-    };
-
-    match &res {
-        Ok(()) => log_line("toggle completed ok"),
-        Err(e) => log_line(&format!("toggle failed: {e}")),
-    }
-
-    res
 }
 
 fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
