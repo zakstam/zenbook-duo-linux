@@ -14,10 +14,23 @@ fn settings_path() -> PathBuf {
 #[tauri::command]
 pub fn load_settings() -> DuoSettings {
     let path = settings_path();
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let raw = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return DuoSettings::default(), // no settings file => show setup
+    };
+
+    // Merge defaults + file contents.
+    // Important behavior: when upgrading an existing install, we don't want to force the setup
+    // screen to appear just because `setupCompleted` is a new field.
+    let mut settings: DuoSettings = serde_json::from_str(&raw).unwrap_or_default();
+
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+        if v.get("setupCompleted").is_none() {
+            settings.setup_completed = true;
+        }
+    }
+
+    settings
 }
 
 #[tauri::command]

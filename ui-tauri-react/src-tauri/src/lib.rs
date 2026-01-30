@@ -1,6 +1,7 @@
 mod commands;
-mod hardware;
+pub mod hardware;
 mod models;
+pub mod usb_media_remap_helper;
 mod watchers;
 
 use tauri::{
@@ -62,6 +63,9 @@ pub fn run() {
             commands::diagnostics::diag_list_hid,
             commands::diagnostics::diag_read_report_descriptor,
             commands::diagnostics::diag_capture_hidraw_pkexec,
+            commands::usb_media_remap::usb_media_remap_status,
+            commands::usb_media_remap::usb_media_remap_start,
+            commands::usb_media_remap::usb_media_remap_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -95,6 +99,14 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         Submenu::with_items(app, "Backlight", true, &[&bl_0, &bl_1, &bl_2, &bl_3])?;
 
     let separator2 = PredefinedMenuItem::separator(app)?;
+    let usb_media_remap = MenuItem::with_id(
+        app,
+        "usb_media_remap",
+        "Toggle USB Media Remap",
+        true,
+        None::<&str>,
+    )?;
+    let separator3 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
     let menu = Menu::with_items(
@@ -105,6 +117,8 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
             &profiles_submenu,
             &backlight_submenu,
             &separator2,
+            &usb_media_remap,
+            &separator3,
             &quit,
         ],
     )?;
@@ -131,6 +145,14 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 id if id.starts_with("bl_") => {
                     if let Ok(level) = id[3..].parse::<u8>() {
                         let _ = hardware::hid::set_backlight(level);
+                    }
+                }
+                "usb_media_remap" => {
+                    let status = commands::usb_media_remap::get_status();
+                    if status.running {
+                        let _ = commands::usb_media_remap::stop_remap();
+                    } else {
+                        let _ = commands::usb_media_remap::start_remap();
                     }
                 }
                 _ => {}

@@ -50,6 +50,8 @@ const defaultSettings: DuoSettings = {
   autoDualScreen: true,
   syncBrightness: true,
   theme: "system",
+  usbMediaRemapEnabled: true,
+  setupCompleted: false,
 };
 
 const initialState: AppState = {

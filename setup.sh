@@ -17,12 +17,25 @@ DEV_INSTALL_LOCATION=$(cd "$(dirname "$0")" && pwd)/duo.sh
 # Default configuration values
 DEFAULT_BACKLIGHT=0
 DEFAULT_SCALE=1.66
+USB_MEDIA_REMAP_ENABLED=true
 
-# Enable dev mode when --dev-mode flag is passed
-if [ "${1}" = "--dev-mode" ]; then
-    DEV_MODE=true
-    INSTALL_LOCATION=${DEV_INSTALL_LOCATION}
-fi
+# Flags:
+# --dev-mode: skip package installation and use the local duo.sh directly
+# --usb-media-remap / --no-usb-media-remap: default setting written for the UI (default: enabled)
+for arg in "$@"; do
+    case "${arg}" in
+        --dev-mode)
+            DEV_MODE=true
+            INSTALL_LOCATION=${DEV_INSTALL_LOCATION}
+            ;;
+        --usb-media-remap)
+            USB_MEDIA_REMAP_ENABLED=true
+            ;;
+        --no-usb-media-remap)
+            USB_MEDIA_REMAP_ENABLED=false
+            ;;
+    esac
+done
 
 # ============================================================================
 # PACKAGE INSTALLATION & SCRIPT DEPLOYMENT
@@ -31,8 +44,17 @@ fi
 # In normal (non-dev) mode: prompt for settings, install packages, and copy the script
 if [ "${DEV_MODE}" = false ]; then
     # Prompt user for configuration preferences
-    read -p "What would you like to use for the default keyboard backlight brightness [0-3]? " DEFAULT_BRIGHTNESS
+    read -p "What would you like to use for the default keyboard backlight brightness [0-3]? " DEFAULT_BACKLIGHT
     read -p "What would you like to use for monitor scale (1 = 100%, 1.5 = 150%, 1.66 = 166%, 2=200%) [1-2]? " DEFAULT_SCALE
+    read -p "Enable USB Media Remap by default? [Y/n] " ENABLE_USB_MEDIA_REMAP_ANSWER
+    case "${ENABLE_USB_MEDIA_REMAP_ANSWER}" in
+        [nN]|[nN][oO])
+            USB_MEDIA_REMAP_ENABLED=false
+            ;;
+        *)
+            USB_MEDIA_REMAP_ENABLED=true
+            ;;
+    esac
 
     # Detect distro package manager and install required dependencies
     if command -v dnf &>/dev/null; then
@@ -178,5 +200,59 @@ sudo systemctl enable zenbook-duo.service  # Enable system-level boot/shutdown s
 systemctl --user daemon-reexec    # Reload user systemd manager
 systemctl --user daemon-reload    # Reload user unit files
 sudo systemctl --global enable zenbook-duo-user.service  # Enable user-level service for all users
+
+# ============================================================================
+# UI DEFAULTS (settings.json)
+# ============================================================================
+
+# The optional Tauri UI reads settings from ~/.config/zenbook-duo/settings.json.
+# We write defaults here so the UI is ready immediately after install.
+PYTHON3=$(command -v python3 || true)
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zenbook-duo"
+SETTINGS_FILE="${CONFIG_DIR}/settings.json"
+
+if [ -n "${PYTHON3}" ] && [ -n "${HOME}" ]; then
+    export ZENBOOK_DUO_DEFAULT_BACKLIGHT="${DEFAULT_BACKLIGHT}"
+    export ZENBOOK_DUO_DEFAULT_SCALE="${DEFAULT_SCALE}"
+    export ZENBOOK_DUO_USB_MEDIA_REMAP_ENABLED="${USB_MEDIA_REMAP_ENABLED}"
+    export ZENBOOK_DUO_SETTINGS_FILE="${SETTINGS_FILE}"
+
+    "${PYTHON3}" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+settings_file = Path(os.environ["ZENBOOK_DUO_SETTINGS_FILE"])
+settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+def parse_bool(s: str) -> bool:
+    return s.strip().lower() in ("1", "true", "yes", "y", "on")
+
+default_backlight = int(os.environ["ZENBOOK_DUO_DEFAULT_BACKLIGHT"])
+default_scale = float(os.environ["ZENBOOK_DUO_DEFAULT_SCALE"])
+usb_media_remap_enabled = parse_bool(os.environ["ZENBOOK_DUO_USB_MEDIA_REMAP_ENABLED"])
+
+data = {}
+if settings_file.exists():
+    try:
+        loaded = json.loads(settings_file.read_text())
+        if isinstance(loaded, dict):
+            data = loaded
+    except Exception:
+        data = {}
+
+# Keep existing keys unless we explicitly set them below.
+data.setdefault("autoDualScreen", True)
+data.setdefault("syncBrightness", True)
+data.setdefault("theme", "system")
+
+data["defaultBacklight"] = default_backlight
+data["defaultScale"] = default_scale
+data["usbMediaRemapEnabled"] = usb_media_remap_enabled
+data["setupCompleted"] = True
+
+settings_file.write_text(json.dumps(data, indent=2) + "\n")
+PY
+fi
 
 echo "Install complete."

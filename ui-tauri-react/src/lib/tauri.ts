@@ -13,6 +13,7 @@ import type {
   HidDevice,
   ReportDescriptor,
   HidrawCapture,
+  UsbMediaRemapStatus,
 } from "@/types/duo";
 
 // Status
@@ -70,6 +71,12 @@ export const diagReadReportDescriptor = (hidDeviceId: string) =>
   invoke<ReportDescriptor>("diag_read_report_descriptor", { hidDeviceId });
 export const diagCaptureHidrawPkexec = (hidrawPath: string, seconds: number) =>
   invoke<HidrawCapture>("diag_capture_hidraw_pkexec", { hidrawPath, seconds });
+
+// USB media remap
+export const usbMediaRemapStatus = () =>
+  invoke<UsbMediaRemapStatus>("usb_media_remap_status");
+export const usbMediaRemapStart = () => invoke<void>("usb_media_remap_start");
+export const usbMediaRemapStop = () => invoke<void>("usb_media_remap_stop");
 
 
 // Tauri event listeners

@@ -39,6 +39,13 @@ export interface DuoSettings {
   autoDualScreen: boolean;
   syncBrightness: boolean;
   theme: ThemePreference;
+  usbMediaRemapEnabled: boolean;
+  setupCompleted: boolean;
+}
+
+export interface UsbMediaRemapStatus {
+  running: boolean;
+  pid?: number | null;
 }
 
 export interface Profile {

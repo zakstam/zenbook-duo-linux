@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useStoreInit } from "@/lib/store";
+import { useStore, useStoreInit } from "@/lib/store";
 import Sidebar from "@/components/Sidebar";
 import Status from "@/pages/Status";
 import Controls from "@/pages/Controls";
@@ -9,6 +9,7 @@ import DisplayLayout from "@/pages/DisplayLayout";
 import Profiles from "@/pages/Profiles";
 import EventMonitor from "@/pages/EventMonitor";
 import Diagnostics from "@/pages/Diagnostics";
+import Setup from "@/pages/Setup";
 
 export type Page =
   | "status"
@@ -35,6 +36,11 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>("status");
 
   useStoreInit();
+  const store = useStore();
+
+  if (!store.loading && !store.settings.setupCompleted) {
+    return <Setup />;
+  }
 
   const PageComponent = pageComponents[currentPage];
 

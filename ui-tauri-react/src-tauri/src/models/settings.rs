@@ -13,6 +13,10 @@ pub struct DuoSettings {
     pub sync_brightness: bool,
     #[serde(default)]
     pub theme: ThemePreference,
+    #[serde(default = "default_usb_media_remap_enabled")]
+    pub usb_media_remap_enabled: bool,
+    #[serde(default)]
+    pub setup_completed: bool,
 }
 
 impl Default for DuoSettings {
@@ -23,6 +27,8 @@ impl Default for DuoSettings {
             auto_dual_screen: true,
             sync_brightness: true,
             theme: ThemePreference::System,
+            usb_media_remap_enabled: default_usb_media_remap_enabled(),
+            setup_completed: false,
         }
     }
 }
@@ -42,4 +48,8 @@ fn default_backlight() -> u8 {
 
 fn default_scale() -> f64 {
     1.66
+}
+
+fn default_usb_media_remap_enabled() -> bool {
+    true
 }
