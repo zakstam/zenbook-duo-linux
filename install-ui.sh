@@ -4,7 +4,14 @@ set -euo pipefail
 REPO_URL_DEFAULT="https://github.com/zakstam/zenbook-duo-linux.git"
 BRANCH_DEFAULT=""
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]:-${0}}"
+RUNNING_FROM_STDIN=false
+if [ -z "${SCRIPT_PATH}" ] || [ "${SCRIPT_PATH}" = "bash" ] || [ "${SCRIPT_PATH}" = "-" ]; then
+  RUNNING_FROM_STDIN=true
+  SCRIPT_DIR="$(pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+fi
 SCRIPT_VERSION="2026-01-30"
 
 usage() {
@@ -264,7 +271,7 @@ echo "Toolchain looks good. Starting clone/build/install..."
 if [ -z "$TARGET_DIR" ]; then
   # If the script is running from inside the repo, build in-place by default
   # (this makes development iterations faster and ensures local fixes are used).
-  if [ "$FORCE_CLONE" = false ] && [ -d "$SCRIPT_DIR/ui-tauri-react" ] && [ -e "$SCRIPT_DIR/.git" ]; then
+  if [ "$RUNNING_FROM_STDIN" = false ] && [ "$FORCE_CLONE" = false ] && [ -d "$SCRIPT_DIR/ui-tauri-react" ] && [ -e "$SCRIPT_DIR/.git" ]; then
     TARGET_DIR="$SCRIPT_DIR"
     KEEP_DIR=true
     echo "Using local repo: $TARGET_DIR"

@@ -113,7 +113,7 @@ Use the helper script to install prerequisites, build, and install the package f
 If you just want to install the UI without cloning the repo manually:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install-ui.sh | bash
+curl -fsSLo /tmp/install-ui.sh https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install-ui.sh && bash /tmp/install-ui.sh
 ```
 
 ### Install from package
