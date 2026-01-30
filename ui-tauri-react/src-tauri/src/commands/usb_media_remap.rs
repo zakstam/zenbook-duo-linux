@@ -81,30 +81,7 @@ pub fn start_remap() -> Result<(), String> {
         .arg("--user")
         .arg(user);
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| log_error(format!("Failed to start remapper (pkexec): {e}")))?;
-
-    // Quickly detect "instant fail" cases (missing deps, cancelled auth, etc) without blocking
-    // when the remapper starts successfully and runs indefinitely.
-    for _ in 0..20 {
-        if get_status().running {
-            break;
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(log_error(format!(
-                "Remapper failed to start (pkexec exited with {status})"
-            )));
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-
-    // Ensure we reap the pkexec child process when it eventually exits (avoid zombies).
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-
-    Ok(())
+    start_remap_spawn_and_wait(cmd, Duration::from_secs(2))
 }
 
 pub fn stop_remap() -> Result<(), String> {
@@ -146,6 +123,69 @@ pub fn stop_remap() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Spawn pkexec and keep the current process alive until either:
+/// - the remapper is observed running, or
+/// - pkexec exits with an error, or
+/// - timeout elapses.
+///
+/// This is important for "command launcher" contexts (e.g. GNOME custom shortcuts),
+/// where exiting too early can result in the auth dialog being dismissed.
+pub fn start_remap_wait(timeout: Duration) -> Result<(), String> {
+    if get_status().running {
+        return Ok(());
+    }
+
+    let pid_path = pid_path();
+    ensure_duo_dir_for_pid(&pid_path)?;
+
+    let helper_path =
+        std::env::current_exe().map_err(|e| log_error(format!("Failed to find current exe: {e}")))?;
+    let user = current_username().map_err(log_error)?;
+
+    let mut cmd = Command::new("pkexec");
+    cmd.arg(helper_path)
+        .arg(HELPER_FLAG)
+        .arg("--pid-file")
+        .arg(&pid_path)
+        .arg("--user")
+        .arg(user);
+
+    start_remap_spawn_and_wait(cmd, timeout)
+}
+
+fn start_remap_spawn_and_wait(mut cmd: Command, timeout: Duration) -> Result<(), String> {
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| log_error(format!("Failed to start remapper (pkexec): {e}")))?;
+
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if get_status().running {
+            // Ensure we reap the pkexec child process when it eventually exits (avoid zombies).
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            return Ok(());
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(log_error(format!(
+                "Remapper failed to start (pkexec exited with {status})"
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Timeout elapsed. Keep pkexec running in the background (it might still be waiting for auth).
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+
+    Err(log_error(format!(
+        "Timed out waiting for remapper to start (waited {}s)",
+        timeout.as_secs()
+    )))
 }
 
 fn read_pid(path: &str) -> Option<u32> {

@@ -135,9 +135,6 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-need_cmd git
-need_cmd npm
-
 echo "install-ui.sh v${SCRIPT_VERSION}"
 
 export PAGER=cat
@@ -312,11 +309,19 @@ if [ "$PKG_MGR" = "dnf" ]; then
     WAS_RUNNING=true
     stop_running_app || true
   fi
-  sudo dnf install -y "$PKG"
+  # dnf won't replace an installed package if the NEVRA is identical. Use reinstall in that case
+  # so local builds apply even when you forgot to bump the version.
+  if rpm -q zenbook-duo-control >/dev/null 2>&1; then
+    sudo dnf reinstall -y "$PKG"
+  else
+    sudo dnf install -y "$PKG"
+  fi
   if [ "$WAS_RUNNING" = true ]; then
     start_app_background || true
   fi
-  ensure_shortcut || true
+  # Cleanup: older versions of this script created a duplicate launcher in ~/.local.
+  rm -f "$HOME/.local/share/applications/zenbook-duo-control.desktop" 2>/dev/null || true
+  update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 elif [ "$PKG_MGR" = "apt" ]; then
   PKG="$(ls -1t $DEB_GLOB 2>/dev/null | head -n 1 || true)"
   [ -n "$PKG" ] || die "No deb found after build (looked for $DEB_GLOB)"
@@ -326,11 +331,13 @@ elif [ "$PKG_MGR" = "apt" ]; then
     WAS_RUNNING=true
     stop_running_app || true
   fi
-  sudo apt install -y "$PWD/$PKG" || sudo dpkg -i "$PWD/$PKG"
+  # Prefer apt reinstall (keeps deps tidy), fallback to dpkg.
+  sudo apt install -y --reinstall "$PWD/$PKG" || sudo dpkg -i "$PWD/$PKG"
   if [ "$WAS_RUNNING" = true ]; then
     start_app_background || true
   fi
-  ensure_shortcut || true
+  rm -f "$HOME/.local/share/applications/zenbook-duo-control.desktop" 2>/dev/null || true
+  update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 else
   die "Unsupported system (expected dnf or apt). Package is built under src-tauri/target/release/bundle/."
 fi

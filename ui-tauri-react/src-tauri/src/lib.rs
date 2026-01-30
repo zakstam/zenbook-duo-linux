@@ -5,6 +5,8 @@ mod models;
 pub mod usb_media_remap_helper;
 mod watchers;
 
+use std::io::Write;
+
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -89,12 +91,40 @@ pub fn run() {
 
 // Small CLI helper used by the main binary when invoked with flags.
 pub fn toggle_usb_media_remap_cli() -> Result<(), String> {
+    // Don't rely on stdout/stderr visibility (e.g. GNOME custom shortcuts). Log to /tmp so users
+    // can verify the command actually ran.
+    fn log_line(msg: &str) {
+        let uid = nix::unistd::Uid::current().as_raw();
+        let path = format!("/tmp/zenbook-duo-control-hotkey-{uid}.log");
+        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{ts} - {msg}");
+        }
+    }
+
+    log_line("toggle requested");
+
     let status = commands::usb_media_remap::get_status();
-    if status.running {
+    log_line(&format!("current running={}", status.running));
+
+    let res = if status.running {
         commands::usb_media_remap::stop_remap()
     } else {
-        commands::usb_media_remap::start_remap()
+        // Keep the process alive long enough for the polkit auth dialog to be completed when
+        // launched from GNOME custom shortcuts.
+        commands::usb_media_remap::start_remap_wait(std::time::Duration::from_secs(180))
+    };
+
+    match &res {
+        Ok(()) => log_line("toggle completed ok"),
+        Err(e) => log_line(&format!("toggle failed: {e}")),
     }
+
+    res
 }
 
 fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {

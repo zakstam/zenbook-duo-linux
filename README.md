@@ -1,11 +1,64 @@
 # Linux for the ASUS Zenbook Duo
 
+This project adds better Linux support for the Zenbook Duo by running a small background service that reacts to the keyboard being attached/detached (USB or Bluetooth) and keeps the dual-screen experience usable.
+
+## Quick Start (Non-technical)
+
+### What you need
+
+- An ASUS Zenbook Duo
+- GNOME on Wayland (tested on Fedora; Ubuntu GNOME should also work)
+- A Terminal and your sudo password (the installer needs to change system settings)
+
+### Install (recommended)
+
+1. Download this repo (GitHub "Code" → "Download ZIP"), then extract it.
+2. Open a Terminal in the extracted folder.
+3. Run the installer and answer the prompts:
+
+```bash
+./setup.sh
+```
+
+4. Log out and back in (needed for permission changes).
+
+### Optional: install the Control Panel app (UI)
+
+If you want a desktop app to toggle settings easily (run `./setup.sh` first):
+
+```bash
+./install-ui.sh
+```
+
+You can also do a one-line install (downloads the repo to a temp folder, builds, and installs):
+
+```bash
+curl -fsSLo /tmp/install-ui.sh https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install-ui.sh && bash /tmp/install-ui.sh
+```
+
+### Uninstall
+
+To remove the background service and system changes:
+
+```bash
+./uninstall.sh
+```
+
+To remove the optional UI app:
+
+- Fedora / RHEL-based: `sudo dnf remove zenbook-duo-control`
+- Debian / Ubuntu-based: `sudo apt remove zenbook-duo-control`
+
+---
+
+## Advanced (Technical)
+
+### Screenshots
+
 ![Zenbook Duo Control USB](sc.png)
 ![Zenbook Duo Control BLUETOOTH](sc2.png)
 
-A script to manage features on the Zenbook Duo.
-
-## Features
+### Features
 
 | Feature | USB | Bluetooth |
 |---------|:---:|:---------:|
@@ -33,37 +86,23 @@ Notes:
 - USB top row defaults to media keys; hold `Fn` for `F1`-`F12`.
 - Do not install hwdb remaps for `KEYBOARD_KEY_7003*` on USB (it overrides the Fn layer).
 
-## Requirements
+### Requirements
 
 - ASUS Zenbook Duo (USB vendor `0B05`, product `1B2C`)
 - Linux with GNOME on Wayland (tested with Fedora)
 - `systemd` for service management
 - `gdctl` (part of `mutter`) for display configuration
 
-## Installation
+### What `./setup.sh` changes
 
-1. Clone the repository:
-
-```bash
-git clone https://github.com/zakstam/zenbook-duo-linux.git
-cd zenbook-duo-linux
-```
-
-2. Run the setup script:
-
-```bash
-./setup.sh
-```
-
-The setup script will:
-
-- Prompt you for your preferred **keyboard backlight level** (0-3) and **display scale** (1-2)
-- Install required packages (`inotify-tools`, `usbutils`, `mutter`/`gdctl`, `iio-sensor-proxy`, `python3-usb`, `evtest`)
-- Copy `duo.sh` to `/usr/local/bin/duo`
-- Configure passwordless `sudo` for brightness and backlight commands
-- Add your user to the `input` group (logout/login required)
-- Install udev rules for the Zenbook Duo keyboard
-- Create systemd services for boot/shutdown and user session events
+- Installs dependencies (`inotify-tools`, `usbutils`, `mutter`/`gdctl`, `iio-sensor-proxy`, `python3-usb`/`python3-pyusb`, `evtest`)
+- Installs `duo.sh` to `/usr/local/bin/duo` (or uses repo path in `--dev-mode`)
+- Adds sudoers rules for a small set of brightness/backlight helper commands
+- Adds your user to the `input` group (logout/login required)
+- Installs a udev rule for the Zenbook Duo keyboard
+- Installs/enables systemd units:
+  - `zenbook-duo.service` (system boot/shutdown)
+  - `zenbook-duo-user.service` (user session)
 
 ### Upgrading from older versions
 
@@ -75,70 +114,19 @@ sudo systemd-hwdb update
 sudo udevadm trigger
 ```
 
-3. Log out and back in (required for the `input` group change to take effect).
-
-### Supported Distros
+### Supported distros
 
 | Distro | Package Manager |
 |--------|----------------|
 | Fedora / RHEL-based | `dnf` |
 | Debian / Ubuntu-based | `apt` |
 
-For other distributions, install the dependencies manually and run the setup script — it will warn you and exit if it cannot detect your package manager.
+Other distros: install dependencies manually and run `./setup.sh` (it exits if it cannot detect your package manager).
 
-## Uninstallation
+### Control Panel UI (Tauri + React)
 
-Run the uninstall script from the repository:
-
-```bash
-./uninstall.sh
-```
-
-This removes all systemd services, udev/hwdb rules, sudoers entries, the installed script, and runtime files. Your user will not be removed from the `input` group automatically — the script prints instructions for that.
-
-## Control Panel UI
-
-An optional desktop control panel is available in the `ui-tauri-react/` directory, built with Tauri and React.
-
-### Install (recommended)
-
-Use the helper script to install prerequisites, build, and install the package for your distro:
-
-```bash
-./install-ui.sh
-```
-
-### One-line install (curl)
-
-If you just want to install the UI without cloning the repo manually:
-
-```bash
-curl -fsSLo /tmp/install-ui.sh https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install-ui.sh && bash /tmp/install-ui.sh
-```
-
-### Install from package
-
-Build the package and install it:
-
-```bash
-cd ui-tauri-react
-npm install
-npm run build -- --bundles rpm   # Fedora / RHEL-based
-# or:
-# npm run build -- --bundles deb # Debian / Ubuntu-based
-```
-
-Then install the package for your distro:
-
-```bash
-# Fedora / RHEL-based
-sudo dnf install src-tauri/target/release/bundle/rpm/Zenbook\ Duo\ Control-0.1.0-1.x86_64.rpm
-
-# Debian / Ubuntu-based
-sudo dpkg -i src-tauri/target/release/bundle/deb/Zenbook\ Duo\ Control_0.1.0_amd64.deb
-```
-
-### Run in development mode
+- Build & install: `./install-ui.sh`
+- Dev mode:
 
 ```bash
 cd ui-tauri-react
@@ -146,23 +134,16 @@ npm install
 npm run dev
 ```
 
-This launches the app with hot reload. The daemon must already be running (via `./setup.sh`).
-
-### Hotkey note (Fedora Workstation / GNOME Wayland)
-
-GNOME Wayland generally does not allow apps to register global hotkeys directly.
-Instead, create a GNOME custom shortcut that runs:
+Hotkey note (GNOME Wayland): create a GNOME custom shortcut that runs:
 
 ```bash
 zenbook-duo-control --toggle-usb-media-remap
 ```
 
-## Development
+### Development
 
-To iterate on `duo.sh` without reinstalling, use dev mode:
+To iterate on `duo.sh` without reinstalling:
 
 ```bash
 ./setup.sh --dev-mode
 ```
-
-This skips package installation and configures systemd to run `duo.sh` directly from the repository directory instead of `/usr/local/bin/duo`.
