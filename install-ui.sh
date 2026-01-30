@@ -308,9 +308,11 @@ if [ "$PKG_MGR" = "dnf" ]; then
     WAS_RUNNING=true
     stop_running_app || true
   fi
-  # dnf won't replace an installed package if the NEVRA is identical. Use reinstall in that case
-  # so local builds apply even when you forgot to bump the version.
-  if rpm -q zenbook-duo-control >/dev/null 2>&1; then
+  # Use `dnf install` so upgrades work (dnf reinstall of a newer NEVRA can result in "available,
+  # but not installed"). Only use reinstall when the exact NEVRA is already installed.
+  BUILT_VR="$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$PKG" 2>/dev/null || true)"
+  INSTALLED_VR="$(rpm -q --qf '%{VERSION}-%{RELEASE}' zenbook-duo-control 2>/dev/null || true)"
+  if [ -n "$BUILT_VR" ] && [ -n "$INSTALLED_VR" ] && [ "$BUILT_VR" = "$INSTALLED_VR" ]; then
     sudo dnf reinstall -y "$PKG"
   else
     sudo dnf install -y "$PKG"
