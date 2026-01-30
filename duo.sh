@@ -618,7 +618,8 @@ function duo-watch-display-backlight() {
 # Automatically reconnects when the keyboard is disconnected and reconnected.
 function duo-watch-kb-backlight-key() {
     # Ensure only one watcher instance runs (prevents duplicate evtest consumers)
-    exec 8>/tmp/duo/watch_kb_backlight_key.lock
+    # Use a per-user lock file to avoid conflicts with other sessions/users (notably `gdm`).
+    exec 8>"/tmp/duo/watch_kb_backlight_key.${UID}.lock"
     flock -n 8 || {
         echo "$(date) - KBLIGHT - Watcher already running"
         return

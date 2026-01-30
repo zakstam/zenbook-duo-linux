@@ -54,6 +54,7 @@ systemctl --user stop zenbook-duo-user.service 2>/dev/null
 
 # Disable services
 sudo systemctl disable zenbook-duo.service 2>/dev/null
+systemctl --user disable zenbook-duo-user.service 2>/dev/null
 sudo systemctl --global disable zenbook-duo-user.service 2>/dev/null
 
 # Remove service files and sleep hook

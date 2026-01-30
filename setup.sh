@@ -185,6 +185,7 @@ WantedBy=multi-user.target
 # Runs after the graphical session starts and launches all background watchers.
 echo "[Unit]
 Description=Zenbook Duo User Handler
+ConditionUser=!gdm
 Wants=graphical-session.target
 After=graphical-session.target
 
@@ -209,7 +210,10 @@ sudo systemctl daemon-reload      # Reload system unit files
 sudo systemctl enable zenbook-duo.service  # Enable system-level boot/shutdown service
 systemctl --user daemon-reexec    # Reload user systemd manager
 systemctl --user daemon-reload    # Reload user unit files
-sudo systemctl --global enable zenbook-duo-user.service  # Enable user-level service for all users
+# Older installs enabled the user service globally, which also starts it under `gdm`.
+# Disable that so only the real logged-in user runs the daemon.
+sudo systemctl --global disable zenbook-duo-user.service 2>/dev/null || true
+systemctl --user enable zenbook-duo-user.service  # Enable user-level service for the current user
 
 # ============================================================================
 # UI DEFAULTS (settings.json)
