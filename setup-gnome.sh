@@ -88,9 +88,11 @@ function run_user_systemctl() {
 
 # In normal (non-dev) mode: prompt for settings, install packages, and copy the script
 if [ "${DEV_MODE}" = false ]; then
-    # Prompt user for configuration preferences
-    read -p "What would you like to use for the default keyboard backlight brightness [0-3]? " DEFAULT_BACKLIGHT
-    read -p "What would you like to use for monitor scale (1 = 100%, 1.5 = 150%, 1.66 = 166%, 2=200%) [1-2]? " DEFAULT_SCALE
+    # Prompt user for configuration preferences (Enter accepts the default)
+    read -p "What would you like to use for the default keyboard backlight brightness [0-3] (default: ${DEFAULT_BACKLIGHT})? " _input
+    DEFAULT_BACKLIGHT="${_input:-${DEFAULT_BACKLIGHT}}"
+    read -p "What would you like to use for monitor scale (1 = 100%, 1.5 = 150%, 1.66 = 166%, 2=200%) (default: ${DEFAULT_SCALE})? " _input
+    DEFAULT_SCALE="${_input:-${DEFAULT_SCALE}}"
     read -p "Enable USB Media Remap by default? [Y/n] " ENABLE_USB_MEDIA_REMAP_ANSWER
     case "${ENABLE_USB_MEDIA_REMAP_ANSWER}" in
         [nN]|[nN][oO])
@@ -273,7 +275,8 @@ run_user_systemctl daemon-reload  # Reload user unit files
 # Older installs enabled the user service globally, which also starts it under `gdm`.
 # Disable that so only the real logged-in user runs the daemon.
 sudo systemctl --global disable zenbook-duo-user.service 2>/dev/null || true
-run_user_systemctl enable --now zenbook-duo-user.service  # Enable + start user-level service for the current user
+run_user_systemctl enable zenbook-duo-user.service   # Enable user-level service for the current user
+run_user_systemctl restart zenbook-duo-user.service  # (Re)start to pick up any changes
 
 # ============================================================================
 # UI DEFAULTS (settings.json)

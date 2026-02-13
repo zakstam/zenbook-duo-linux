@@ -220,7 +220,7 @@ if [ -z "${PYTHON3}" ]; then
 fi
 
 # ============================================================================
-# DISPLAY BACKEND (GNOME/KDE)
+# DISPLAY BACKEND (GNOME/KDE/Niri)
 # ============================================================================
 
 DUO_DISPLAY_BACKEND=""
@@ -229,6 +229,7 @@ DUO_DISPLAY_BACKEND_FILE=""
 function duo-detect-display-backend() {
     local kde_ok=false
     local gnome_ok=false
+    local niri_ok=false
 
     if command -v kscreen-doctor >/dev/null 2>&1; then
         if duo-timeout 2s kscreen-doctor -j >/dev/null 2>&1; then
@@ -244,6 +245,12 @@ function duo-detect-display-backend() {
         fi
     fi
 
+    if command -v niri >/dev/null 2>&1; then
+        if duo-timeout 2s niri msg --json version >/dev/null 2>&1; then
+            niri_ok=true
+        fi
+    fi
+
     if [[ "${XDG_CURRENT_DESKTOP:-}" =~ KDE ]] || [[ "${XDG_SESSION_DESKTOP:-}" =~ KDE ]]; then
         if [ "${kde_ok}" = true ]; then
             DUO_DISPLAY_BACKEND="kde"
@@ -252,6 +259,10 @@ function duo-detect-display-backend() {
         if [ "${gnome_ok}" = true ]; then
             DUO_DISPLAY_BACKEND="gnome"
         fi
+    elif [[ "${XDG_CURRENT_DESKTOP:-}" =~ niri ]] || [[ "${XDG_SESSION_DESKTOP:-}" =~ niri ]]; then
+        if [ "${niri_ok}" = true ]; then
+            DUO_DISPLAY_BACKEND="niri"
+        fi
     fi
 
     if [ -z "${DUO_DISPLAY_BACKEND}" ]; then
@@ -259,6 +270,8 @@ function duo-detect-display-backend() {
             DUO_DISPLAY_BACKEND="kde"
         elif [ "${gnome_ok}" = true ]; then
             DUO_DISPLAY_BACKEND="gnome"
+        elif [ "${niri_ok}" = true ]; then
+            DUO_DISPLAY_BACKEND="niri"
         fi
     fi
 
@@ -491,25 +504,67 @@ function duo-cycle-kb-backlight() {
 # Track the primary display brightness to sync it to the secondary display
 BRIGHTNESS=0
 
-# Inject a brightness key event (up or down) via the virtual keyboard.
-# This triggers GNOME's native brightness handling and OSD display.
+# Step the display brightness up or down.
+# On GNOME/KDE, injects a brightness key event so the compositor shows its OSD.
+# On other compositors (niri, sway, etc.), writes directly to sysfs.
 function duo-step-brightness() {
     local DIRECTION=${1}  # "up" or "down"
     echo "$(date) - BRIGHTNESS - ${DIRECTION}"
-    local KEY_OUTPUT
-    if [ -z "${PYTHON3}" ] || [ ! -f "${DUO_INJECT_KEY_PY}" ]; then
-        echo "$(date) - BRIGHTNESS - ERROR: Missing helper script ${DUO_INJECT_KEY_PY}"
-        return 0
+
+    # Prefer brightnessctl if available (works on any compositor)
+    if command -v brightnessctl >/dev/null 2>&1; then
+        if [ "${DIRECTION}" = "up" ]; then
+            brightnessctl set 5%+ >/dev/null 2>&1
+        else
+            brightnessctl set 5%- >/dev/null 2>&1
+        fi
+        return
+    fi
+
+    # GNOME/KDE: inject a key event so the compositor handles it with OSD
+    if [ "${DUO_DISPLAY_BACKEND}" = "gnome" ] || [ "${DUO_DISPLAY_BACKEND}" = "kde" ]; then
+        local KEY_OUTPUT
+        if [ -z "${PYTHON3}" ] || [ ! -f "${DUO_INJECT_KEY_PY}" ]; then
+            echo "$(date) - BRIGHTNESS - ERROR: Missing helper script ${DUO_INJECT_KEY_PY}"
+            return 0
+        fi
+        local RUNNER=()
+        if [ "${EUID}" = "0" ]; then
+            RUNNER=("${PYTHON3}")
+        else
+            RUNNER=("/usr/bin/sudo" "${PYTHON3}")
+        fi
+        if ! KEY_OUTPUT=$(duo-timeout 3s "${RUNNER[@]}" "${DUO_INJECT_KEY_PY}" "brightness${DIRECTION}" 2>&1); then
+            echo "$(date) - BRIGHTNESS - ERROR: Failed to inject brightness ${DIRECTION} key: ${KEY_OUTPUT}"
+        fi
+        return
+    fi
+
+    # Fallback: direct sysfs write (step ~5% of max)
+    local bl="/sys/class/backlight/intel_backlight"
+    if [ ! -d "${bl}" ]; then
+        echo "$(date) - BRIGHTNESS - ERROR: no backlight device found"
+        return
+    fi
+    local max cur step new
+    max=$(cat "${bl}/max_brightness" 2>/dev/null || echo 0)
+    cur=$(cat "${bl}/brightness" 2>/dev/null || echo 0)
+    step=$(( max / 20 ))
+    [ "${step}" -lt 1 ] && step=1
+    if [ "${DIRECTION}" = "up" ]; then
+        new=$(( cur + step ))
+        [ "${new}" -gt "${max}" ] && new="${max}"
+    else
+        new=$(( cur - step ))
+        [ "${new}" -lt 0 ] && new=0
     fi
     local RUNNER=()
     if [ "${EUID}" = "0" ]; then
-        RUNNER=("${PYTHON3}")
+        RUNNER=()
     else
-        RUNNER=("/usr/bin/sudo" "${PYTHON3}")
+        RUNNER=("/usr/bin/sudo")
     fi
-    if ! KEY_OUTPUT=$(duo-timeout 3s "${RUNNER[@]}" "${DUO_INJECT_KEY_PY}" "brightness${DIRECTION}" 2>&1); then
-        echo "$(date) - BRIGHTNESS - ERROR: Failed to inject brightness ${DIRECTION} key: ${KEY_OUTPUT}"
-    fi
+    echo "${new}" | "${RUNNER[@]}" /usr/bin/tee "${bl}/brightness" >/dev/null 2>&1
 }
 
 # Open an emoji picker.

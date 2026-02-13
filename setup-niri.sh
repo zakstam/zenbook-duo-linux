@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installation script for ASUS Zenbook Duo Linux dual-screen management (KDE).
+# Installation script for ASUS Zenbook Duo Linux dual-screen management (Niri).
 # Installs dependencies, configures sudoers, udev rules, hwdb key remapping,
 # and systemd services for automatic startup.
 
@@ -48,7 +48,7 @@ done
 # USER CONTEXT
 # ============================================================================
 
-# setup-kde.sh is frequently run with `sudo`. In that case we still want all
+# setup-niri.sh is frequently run with `sudo`. In that case we still want all
 # per-user config (sudoers, input group, systemctl --user enable, settings.json)
 # to apply to the *real* user session, not root.
 TARGET_USER="${USER}"
@@ -56,8 +56,8 @@ if [ "${EUID}" = "0" ]; then
     if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
         TARGET_USER="${SUDO_USER}"
     else
-        echo "ERROR: setup-kde.sh must be run from a real user session."
-        echo "Run: ./setup-kde.sh"
+        echo "ERROR: setup-niri.sh must be run from a real user session."
+        echo "Run: ./setup-niri.sh"
         exit 1
     fi
 fi
@@ -109,7 +109,7 @@ if [ "${DEV_MODE}" = false ]; then
         sudo dnf install -y \
             inotify-tools \
             usbutils \
-            kscreen \
+            niri \
             iio-sensor-proxy \
             python3-pyusb \
             evtest
@@ -118,13 +118,13 @@ if [ "${DEV_MODE}" = false ]; then
         sudo apt install -y \
             inotify-tools \
             usbutils \
-            kscreen \
+            niri \
             iio-sensor-proxy \
             python3-usb \
             evtest
     else
         echo "Unsupported package manager. Please install dependencies manually:"
-        echo "  inotify-tools, usbutils, kscreen/kscreen-doctor, iio-sensor-proxy, python3-usb/pyusb"
+        echo "  inotify-tools, usbutils, niri, iio-sensor-proxy, python3-usb/pyusb"
         exit 1
     fi
 
@@ -140,11 +140,11 @@ if [ "${DEV_MODE}" = false ]; then
 	    sudo cp ./libexec/backlight.py /usr/local/libexec/zenbook-duo/backlight.py
 	    sudo cp ./libexec/bt_backlight.py /usr/local/libexec/zenbook-duo/bt_backlight.py
 	    sudo cp ./libexec/inject_key.py /usr/local/libexec/zenbook-duo/inject_key.py
-	    sudo cp ./libexec/display-kde.sh /usr/local/libexec/zenbook-duo/display-kde.sh
+	    sudo cp ./libexec/display-niri.sh /usr/local/libexec/zenbook-duo/display-niri.sh
 	    sudo chmod 0644 /usr/local/libexec/zenbook-duo/backlight.py \
 	        /usr/local/libexec/zenbook-duo/bt_backlight.py \
 	        /usr/local/libexec/zenbook-duo/inject_key.py \
-	        /usr/local/libexec/zenbook-duo/display-kde.sh
+	        /usr/local/libexec/zenbook-duo/display-niri.sh
 	fi
 
 # ============================================================================
