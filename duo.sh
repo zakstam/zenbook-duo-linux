@@ -230,43 +230,38 @@ function duo-detect-display-backend() {
     local kde_ok=false
     local gnome_ok=false
     local niri_ok=false
+    local hyprland_ok=false
 
     if command -v kscreen-doctor >/dev/null 2>&1; then
-        if duo-timeout 2s kscreen-doctor -j >/dev/null 2>&1; then
-            kde_ok=true
-        fi
+        if duo-timeout 2s kscreen-doctor -j >/dev/null 2>&1; then kde_ok=true; fi
     fi
 
     if command -v gdctl >/dev/null 2>&1; then
-        if duo-has-graphical-session; then
-            if duo-timeout 2s gdctl show >/dev/null 2>&1; then
-                gnome_ok=true
-            fi
-        fi
+        if duo-has-graphical-session && duo-timeout 2s gdctl show >/dev/null 2>&1; then gnome_ok=true; fi
     fi
 
     if command -v niri >/dev/null 2>&1; then
-        if duo-timeout 2s niri msg --json version >/dev/null 2>&1; then
-            niri_ok=true
-        fi
+        if duo-timeout 2s niri msg --json version >/dev/null 2>&1; then niri_ok=true; fi
+    fi
+
+    if command -v hyprctl >/dev/null 2>&1; then
+        if [ -n "${HYPRLAND_INSTANCE_SIGNATURE}" ] || duo-timeout 2s hyprctl systeminfo >/dev/null 2>&1; then hyprland_ok=true; fi
     fi
 
     if [[ "${XDG_CURRENT_DESKTOP:-}" =~ KDE ]] || [[ "${XDG_SESSION_DESKTOP:-}" =~ KDE ]]; then
-        if [ "${kde_ok}" = true ]; then
-            DUO_DISPLAY_BACKEND="kde"
-        fi
+        if [ "${kde_ok}" = true ]; then DUO_DISPLAY_BACKEND="kde"; fi
     elif [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]] || [[ "${XDG_SESSION_DESKTOP:-}" =~ GNOME ]]; then
-        if [ "${gnome_ok}" = true ]; then
-            DUO_DISPLAY_BACKEND="gnome"
-        fi
+        if [ "${gnome_ok}" = true ]; then DUO_DISPLAY_BACKEND="gnome"; fi
     elif [[ "${XDG_CURRENT_DESKTOP:-}" =~ niri ]] || [[ "${XDG_SESSION_DESKTOP:-}" =~ niri ]]; then
-        if [ "${niri_ok}" = true ]; then
-            DUO_DISPLAY_BACKEND="niri"
-        fi
+        if [ "${niri_ok}" = true ]; then DUO_DISPLAY_BACKEND="niri"; fi
+    elif [[ "${XDG_CURRENT_DESKTOP:-}" =~ Hyprland ]] || [[ "${XDG_SESSION_DESKTOP:-}" =~ Hyprland ]]; then
+        if [ "${hyprland_ok}" = true ]; then DUO_DISPLAY_BACKEND="hyprland"; fi
     fi
 
     if [ -z "${DUO_DISPLAY_BACKEND}" ]; then
-        if [ "${kde_ok}" = true ]; then
+        if [ "${hyprland_ok}" = true ]; then
+            DUO_DISPLAY_BACKEND="hyprland"
+        elif [ "${kde_ok}" = true ]; then
             DUO_DISPLAY_BACKEND="kde"
         elif [ "${gnome_ok}" = true ]; then
             DUO_DISPLAY_BACKEND="gnome"

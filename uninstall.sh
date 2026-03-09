@@ -137,12 +137,14 @@ rm -rf /tmp/duo
 rm -rf "/tmp/duo-${TARGET_UID}"
 
 # ============================================================================
-# UI APP (RPM/DEB) + DESKTOP ENTRIES
+# UI APP (RPM/DEB/PACMAN) + DESKTOP ENTRIES
 # ============================================================================
 
 if [ "$KEEP_UI" = false ]; then
     # Remove the package if installed.
-    if command -v dnf >/dev/null 2>&1; then
+    if command -v pacman >/dev/null 2>&1; then
+        sudo pacman -R --noconfirm zenbook-duo-control 2>/dev/null || true
+    elif command -v dnf >/dev/null 2>&1; then
         sudo dnf remove -y zenbook-duo-control 2>/dev/null || true
     elif command -v apt >/dev/null 2>&1; then
         sudo apt remove -y zenbook-duo-control 2>/dev/null || true

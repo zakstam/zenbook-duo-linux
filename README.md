@@ -18,9 +18,10 @@ This project adds better Linux support for the Zenbook Duo by running a small ba
 
 - GNOME: `./setup-gnome.sh`
 - KDE: `./setup-kde.sh`
+- Arch (Hyprland): `./setup-hyprland.sh`
 
 Notes:
-- If you prefer to run it with sudo, use `sudo -E ./setup-gnome.sh` or `sudo -E ./setup-kde.sh` (so per-user setup targets your user session).
+- If you prefer to run it with sudo, use `sudo -E ./setup-gnome.sh` or `sudo -E ./setup-kde.sh` or `sudo -E ./setup-hyprland.sh` (so per-user setup targets your user session).
 - If you re-run the installer, restart the user service: `systemctl --user restart zenbook-duo-user.service`
 
 4. Log out and back in (needed for permission changes).
@@ -51,6 +52,7 @@ To remove the optional UI app:
 
 - Fedora / RHEL-based: `sudo dnf remove zenbook-duo-control`
 - Debian / Ubuntu-based: `sudo apt remove zenbook-duo-control`
+- Other distros: remove the `zenbook-duo-control` binary from `/usr/local/bin` and the desktop file from `/usr/share/applications`.
 
 ---
 
@@ -135,8 +137,9 @@ sudo udevadm trigger
 |--------|----------------|
 | Fedora / RHEL-based | `dnf` |
 | Debian / Ubuntu-based | `apt` |
+| Arch / Hyprland-based | `pacman` |
 
-Other distros: install dependencies manually and run `./setup-gnome.sh` or `./setup-kde.sh` (it exits if it cannot detect your package manager).
+Other distros: install dependencies manually and run `./setup-gnome.sh` or `./setup-kde.sh` or `./setup-hyprland.sh` (it exits if it cannot detect your package manager).
 
 ### Control Panel UI (Tauri + React)
 
