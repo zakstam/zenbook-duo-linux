@@ -150,7 +150,15 @@ esac
 
 echo "Detected desktop: ${desktop}"
 echo "Running $(basename "${setup_script}")..."
-"${setup_script}" "$@"
+if [ -r /dev/tty ]; then
+  "${setup_script}" "$@" </dev/tty
+else
+  "${setup_script}" "$@"
+fi
 
 echo "Running install-ui.sh..."
-"${repo_dir}/install-ui.sh"
+if [ -r /dev/tty ]; then
+  "${repo_dir}/install-ui.sh" </dev/tty
+else
+  "${repo_dir}/install-ui.sh"
+fi
