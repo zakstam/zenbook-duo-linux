@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+if [ -n "${SCRIPT_PATH}" ] && [ "${SCRIPT_PATH}" != "bash" ] && [ "${SCRIPT_PATH}" != "-" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+else
+  SCRIPT_DIR="$(pwd)"
+fi
 REPO_URL="https://github.com/zakstam/zenbook-duo-linux.git"
 ARCHIVE_URL="https://github.com/zakstam/zenbook-duo-linux/archive/refs/heads/main.tar.gz"
 
