@@ -7,36 +7,48 @@ This project adds better Linux support for the Zenbook Duo by running a small ba
 ### What you need
 
 - An ASUS Zenbook Duo
-- GNOME on Wayland or KDE Plasma on Wayland (tested on Fedora; Ubuntu GNOME should also work)
+- GNOME on Wayland, KDE Plasma on Wayland, or Niri (tested on Fedora; Ubuntu GNOME should also work)
 - A Terminal and your sudo password (the installer needs to change system settings)
 
 ### Install (recommended)
+
+One-line install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install.sh | bash
+```
 
 1. Download this repo (GitHub "Code" → "Download ZIP"), then extract it.
 2. Open a Terminal in the extracted folder.
 3. Run the installer and answer the prompts:
 
-- GNOME: `./setup-gnome.sh`
-- KDE: `./setup-kde.sh`
+```bash
+./install.sh
+```
 
 Notes:
-- If you prefer to run it with sudo, use `sudo -E ./setup-gnome.sh` or `sudo -E ./setup-kde.sh` (so per-user setup targets your user session).
+- `install.sh` auto-detects GNOME, KDE Plasma, or Niri and then runs the matching setup script plus the UI installer.
+- If you prefer to run it with sudo, use `sudo -E ./install.sh` (so per-user setup targets your user session).
 - If you re-run the installer, restart the user service: `systemctl --user restart zenbook-duo-user.service`
 
 4. Log out and back in (needed for permission changes).
 
-### Optional: install the Control Panel app (UI)
+Manual fallback:
 
-If you want a desktop app to toggle settings easily (run the appropriate setup script first):
+```bash
+./setup-gnome.sh
+# or
+./setup-kde.sh
+# or
+./setup-niri.sh
+```
+
+### Optional: install or update just the Control Panel app (UI)
+
+If you only want to build/update the desktop app:
 
 ```bash
 ./install-ui.sh
-```
-
-You can also do a one-line install (downloads the repo to a temp folder, builds, and installs):
-
-```bash
-curl -fsSLo /tmp/install-ui.sh https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install-ui.sh && bash /tmp/install-ui.sh
 ```
 
 ### Uninstall
@@ -97,12 +109,13 @@ Notes:
 - GNOME: `gdctl` (part of `mutter`) for display configuration
 - KDE: `kscreen-doctor` (part of `kscreen`) for display configuration
 
-### What `./setup-gnome.sh` / `./setup-kde.sh` change
+### What `./setup-gnome.sh` / `./setup-kde.sh` / `./setup-niri.sh` change
 
 - Installs dependencies:
   - Common: `inotify-tools`, `usbutils`, `iio-sensor-proxy`, `python3-usb`/`python3-pyusb`, `evtest`
   - GNOME: `mutter`/`gdctl` (via `setup-gnome.sh`)
   - KDE: `kscreen`/`kscreen-doctor` (via `setup-kde.sh`)
+  - Niri: `niri` (via `setup-niri.sh`)
 - Installs `duo.sh` to `/usr/local/bin/duo` (or uses repo path in `--dev-mode`)
 - Installs helper scripts to `/usr/local/libexec/zenbook-duo` and adds sudoers rules for brightness/backlight helper commands
 - Adds your user to the `input` group (logout/login required)
@@ -116,6 +129,10 @@ Notes:
 - Nothing happens when docking/undocking:
   - Check the user service is running: `systemctl --user status zenbook-duo-user.service`
   - Watch logs while docking/undocking: `journalctl --user -u zenbook-duo-user.service -f`
+- `Failed to read events: No such device (os error 19)` when reattaching the keyboard:
+  - This comes from the optional USB media remap helper when the event node disappears during hotplug.
+  - Make sure you are on the latest version, then restart the user service once: `systemctl --user restart zenbook-duo-user.service`
+  - You do not need a separate `/etc/udev/rules.d/*uinput*` rule for this project.
 - `KBLIGHT - Device lost, re-scanning` in a loop:
   - You likely need to log out and back in so your session gets the `input` group membership
 
@@ -136,7 +153,7 @@ sudo udevadm trigger
 | Fedora / RHEL-based | `dnf` |
 | Debian / Ubuntu-based | `apt` |
 
-Other distros: install dependencies manually and run `./setup-gnome.sh` or `./setup-kde.sh` (it exits if it cannot detect your package manager).
+Other distros: install dependencies manually and run `./setup-gnome.sh`, `./setup-kde.sh`, or `./setup-niri.sh` (it exits if it cannot detect your package manager).
 
 ### Control Panel UI (Tauri + React)
 

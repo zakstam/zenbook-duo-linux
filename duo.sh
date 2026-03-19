@@ -199,6 +199,19 @@ function duo-usb-media-remap-stop() {
     duo-timeout 3s "${helper[@]}" --stop --pid-file "${pid_file}" >/dev/null 2>&1 || true
 }
 
+function duo-ensure-usb-media-remap-state() {
+    local keyboard_attached="${1:-false}"
+    if [ "${keyboard_attached}" = "true" ]; then
+        if [ "$(duo-usb-media-remap-enabled)" = "true" ]; then
+            duo-usb-media-remap-start
+        else
+            duo-usb-media-remap-stop
+        fi
+    else
+        duo-usb-media-remap-stop
+    fi
+}
+
 # ============================================================================
 # HELPER SCRIPTS
 # ============================================================================
@@ -627,15 +640,7 @@ function duo-check-monitor() {
     # Start/stop USB media remap helper (optional; provided by the UI package).
     # This is responsible for making the top-row keys behave as intended on USB
     # and also handles the keyboard backlight toggle key in USB mode.
-    if [ "${KEYBOARD_ATTACHED}" = true ]; then
-        if [ "$(duo-usb-media-remap-enabled)" = "true" ]; then
-            duo-usb-media-remap-start
-        else
-            duo-usb-media-remap-stop
-        fi
-    else
-        duo-usb-media-remap-stop
-    fi
+    duo-ensure-usb-media-remap-state "${KEYBOARD_ATTACHED}"
 
     # Re-count active logical monitors
     MONITOR_COUNT=$(duo-display-count 2>/dev/null || echo 0)
@@ -770,6 +775,7 @@ function duo-watch-monitor() {
         if duo-usb-keyboard-present; then
             present="true"
         fi
+        duo-ensure-usb-media-remap-state "${present}"
         if [ "${last_present}" != "${present}" ]; then
             last_present="${present}"
             duo-check-monitor
