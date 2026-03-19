@@ -82,6 +82,18 @@ function run_user_systemctl() {
         systemctl --user "$@"
 }
 
+function duo_prompt() {
+    local prompt="${1}"
+    local reply_var="${2}"
+    local value=""
+    if [ -r /dev/tty ]; then
+        read -r -p "${prompt}" value </dev/tty
+    else
+        read -r -p "${prompt}" value
+    fi
+    printf -v "${reply_var}" '%s' "${value}"
+}
+
 # ============================================================================
 # PACKAGE INSTALLATION & SCRIPT DEPLOYMENT
 # ============================================================================
@@ -89,11 +101,11 @@ function run_user_systemctl() {
 # In normal (non-dev) mode: prompt for settings, install packages, and copy the script
 if [ "${DEV_MODE}" = false ]; then
     # Prompt user for configuration preferences (Enter accepts the default)
-    read -p "What would you like to use for the default keyboard backlight brightness [0-3] (default: ${DEFAULT_BACKLIGHT})? " _input
+    duo_prompt "What would you like to use for the default keyboard backlight brightness [0-3] (default: ${DEFAULT_BACKLIGHT})? " _input
     DEFAULT_BACKLIGHT="${_input:-${DEFAULT_BACKLIGHT}}"
-    read -p "What would you like to use for monitor scale (1 = 100%, 1.5 = 150%, 1.66 = 166%, 2=200%) (default: ${DEFAULT_SCALE})? " _input
+    duo_prompt "What would you like to use for monitor scale (1 = 100%, 1.5 = 150%, 1.66 = 166%, 2=200%) (default: ${DEFAULT_SCALE})? " _input
     DEFAULT_SCALE="${_input:-${DEFAULT_SCALE}}"
-    read -p "Enable USB Media Remap by default? [Y/n] " ENABLE_USB_MEDIA_REMAP_ANSWER
+    duo_prompt "Enable USB Media Remap by default? [Y/n] " ENABLE_USB_MEDIA_REMAP_ANSWER
     case "${ENABLE_USB_MEDIA_REMAP_ANSWER}" in
         [nN]|[nN][oO])
             USB_MEDIA_REMAP_ENABLED=false
