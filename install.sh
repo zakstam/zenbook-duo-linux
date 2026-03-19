@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]:-}"
-if [ -n "${SCRIPT_PATH}" ] && [ "${SCRIPT_PATH}" != "bash" ] && [ "${SCRIPT_PATH}" != "-" ]; then
+if [ -n "${SCRIPT_PATH}" ] && [ "${SCRIPT_PATH}" != "bash" ] && [ "${SCRIPT_PATH}" != "-" ] && [ -f "${SCRIPT_PATH}" ]; then
   SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 else
   SCRIPT_DIR="$(pwd)"
