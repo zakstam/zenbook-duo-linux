@@ -162,3 +162,7 @@ if [ -r /dev/tty ]; then
 else
   "${repo_dir}/install-ui.sh"
 fi
+
+echo
+echo "If this is a fresh install, you may need to log out and back in."
+echo "If anything looks stale after updating, run: systemctl --user restart zenbook-duo-user.service"
