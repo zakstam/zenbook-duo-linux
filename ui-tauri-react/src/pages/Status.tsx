@@ -167,7 +167,7 @@ export default function Status() {
             <h3 className="text-[13px] font-semibold text-foreground">Service</h3>
           </div>
           <div className="space-y-3">
-            <StatusRow label="zenbook-duo-user">
+            <StatusRow label="Rust runtime">
               <div className="flex items-center gap-2">
                 <StatusDot
                   active={store.status.serviceActive}

@@ -3,7 +3,7 @@ use evdev::uinput::VirtualDeviceBuilder;
 use evdev::{AttributeSet, Device, EventType, InputEvent, Key};
 use nix::fcntl::{Flock, FlockArg};
 use nix::sys::signal::{kill, Signal};
-use nix::unistd::{Pid, Uid};
+use nix::unistd::Pid;
 use signal_hook::flag;
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -14,6 +14,8 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::runtime::paths;
 
 pub fn run_from_env() -> Result<(), String> {
     run_with_args(env::args().skip(1))
@@ -311,9 +313,9 @@ fn cycle_backlight() {
         .and_then(|s| s.trim().parse::<u8>().ok())
         .unwrap_or(0);
     let next = (level + 1) % 4;
-    let _ = fs::write(&kbl_level_path, next.to_string());
-
-    let _ = crate::hardware::hid::set_backlight(next);
+    if crate::commands::backlight::set_backlight_daemon_first(next).is_ok() {
+        let _ = fs::write(&kbl_level_path, next.to_string());
+    }
 }
 
 fn open_emoji_picker(user: Option<&str>) {
@@ -368,8 +370,10 @@ fn current_time_ms() -> u128 {
 }
 
 fn default_pid_file() -> String {
-    let uid = Uid::current().as_raw();
-    format!("/tmp/duo-{uid}/usb_media_remap.pid")
+    paths::current_user_runtime_dir()
+        .join("usb_media_remap.pid")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn pid_file_from_env_args() -> String {
@@ -388,7 +392,7 @@ fn base_dir_from_pid_file(pid_file: &str) -> PathBuf {
     Path::new(pid_file)
         .parent()
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .unwrap_or_else(paths::current_user_runtime_dir)
 }
 
 fn ensure_dir(dir: &Path) -> Result<(), String> {

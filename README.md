@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/inst
 Notes:
 - `install.sh` auto-detects GNOME, KDE Plasma, or Niri and then runs the matching setup script plus the UI installer.
 - If you prefer to run it with sudo, use `sudo -E ./install.sh` (so per-user setup targets your user session).
-- If you re-run the installer, restart the user service: `systemctl --user restart zenbook-duo-user.service`
+- If you re-run the installer, restart the session agent: `systemctl --user restart zenbook-duo-session-agent.service`
 
 4. Log out and back in (needed for permission changes).
 
@@ -112,26 +112,27 @@ Notes:
 ### What `./setup-gnome.sh` / `./setup-kde.sh` / `./setup-niri.sh` change
 
 - Installs dependencies:
-  - Common: `inotify-tools`, `usbutils`, `iio-sensor-proxy`, `python3-usb`/`python3-pyusb`, `evtest`
+  - Common: `usbutils`, `iio-sensor-proxy`, `systemd`
   - GNOME: `mutter`/`gdctl` (via `setup-gnome.sh`)
   - KDE: `kscreen`/`kscreen-doctor` (via `setup-kde.sh`)
   - Niri: `niri` (via `setup-niri.sh`)
-- Installs `duo.sh` to `/usr/local/bin/duo` (or uses repo path in `--dev-mode`)
-- Installs helper scripts to `/usr/local/libexec/zenbook-duo` and adds sudoers rules for brightness/backlight helper commands
 - Adds your user to the `input` group (logout/login required)
 - Installs a udev rule for the Zenbook Duo keyboard
-- Installs/enables systemd units:
-  - `zenbook-duo.service` (system boot/shutdown)
-  - `zenbook-duo-user.service` (user session)
+- Installs/enables Rust runtime units:
+  - `zenbook-duo-rust-daemon.service` (system daemon)
+  - `zenbook-duo-rust-lifecycle.service` (boot/shutdown + sleep hook)
+  - `zenbook-duo-session-agent.service` (user session)
+- Installs Rust runtime binaries to `/usr/local/libexec/zenbook-duo`
+- Adds sudoers rules for brightness writes used by the session agent
 
 ### Troubleshooting
 
 - Nothing happens when docking/undocking:
-  - Check the user service is running: `systemctl --user status zenbook-duo-user.service`
-  - Watch logs while docking/undocking: `journalctl --user -u zenbook-duo-user.service -f`
+  - Check the services are running: `systemctl status zenbook-duo-rust-daemon.service` and `systemctl --user status zenbook-duo-session-agent.service`
+  - Watch daemon logs: `journalctl -u zenbook-duo-rust-daemon.service -f`
 - `Failed to read events: No such device (os error 19)` when reattaching the keyboard:
   - This comes from the optional USB media remap helper when the event node disappears during hotplug.
-  - Make sure you are on the latest version, then restart the user service once: `systemctl --user restart zenbook-duo-user.service`
+  - Make sure you are on the latest version, then restart the session agent once: `systemctl --user restart zenbook-duo-session-agent.service`
   - You do not need a separate `/etc/udev/rules.d/*uinput*` rule for this project.
 - `KBLIGHT - Device lost, re-scanning` in a loop:
   - You likely need to log out and back in so your session gets the `input` group membership
@@ -165,16 +166,6 @@ cd ui-tauri-react
 npm install
 npm run dev
 ```
-
-### Development
-
-To iterate on `duo.sh` without reinstalling:
-
-```bash
-./setup-gnome.sh --dev-mode
-```
-
----
 
 ## Fedora: “Nobara-like” setup helper
 

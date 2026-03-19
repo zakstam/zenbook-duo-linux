@@ -17,6 +17,22 @@ path = "src/main.rs"
 name = "usb-media-remap"
 path = "src/bin/usb-media-remap.rs"
 
+[[bin]]
+name = "zenbook-duo-daemon"
+path = "src/bin/zenbook-duo-daemon.rs"
+
+[[bin]]
+name = "zenbook-duo-session-agent"
+path = "src/bin/zenbook-duo-session-agent.rs"
+
+[[bin]]
+name = "zenbook-duo-lifecycle"
+path = "src/bin/zenbook-duo-lifecycle.rs"
+
+[[bin]]
+name = "zenbook-duo-usb-remap-helper"
+path = "src/bin/zenbook-duo-usb-remap-helper.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

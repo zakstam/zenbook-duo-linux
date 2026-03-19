@@ -46,7 +46,7 @@ export default function Logs() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Logs</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            System log output from zenbook-duo-user
+            System log output from the Rust runtime
           </p>
         </div>
         <div className="flex items-center gap-2">

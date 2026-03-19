@@ -1,6 +1,7 @@
 #!/bin/bash
 # Uninstallation script for ASUS Zenbook Duo Linux dual-screen management.
-# Reverses everything installed by setup-gnome.sh/setup-kde.sh and (optionally) the UI app.
+# Reverses everything installed by setup-gnome.sh/setup-kde.sh/setup-niri.sh
+# and (optionally) the UI app.
 
 echo "Uninstalling Zenbook Duo Linux..."
 
@@ -83,17 +84,27 @@ pkill -f zenbook-duo-control 2>/dev/null || true
 
 # Stop running services
 sudo systemctl stop zenbook-duo.service 2>/dev/null
+sudo systemctl stop zenbook-duo-rust-daemon.service 2>/dev/null
+sudo systemctl stop zenbook-duo-rust-lifecycle.service 2>/dev/null
 run_user_systemctl stop zenbook-duo-user.service 2>/dev/null
+run_user_systemctl stop zenbook-duo-session-agent.service 2>/dev/null
 
 # Disable services
 sudo systemctl disable zenbook-duo.service 2>/dev/null
+sudo systemctl disable zenbook-duo-rust-daemon.service 2>/dev/null
+sudo systemctl disable zenbook-duo-rust-lifecycle.service 2>/dev/null
 run_user_systemctl disable zenbook-duo-user.service 2>/dev/null
+run_user_systemctl disable zenbook-duo-session-agent.service 2>/dev/null
 sudo systemctl --global disable zenbook-duo-user.service 2>/dev/null
 
 # Remove service files and sleep hook
 sudo rm -f /etc/systemd/system/zenbook-duo.service
+sudo rm -f /etc/systemd/system/zenbook-duo-rust-daemon.service
+sudo rm -f /etc/systemd/system/zenbook-duo-rust-lifecycle.service
 sudo rm -f /etc/systemd/user/zenbook-duo-user.service
+sudo rm -f /etc/systemd/user/zenbook-duo-session-agent.service
 sudo rm -f /usr/lib/systemd/system-sleep/duo
+sudo rm -f /usr/lib/systemd/system-sleep/zenbook-duo-rust-lifecycle
 
 # Reload systemd
 sudo systemctl daemon-reload
@@ -112,13 +123,7 @@ sudo udevadm trigger
 # SUDOERS ENTRIES
 # ============================================================================
 
-# Remove sudoers lines added by setup-gnome.sh/setup-kde.sh (matching duo helper script paths)
-if sudo grep -q "/tmp/duo/" /etc/sudoers; then
-    sudo sed -i '\|/tmp/duo/|d' /etc/sudoers
-fi
-if sudo grep -q "/usr/local/libexec/zenbook-duo/" /etc/sudoers; then
-    sudo sed -i '\|/usr/local/libexec/zenbook-duo/|d' /etc/sudoers
-fi
+# Remove sudoers lines added by the setup scripts.
 if sudo grep -q "card1-eDP-2-backlight/brightness" /etc/sudoers; then
     sudo sed -i '\|card1-eDP-2-backlight/brightness|d' /etc/sudoers
 fi
@@ -132,6 +137,7 @@ fi
 
 sudo rm -f /usr/local/bin/duo
 sudo rm -rf /usr/local/libexec/zenbook-duo
+sudo rm -rf /var/lib/zenbook-duo
 rm -rf /tmp/duo
 # Newer versions use a per-user directory (/tmp/duo-$UID). Remove only for target user.
 rm -rf "/tmp/duo-${TARGET_UID}"

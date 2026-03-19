@@ -1,5 +1,5 @@
 use chrono::Local;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -8,11 +8,13 @@ use std::time::Duration;
 
 use nix::unistd::{Uid, User};
 
-// Legacy path used by older builds that shared a global /tmp/duo directory.
-const LEGACY_PID_PATH: &str = "/tmp/duo/usb_media_remap.pid";
-const HELPER_FLAG: &str = "--usb-media-remap-helper";
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
+use crate::runtime::client;
+use crate::runtime::paths;
 
-#[derive(Debug, Clone, Serialize)]
+const HELPER_BINARY_NAME: &str = "zenbook-duo-usb-remap-helper";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsbMediaRemapStatus {
     pub running: bool,
@@ -22,28 +24,21 @@ pub struct UsbMediaRemapStatus {
 
 #[tauri::command]
 pub fn usb_media_remap_status() -> UsbMediaRemapStatus {
-    get_status()
+    daemon_first_status()
 }
 
 #[tauri::command]
 pub async fn usb_media_remap_start() -> Result<(), String> {
-    // These operations can block (pkexec, sleeps, polling). Run off the main thread so the UI
-    // stays responsive.
-    tauri::async_runtime::spawn_blocking(start_remap)
-        .await
-        .unwrap_or_else(|e| Err(format!("Failed to join background task: {e}")))
+    daemon_first_start()
 }
 
 #[tauri::command]
 pub async fn usb_media_remap_stop() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(stop_remap)
-        .await
-        .unwrap_or_else(|e| Err(format!("Failed to join background task: {e}")))
+    daemon_first_stop()
 }
 
 pub fn get_status() -> UsbMediaRemapStatus {
-    // Prefer per-user pid path, but also tolerate older installs.
-    let pid = read_pid(&pid_path()).or_else(|| read_pid(LEGACY_PID_PATH));
+    let pid = read_pid(&pid_path());
     if let Some(pid) = pid {
         if is_pid_running(pid) {
             return UsbMediaRemapStatus {
@@ -53,7 +48,6 @@ pub fn get_status() -> UsbMediaRemapStatus {
             };
         }
         let _ = fs::remove_file(pid_path());
-        let _ = fs::remove_file(LEGACY_PID_PATH);
     }
 
     UsbMediaRemapStatus {
@@ -76,14 +70,11 @@ pub fn start_remap() -> Result<(), String> {
     let pid_path = pid_path();
     ensure_duo_dir_for_pid(&pid_path)?;
 
-    // Use the main executable as the pkexec target so we don't need to ship a separate helper
-    // binary in bundles. The binary short-circuits in `main` when HELPER_FLAG is present.
-    let helper_path = std::env::current_exe().map_err(|e| log_error(format!("Failed to find current exe: {e}")))?;
+    let helper_path = helper_binary_path()?;
     let user = current_username().map_err(log_error)?;
 
     let mut cmd = Command::new("pkexec");
     cmd.arg(helper_path)
-        .arg(HELPER_FLAG)
         .arg("--pid-file")
         .arg(&pid_path)
         .arg("--user")
@@ -102,15 +93,13 @@ pub fn stop_remap() -> Result<(), String> {
         return Ok(());
     }
 
-    let helper_path = std::env::current_exe()
-        .map_err(|e| log_error(format!("Failed to find current exe: {e}")))?;
+    let helper_path = helper_binary_path()?;
 
     for pid_path in pid_files {
         ensure_duo_dir_for_pid(&pid_path)?;
 
         let mut cmd = Command::new("pkexec");
         cmd.arg(&helper_path)
-            .arg(HELPER_FLAG)
             .arg("--stop")
             .arg("--pid-file")
             .arg(&pid_path);
@@ -186,6 +175,17 @@ fn is_pid_running(pid: u32) -> bool {
 }
 
 fn current_username() -> Result<String, String> {
+    if let Ok(user) = std::env::var("SUDO_USER") {
+        if !user.is_empty() && user != "root" {
+            return Ok(user);
+        }
+    }
+    if let Ok(user) = std::env::var("ZENBOOK_DUO_USER") {
+        if !user.is_empty() {
+            return Ok(user);
+        }
+    }
+
     let user = User::from_uid(Uid::current())
         .map_err(|e| format!("Failed to read current user: {e}"))?
         .ok_or_else(|| "Failed to resolve current user".to_string())?;
@@ -193,34 +193,91 @@ fn current_username() -> Result<String, String> {
 }
 
 fn pid_path() -> String {
-    let uid = Uid::current().as_raw();
-    format!("/tmp/duo-{uid}/usb_media_remap.pid")
+    runtime_dir_for_target_user()
+        .join("usb_media_remap.pid")
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub fn pause_file_path() -> String {
-    let uid = Uid::current().as_raw();
-    format!("/tmp/duo-{uid}/usb_media_remap.paused")
+    runtime_dir_for_target_user()
+        .join("usb_media_remap.paused")
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub fn toggle_pause() -> Result<(), String> {
     let path = pause_file_path();
-    let was_paused = std::path::Path::new(&path).exists();
-    if was_paused {
+    if std::path::Path::new(&path).exists() {
         fs::remove_file(&path).map_err(|e| format!("Failed to remove pause file: {e}"))?;
     } else {
         ensure_duo_dir_for_pid(&pid_path())?;
         fs::write(&path, "").map_err(|e| format!("Failed to create pause file: {e}"))?;
     }
-    let msg = if was_paused { "USB Media Remap resumed" } else { "USB Media Remap paused" };
-    let _ = std::process::Command::new("notify-send")
-        .args(["-a", "Zenbook Duo Control", "-i", "input-keyboard", msg])
-        .spawn();
     Ok(())
 }
 
 #[tauri::command]
 pub fn usb_media_remap_toggle_pause() -> Result<(), String> {
-    toggle_pause()
+    daemon_first_toggle_pause()
+}
+
+pub fn daemon_first_status() -> UsbMediaRemapStatus {
+    match client::request(DaemonRequest::UsbMediaRemapStatus) {
+        Ok(DaemonResponse::UsbMediaRemapStatus { status }) => status,
+        _ => get_status(),
+    }
+}
+
+pub fn daemon_first_start() -> Result<(), String> {
+    let result = match client::request(DaemonRequest::UsbMediaRemapStart) {
+        Ok(DaemonResponse::Ack) => Ok(()),
+        Ok(DaemonResponse::Error { message }) => Err(message),
+        Ok(_) => Err("Unexpected daemon response while starting USB remap".into()),
+        Err(_) => start_remap(),
+    };
+
+    if result.is_ok() {
+        let _ = send_desktop_notification("USB Media Remap enabled");
+    }
+
+    result
+}
+
+pub fn daemon_first_stop() -> Result<(), String> {
+    let result = match client::request(DaemonRequest::UsbMediaRemapStop) {
+        Ok(DaemonResponse::Ack) => Ok(()),
+        Ok(DaemonResponse::Error { message }) => Err(message),
+        Ok(_) => Err("Unexpected daemon response while stopping USB remap".into()),
+        Err(_) => stop_remap(),
+    };
+
+    if result.is_ok() {
+        let _ = send_desktop_notification("USB Media Remap disabled");
+    }
+
+    result
+}
+
+pub fn daemon_first_toggle_pause() -> Result<(), String> {
+    let was_paused = daemon_first_status().paused;
+    let result = match client::request(DaemonRequest::UsbMediaRemapTogglePause) {
+        Ok(DaemonResponse::Ack) => Ok(()),
+        Ok(DaemonResponse::Error { message }) => Err(message),
+        Ok(_) => Err("Unexpected daemon response while toggling USB remap pause".into()),
+        Err(_) => toggle_pause(),
+    };
+
+    if result.is_ok() {
+        let msg = if was_paused {
+            "USB Media Remap resumed"
+        } else {
+            "USB Media Remap paused"
+        };
+        let _ = send_desktop_notification(msg);
+    }
+
+    result
 }
 
 fn running_pid_files() -> Vec<String> {
@@ -233,13 +290,68 @@ fn running_pid_files() -> Vec<String> {
         }
     }
 
-    if let Some(pid) = read_pid(LEGACY_PID_PATH) {
-        if is_pid_running(pid) {
-            out.push(LEGACY_PID_PATH.to_string());
-        }
-    }
-
     out
+}
+
+fn runtime_dir_for_target_user() -> std::path::PathBuf {
+    paths::user_runtime_dir(target_uid())
+}
+
+fn target_uid() -> u32 {
+    std::env::var("SUDO_UID")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .or_else(|| {
+            std::env::var("ZENBOOK_DUO_UID")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+        })
+        .unwrap_or_else(|| Uid::current().as_raw())
+}
+
+fn send_desktop_notification(message: &str) -> Result<(), String> {
+    let user = current_username()?;
+    let uid = target_uid();
+    let runtime_dir = format!("/run/user/{uid}");
+    let bus_address = format!("unix:path={runtime_dir}/bus");
+
+    let status = Command::new("runuser")
+        .args([
+            "-u",
+            &user,
+            "--",
+            "env",
+            &format!("XDG_RUNTIME_DIR={runtime_dir}"),
+            &format!("DBUS_SESSION_BUS_ADDRESS={bus_address}"),
+            "notify-send",
+            "-a",
+            "Zenbook Duo Control",
+            "-i",
+            "input-keyboard",
+            message,
+        ])
+        .status()
+        .map_err(|e| format!("Failed to launch desktop notification: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("notify-send exited with {status}"))
+    }
+}
+
+fn helper_binary_path() -> Result<std::path::PathBuf, String> {
+    let current_exe = std::env::current_exe()
+        .map_err(|e| log_error(format!("Failed to find current exe: {e}")))?;
+    let sibling = current_exe.with_file_name(HELPER_BINARY_NAME);
+    if sibling.exists() {
+        return Ok(sibling);
+    }
+    Err(log_error(format!(
+        "Failed to find {} next to {}",
+        HELPER_BINARY_NAME,
+        current_exe.display()
+    )))
 }
 
 fn ensure_duo_dir_for_pid(pid_file: &str) -> Result<(), String> {
@@ -270,7 +382,7 @@ fn log_error<T: Into<String>>(message: T) -> String {
     let log_path = std::path::Path::new(&pid_path())
         .parent()
         .map(|p| p.join("duo.log"))
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/duo.log"));
+        .unwrap_or_else(|| std::env::temp_dir().join("zenbook-duo-usb-remap.log"));
 
     let _ = fs::create_dir_all(log_path.parent().unwrap_or_else(|| std::path::Path::new("/tmp")));
     if let Ok(mut file) = OpenOptions::new()

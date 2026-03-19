@@ -96,13 +96,21 @@ export default function Settings() {
     const opId = (remapOpIdRef.current += 1);
     setRemapDesired(nextEnabled);
     try {
+      const nextSettings = {
+        ...localSettings,
+        usbMediaRemapEnabled: nextEnabled,
+      };
+
       if (nextEnabled) {
         await usbMediaRemapStart();
-        toast.success("USB media remap enabled");
       } else {
         await usbMediaRemapStop();
-        toast.success("USB media remap disabled");
       }
+
+      setLocalSettings(nextSettings);
+      await saveSettings(nextSettings);
+      await refreshSettings(dispatch);
+      toast.success(nextEnabled ? "USB media remap enabled" : "USB media remap disabled");
     } catch (err) {
       console.error("Failed to toggle USB remap:", err);
       if (remapOpIdRef.current === opId) {

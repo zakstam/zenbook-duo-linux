@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::models::HardwareEvent;
+use crate::runtime::client;
 
 pub type EventBuffer = Arc<Mutex<VecDeque<HardwareEvent>>>;
 
@@ -19,6 +21,12 @@ pub fn push_event(buffer: &EventBuffer, event: HardwareEvent) {
 
 #[tauri::command]
 pub fn get_recent_events(count: usize, state: tauri::State<'_, EventBuffer>) -> Vec<HardwareEvent> {
+    if let Ok(DaemonResponse::Events { events }) =
+        client::request(DaemonRequest::GetRecentEvents { limit: count })
+    {
+        return events;
+    }
+
     let buf = state.lock().unwrap();
     buf.iter()
         .rev()
