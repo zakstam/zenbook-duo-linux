@@ -128,6 +128,12 @@ run_case() {
     cat "${TEMP_DIR}/test.log" >&2 || true
     exit 1
   fi
+
+  if ! grep -Eq 'sudo pacman .* (rust|cargo)( |$)' "${TEMP_DIR}/test.log"; then
+    echo "FAIL: ${script_name} should install the Rust toolchain for install-rust-runtime.sh" >&2
+    cat "${TEMP_DIR}/test.log" >&2 || true
+    exit 1
+  fi
 }
 
 run_case setup-gnome.sh

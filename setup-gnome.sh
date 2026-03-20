@@ -104,24 +104,27 @@ esac
 if command -v dnf &>/dev/null; then
     sudo dnf install -y \
         usbutils \
+        cargo \
         mutter \
         iio-sensor-proxy \
         systemd
 elif command -v pacman &>/dev/null; then
     sudo pacman -S --needed --noconfirm \
         usbutils \
+        rust \
         mutter \
         iio-sensor-proxy \
         systemd
 elif command -v apt &>/dev/null; then
     sudo apt install -y \
         usbutils \
+        cargo \
         mutter-common-bin \
         iio-sensor-proxy \
         systemd
 else
     echo "Unsupported package manager. Please install dependencies manually:"
-    echo "  usbutils, mutter/gdctl, iio-sensor-proxy, systemd"
+    echo "  usbutils, cargo/rust, mutter/gdctl, iio-sensor-proxy, systemd"
     exit 1
 fi
 

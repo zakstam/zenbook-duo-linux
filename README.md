@@ -109,6 +109,7 @@ Notes:
 - ASUS Zenbook Duo (USB vendor `0B05`, product `1B2C`)
 - Linux with GNOME on Wayland, KDE Plasma on Wayland, Hyprland, or Niri (tested with Fedora; installer supports Arch via `pacman`)
 - `systemd` for service management
+- `cargo` (or distro `rust` package) to build the Rust runtime binaries during install
 - GNOME: `gdctl` (part of `mutter`) for display configuration
 - KDE: `kscreen-doctor` (part of `kscreen`) for display configuration
 - Hyprland: `hyprctl` (part of `hyprland`) for display configuration
@@ -117,7 +118,7 @@ Notes:
 ### What `./setup-gnome.sh` / `./setup-kde.sh` / `./setup-hyprland.sh` / `./setup-niri.sh` change
 
 - Installs dependencies:
-  - Common: `usbutils`, `iio-sensor-proxy`, `systemd`
+  - Common: `usbutils`, `iio-sensor-proxy`, `systemd`, and the Rust toolchain (`cargo` or distro `rust`)
   - GNOME: `mutter`/`gdctl` (via `setup-gnome.sh`)
   - KDE: `kscreen`/`kscreen-doctor` (via `setup-kde.sh`)
   - Hyprland: `hyprland`/`hyprctl` (via `setup-hyprland.sh`)

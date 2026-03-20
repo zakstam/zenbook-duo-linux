@@ -91,24 +91,27 @@ esac
 if command -v dnf &>/dev/null; then
     sudo dnf install -y \
         usbutils \
+        cargo \
         niri \
         iio-sensor-proxy \
         systemd
 elif command -v pacman &>/dev/null; then
     sudo pacman -S --needed --noconfirm \
         usbutils \
+        rust \
         niri \
         iio-sensor-proxy \
         systemd
 elif command -v apt &>/dev/null; then
     sudo apt install -y \
         usbutils \
+        cargo \
         niri \
         iio-sensor-proxy \
         systemd
 else
     echo "Unsupported package manager. Please install dependencies manually:"
-    echo "  usbutils, niri, iio-sensor-proxy, systemd"
+    echo "  usbutils, cargo/rust, niri, iio-sensor-proxy, systemd"
     exit 1
 fi
 
