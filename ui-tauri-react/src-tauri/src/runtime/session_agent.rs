@@ -168,10 +168,17 @@ fn detect_backend() -> SessionBackend {
     let current = env::var("XDG_CURRENT_DESKTOP")
         .or_else(|_| env::var("XDG_SESSION_DESKTOP"))
         .or_else(|_| env::var("DESKTOP_SESSION"))
-        .unwrap_or_default()
-        .to_lowercase();
+        .unwrap_or_default();
 
-    if current.contains("gnome") {
+    detect_backend_from_env_value(&current)
+}
+
+fn detect_backend_from_env_value(value: &str) -> SessionBackend {
+    let current = value.to_lowercase();
+
+    if current.contains("hyprland") {
+        SessionBackend::Hyprland
+    } else if current.contains("gnome") {
         SessionBackend::Gnome
     } else if current.contains("plasma") || current.contains("kde") {
         SessionBackend::Kde
@@ -186,6 +193,7 @@ fn apply_dock_mode(attached: bool, scale: f64) -> Result<(), String> {
     match detect_backend() {
         SessionBackend::Gnome => apply_gnome_dock_mode(attached, scale),
         SessionBackend::Kde => apply_kde_dock_mode(attached),
+        SessionBackend::Hyprland => apply_hyprland_dock_mode(attached),
         SessionBackend::Niri => apply_niri_dock_mode(attached),
         SessionBackend::Unknown => Err("Unsupported session backend for dock mode".into()),
     }
@@ -240,6 +248,29 @@ fn apply_kde_dock_mode(attached: bool) -> Result<(), String> {
                 "output.eDP-1.position.0,0",
                 &format!("output.eDP-2.position.0,{h}"),
             ],
+        )
+    }
+}
+
+fn apply_hyprland_dock_mode(attached: bool) -> Result<(), String> {
+    let primary = hyprland_monitor_state("eDP-1")?;
+    let primary_scale = format_hyprland_scale(primary.scale);
+    let primary_args = hyprland_monitor_keyword_args(format!(
+        "eDP-1,preferred,0x0,{primary_scale}"
+    ));
+
+    if attached {
+        run_command("hyprctl", &primary_args)?;
+        run_command("hyprctl", &["keyword", "monitor", "eDP-2,disable"])
+    } else {
+        run_command("hyprctl", &primary_args)?;
+        let secondary_args = hyprland_monitor_keyword_args(format!(
+            "eDP-2,preferred,0x{},{primary_scale}",
+            primary.logical_height
+        ));
+        run_command(
+            "hyprctl",
+            &secondary_args,
         )
     }
 }
@@ -329,6 +360,78 @@ fn niri_output_logical_size(name: &str) -> Result<(i64, i64), String> {
         }
     }
     Err(format!("Niri output {name} not found"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct HyprlandMonitorState {
+    logical_height: i64,
+    scale: f64,
+}
+
+fn hyprland_monitor_state(name: &str) -> Result<HyprlandMonitorState, String> {
+    let output = Command::new("hyprctl")
+        .args(["monitors", "-j"])
+        .output()
+        .map_err(|e| format!("Failed to run hyprctl: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json_start = stdout
+        .find(|c| c == '[' || c == '{')
+        .ok_or_else(|| "Invalid hyprctl JSON: missing JSON payload".to_string())?;
+    let value: serde_json::Value = serde_json::from_str(&stdout[json_start..])
+        .map_err(|e| format!("Invalid hyprctl JSON: {e}"))?;
+    parse_hyprland_monitor_state(&value, name)
+}
+
+fn parse_hyprland_monitor_state(
+    value: &serde_json::Value,
+    name: &str,
+) -> Result<HyprlandMonitorState, String> {
+    let monitors = if let Some(arr) = value.as_array() {
+        arr.clone()
+    } else if let Some(obj) = value.as_object() {
+        obj.values().cloned().collect()
+    } else {
+        return Err("Unexpected Hyprland monitors shape".into());
+    };
+
+    for monitor in monitors {
+        if monitor.get("name").and_then(|v| v.as_str()) == Some(name) {
+            let height = monitor
+                .get("height")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "Missing Hyprland monitor height".to_string())?;
+            let scale = monitor.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            let logical_height = ((height as f64) / scale.max(0.1)).round() as i64;
+            return Ok(HyprlandMonitorState {
+                logical_height,
+                scale,
+            });
+        }
+    }
+
+    Err(format!("Hyprland output {name} not found"))
+}
+
+fn format_hyprland_scale(scale: f64) -> String {
+    let mut formatted = format!("{scale:.6}");
+    while formatted.contains('.') && formatted.ends_with('0') {
+        formatted.pop();
+    }
+    if formatted.ends_with('.') {
+        formatted.pop();
+    }
+    if formatted.is_empty() {
+        "1".to_string()
+    } else {
+        formatted
+    }
+}
+
+fn hyprland_monitor_keyword_args(config: String) -> Vec<String> {
+    vec!["keyword".to_string(), "monitor".to_string(), config]
 }
 
 fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<(), String> {
@@ -673,5 +776,53 @@ mod tests {
         assert!(is_hotkey_abs_code(0x28));
         assert!(is_hotkey_abs_code(AbsoluteAxisType::ABS_VOLUME.0));
         assert!(!is_hotkey_abs_code(0x27));
+    }
+
+    #[test]
+    fn detect_backend_from_env_value_cases() {
+        assert_eq!(
+            detect_backend_from_env_value("Hyprland"),
+            SessionBackend::Hyprland
+        );
+        assert_eq!(
+            detect_backend_from_env_value("xfce:hyprland"),
+            SessionBackend::Hyprland
+        );
+        assert_eq!(
+            detect_backend_from_env_value("gnome;hyprland;wayland"),
+            SessionBackend::Hyprland
+        );
+        assert_eq!(
+            detect_backend_from_env_value("unknown-desktop"),
+            SessionBackend::Unknown
+        );
+    }
+
+    #[test]
+    fn parses_hyprland_monitor_state_uses_logical_height_and_scale() {
+        let value = serde_json::json!([
+            {
+                "name": "eDP-1",
+                "height": 1800,
+                "scale": 1.5
+            }
+        ]);
+
+        let state = parse_hyprland_monitor_state(&value, "eDP-1").expect("state should parse");
+        assert_eq!(state.logical_height, 1200);
+        assert!((state.scale - 1.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn format_hyprland_scale_trims_trailing_zeroes() {
+        assert_eq!(format_hyprland_scale(1.0), "1");
+        assert_eq!(format_hyprland_scale(1.5), "1.5");
+        assert_eq!(format_hyprland_scale(1.25), "1.25");
+    }
+
+    #[test]
+    fn hyprland_monitor_keyword_args_use_separate_cli_tokens() {
+        let args = hyprland_monitor_keyword_args("eDP-1,preferred,0x0,1.5".to_string());
+        assert_eq!(args, vec!["keyword", "monitor", "eDP-1,preferred,0x0,1.5"]);
     }
 }

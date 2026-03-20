@@ -85,8 +85,26 @@ pub enum DaemonEvent {
 pub enum SessionBackend {
     Gnome,
     Kde,
+    Hyprland,
     Niri,
     Unknown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionBackend;
+
+    #[test]
+    fn session_backend_serializes_hyprland_in_snake_case() {
+        let json = serde_json::to_string(&SessionBackend::Hyprland).unwrap();
+        assert_eq!(json, "\"hyprland\"");
+    }
+
+    #[test]
+    fn session_backend_deserializes_hyprland_from_snake_case() {
+        let backend: SessionBackend = serde_json::from_str("\"hyprland\"").unwrap();
+        assert_eq!(backend, SessionBackend::Hyprland);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
