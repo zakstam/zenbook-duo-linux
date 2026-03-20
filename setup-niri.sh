@@ -175,10 +175,9 @@ CONFIG_DIR="${TARGET_HOME}/.config/zenbook-duo"
 SETTINGS_FILE="${CONFIG_DIR}/settings.json"
 
 if [ -n "${PYTHON3}" ] && [ -n "${TARGET_HOME}" ]; then
-    mkdir -p "${CONFIG_DIR}" 2>/dev/null || true
-
     # Write settings as the target user (avoid sudo dropping env vars).
     if [ "${TARGET_USER}" = "${USER}" ] && [ "${EUID}" != "0" ]; then
+        mkdir -p "${CONFIG_DIR}" 2>/dev/null || true
         "${PYTHON3}" - "${SETTINGS_FILE}" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}" <<'PY'
 import json
 import sys
@@ -212,6 +211,7 @@ data["setupCompleted"] = True
 settings_file.write_text(json.dumps(data, indent=2) + "\n")
 PY
     else
+        sudo -u "${TARGET_USER}" mkdir -p "${CONFIG_DIR}"
         sudo -u "${TARGET_USER}" "${PYTHON3}" - "${SETTINGS_FILE}" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}" <<'PY'
 import json
 import sys
