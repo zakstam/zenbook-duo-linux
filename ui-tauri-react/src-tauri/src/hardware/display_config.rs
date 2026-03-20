@@ -9,6 +9,7 @@ pub fn get_display_layout() -> Result<DisplayLayout, String> {
     match detect_backend() {
         DisplayBackend::Gnome => get_gnome_display_layout(),
         DisplayBackend::Kde => get_kde_display_layout(),
+        DisplayBackend::Hyprland => get_hyprland_display_layout(),
         DisplayBackend::Niri => get_niri_display_layout(),
         DisplayBackend::Unknown => Err("Unsupported session backend for display layout".into()),
     }
@@ -283,6 +284,7 @@ pub fn apply_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     match detect_backend() {
         DisplayBackend::Gnome => apply_gnome_display_layout(layout),
         DisplayBackend::Kde => apply_kde_display_layout(layout),
+        DisplayBackend::Hyprland => apply_hyprland_display_layout(layout),
         DisplayBackend::Niri => apply_niri_display_layout(layout),
         DisplayBackend::Unknown => Err("Unsupported session backend for display layout".into()),
     }
@@ -600,10 +602,233 @@ fn apply_niri_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     Ok(())
 }
 
+fn get_hyprland_display_layout() -> Result<DisplayLayout, String> {
+    let output = Command::new("hyprctl")
+        .args(["monitors", "-j"])
+        .output()
+        .map_err(|e| format!("Failed to run hyprctl: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_hyprland_monitors(&stdout)
+}
+
+fn parse_hyprland_monitors(raw: &str) -> Result<DisplayLayout, String> {
+    let value = parse_hyprland_json(raw)?;
+    let outputs = hyprland_outputs_from_value(&value)?;
+    let mut displays = Vec::new();
+
+    for output in outputs {
+        if output.get("disabled").and_then(|v| v.as_bool()) == Some(true) {
+            continue;
+        }
+
+        let connector = output
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing Hyprland output name".to_string())?;
+        let width = output.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let height = output.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let refresh_rate = output
+            .get("refreshRate")
+            .or_else(|| output.get("refresh_rate"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(60.0);
+        let scale = output.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+        let x = output.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let y = output.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        displays.push(DisplayInfo {
+            connector: connector.to_string(),
+            width,
+            height,
+            refresh_rate,
+            scale,
+            x,
+            y,
+            transform: hyprland_transform_degrees(
+                output.get("transform").and_then(|v| v.as_i64()).unwrap_or(0),
+            ),
+            primary: false,
+        });
+    }
+
+    if let Some(primary_idx) = displays
+        .iter()
+        .position(|display| display.connector == "eDP-1")
+        .or_else(|| (!displays.is_empty()).then_some(0))
+    {
+        displays[primary_idx].primary = true;
+    }
+
+    Ok(DisplayLayout { displays })
+}
+
+fn parse_hyprland_json(raw: &str) -> Result<serde_json::Value, String> {
+    let json_start = raw
+        .find(|c| c == '[' || c == '{')
+        .ok_or_else(|| "Invalid hyprctl JSON: missing JSON payload".to_string())?;
+    serde_json::from_str(&raw[json_start..]).map_err(|e| format!("Invalid hyprctl JSON: {e}"))
+}
+
+fn hyprland_outputs_from_value(value: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+    if let Some(arr) = value.as_array() {
+        Ok(arr.clone())
+    } else if let Some(obj) = value.as_object() {
+        Ok(obj.values().cloned().collect())
+    } else {
+        Err("Unexpected Hyprland monitors shape".into())
+    }
+}
+
+fn hyprland_monitor_counts_from_json(raw: &str) -> Result<(usize, usize), String> {
+    let value = parse_hyprland_json(raw)?;
+    let outputs = hyprland_outputs_from_value(&value)?;
+    let disabled = outputs
+        .iter()
+        .filter(|output| output.get("disabled").and_then(|v| v.as_bool()) == Some(true))
+        .count();
+    Ok((outputs.len().saturating_sub(disabled), disabled))
+}
+
+fn hyprland_enabled_monitor_count_from_json(raw: &str) -> Result<usize, String> {
+    Ok(hyprland_monitor_counts_from_json(raw)?.0)
+}
+
+fn hyprland_monitor_keyword_args(display: &DisplayInfo) -> Vec<String> {
+    vec!["keyword".into(), "monitor".into(), hyprland_monitor_rule(display)]
+}
+
+fn hyprland_monitor_rule(display: &DisplayInfo) -> String {
+    format!(
+        "{},{},{},{},transform,{}",
+        display.connector,
+        hyprland_mode_string(display),
+        format!("{}x{}", display.x, display.y),
+        hyprland_scale_string(display.scale),
+        hyprland_transform_value_from_degrees(display.transform)
+    )
+}
+
+fn hyprland_mode_string(display: &DisplayInfo) -> String {
+    if display.width == 0 || display.height == 0 {
+        return "preferred".to_string();
+    }
+
+    let mut refresh = format!("{:.3}", display.refresh_rate.max(1.0));
+    while refresh.contains('.') && refresh.ends_with('0') {
+        refresh.pop();
+    }
+    if refresh.ends_with('.') {
+        refresh.pop();
+    }
+
+    format!("{}x{}@{}", display.width, display.height, refresh)
+}
+
+fn hyprland_scale_string(scale: f64) -> String {
+    let mut value = format!("{:.6}", scale.max(0.1));
+    while value.contains('.') && value.ends_with('0') {
+        value.pop();
+    }
+    if value.ends_with('.') {
+        value.pop();
+    }
+    value
+}
+
+fn hyprland_transform_degrees(raw: i64) -> u32 {
+    match raw {
+        1 | 5 => 90,
+        2 | 6 => 180,
+        3 | 7 => 270,
+        _ => 0,
+    }
+}
+
+fn hyprland_transform_value(orientation: &Orientation) -> i64 {
+    match orientation {
+        Orientation::Normal => 0,
+        Orientation::Left => 1,
+        Orientation::Inverted => 2,
+        Orientation::Right => 3,
+    }
+}
+
+fn hyprland_transform_value_from_degrees(transform: u32) -> i64 {
+    match transform {
+        90 => 1,
+        180 => 2,
+        270 => 3,
+        _ => 0,
+    }
+}
+
+fn hyprland_secondary_position(primary_logical: (i64, i64), orientation: &Orientation) -> (i64, i64) {
+    let (width, height) = primary_logical;
+    match orientation {
+        Orientation::Normal => (0, height),
+        Orientation::Left => (-width, 0),
+        Orientation::Right => (width, 0),
+        Orientation::Inverted => (0, -height),
+    }
+}
+
+fn hyprland_primary_logical_size(display: &DisplayInfo) -> (i64, i64) {
+    let width = (display.width as f64 / display.scale.max(0.1)).round() as i64;
+    let height = (display.height as f64 / display.scale.max(0.1)).round() as i64;
+    match display.transform {
+        90 | 270 => (height, width),
+        _ => (width, height),
+    }
+}
+
+fn hyprland_monitor_state(name: &str) -> Result<DisplayInfo, String> {
+    let layout = get_hyprland_display_layout()?;
+    layout
+        .displays
+        .into_iter()
+        .find(|display| display.connector == name)
+        .ok_or_else(|| format!("Hyprland output {name} not found"))
+}
+
+fn hyprland_enabled_output_count() -> Result<usize, String> {
+    let output = Command::new("hyprctl")
+        .args(["monitors", "-j"])
+        .output()
+        .map_err(|e| format!("Failed to run hyprctl: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    hyprland_enabled_monitor_count_from_json(&stdout)
+}
+
+fn apply_hyprland_display_layout(layout: &DisplayLayout) -> Result<(), String> {
+    if layout.displays.is_empty() {
+        return Err("No displays in layout".into());
+    }
+
+    let current_layout = get_hyprland_display_layout()?;
+
+    for display in hyprland_apply_order(layout) {
+        let args = hyprland_monitor_keyword_args(display);
+        run_command("hyprctl", &args)?;
+    }
+
+    for connector in hyprland_connectors_to_disable(&current_layout, layout) {
+        run_command("hyprctl", &["keyword", "monitor", &format!("{connector},disable")])?;
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DisplayBackend {
     Gnome,
     Kde,
+    Hyprland,
     Niri,
     Unknown,
 }
@@ -612,10 +837,17 @@ fn detect_backend() -> DisplayBackend {
     let current = env::var("XDG_CURRENT_DESKTOP")
         .or_else(|_| env::var("XDG_SESSION_DESKTOP"))
         .or_else(|_| env::var("DESKTOP_SESSION"))
-        .unwrap_or_default()
-        .to_lowercase();
+        .unwrap_or_default();
 
-    if current.contains("gnome") {
+    detect_backend_from_session(&current)
+}
+
+fn detect_backend_from_session(value: &str) -> DisplayBackend {
+    let current = value.to_lowercase();
+
+    if current.contains("hyprland") || current == "hypr" {
+        DisplayBackend::Hyprland
+    } else if current.contains("gnome") {
         DisplayBackend::Gnome
     } else if current.contains("plasma") || current.contains("kde") {
         DisplayBackend::Kde
@@ -924,11 +1156,72 @@ fn set_niri_orientation(orientation: &Orientation) -> Result<(), String> {
     )
 }
 
+fn set_hyprland_orientation(orientation: &Orientation) -> Result<(), String> {
+    let mut primary = hyprland_monitor_state("eDP-1")?;
+    primary.transform = hyprland_transform_degrees(hyprland_transform_value(orientation));
+    primary.x = 0;
+    primary.y = 0;
+    let primary_args = hyprland_monitor_keyword_args(&primary);
+    run_command("hyprctl", &primary_args)?;
+
+    thread::sleep(Duration::from_millis(300));
+
+    let refreshed_primary = hyprland_monitor_state("eDP-1")?;
+    let current_layout = get_hyprland_display_layout()?;
+    if !hyprland_should_update_secondary(hyprland_enabled_output_count()?, &current_layout) {
+        return Ok(());
+    }
+
+    let primary_logical = hyprland_primary_logical_size(&refreshed_primary);
+    let (pos_x, pos_y) = hyprland_secondary_position(primary_logical, orientation);
+
+    let Ok(mut secondary) = hyprland_monitor_state("eDP-2") else {
+        return Ok(());
+    };
+    secondary.transform = primary.transform;
+    secondary.x = pos_x as i32;
+    secondary.y = pos_y as i32;
+    let secondary_args = hyprland_monitor_keyword_args(&secondary);
+    run_command("hyprctl", &secondary_args)
+}
+
+fn hyprland_connectors_to_disable(current: &DisplayLayout, target: &DisplayLayout) -> Vec<String> {
+    let target_connectors: Vec<&str> = target
+        .displays
+        .iter()
+        .map(|display| display.connector.as_str())
+        .collect();
+    current
+        .displays
+        .iter()
+        .filter(|display| !target_connectors.contains(&display.connector.as_str()))
+        .map(|display| display.connector.clone())
+        .collect()
+}
+
+fn hyprland_layout_has_connector(layout: &DisplayLayout, connector: &str) -> bool {
+    layout
+        .displays
+        .iter()
+        .any(|display| display.connector == connector)
+}
+
+fn hyprland_apply_order(layout: &DisplayLayout) -> Vec<&DisplayInfo> {
+    let mut displays: Vec<&DisplayInfo> = layout.displays.iter().collect();
+    displays.sort_by_key(|display| !display.primary);
+    displays
+}
+
+fn hyprland_should_update_secondary(enabled_count: usize, layout: &DisplayLayout) -> bool {
+    enabled_count > 1 && hyprland_layout_has_connector(layout, "eDP-2")
+}
+
 /// Set screen orientation using compositor-native commands.
 pub fn set_orientation(orientation: &Orientation) -> Result<(), String> {
     match detect_backend() {
         DisplayBackend::Gnome => set_gnome_orientation(orientation),
         DisplayBackend::Kde => set_kde_orientation(orientation),
+        DisplayBackend::Hyprland => set_hyprland_orientation(orientation),
         DisplayBackend::Niri => set_niri_orientation(orientation),
         DisplayBackend::Unknown => {
             Err("Unsupported session backend for orientation control".into())
@@ -939,15 +1232,57 @@ pub fn set_orientation(orientation: &Orientation) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    const HYPRLAND_MONITORS_JSON: &str = r#"
+    [
+      {
+        "name": "eDP-1",
+        "width": 2880,
+        "height": 1800,
+        "refreshRate": 120.0,
+        "x": 0,
+        "y": 0,
+        "scale": 1.5,
+        "transform": 0,
+        "focused": true,
+        "disabled": false
+      },
+      {
+        "name": "DP-1",
+        "width": 1920,
+        "height": 1080,
+        "refreshRate": 60.0,
+        "x": 1920,
+        "y": 0,
+        "scale": 1.0,
+        "transform": 1,
+        "focused": false,
+        "disabled": false
+      },
+      {
+        "name": "HDMI-A-1",
+        "width": 2560,
+        "height": 1440,
+        "refreshRate": 59.95,
+        "x": 0,
+        "y": 0,
+        "scale": 1.0,
+        "transform": 0,
+        "focused": false,
+        "disabled": true
+      }
+    ]
+    "#;
 
     #[test]
     fn parses_niri_transform_from_logical_object() {
-        let value = serde_json::json!({
+        let value = json!({
             "logical": { "transform": "Normal" }
         });
         assert_eq!(parse_niri_transform(&value), 0);
 
-        let value = serde_json::json!({
+        let value = json!({
             "logical": { "transform": "90" }
         });
         assert_eq!(parse_niri_transform(&value), 90);
@@ -955,7 +1290,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_top_level_niri_transform() {
-        let value = serde_json::json!({
+        let value = json!({
             "transform": "270"
         });
         assert_eq!(parse_niri_transform(&value), 270);
@@ -963,7 +1298,7 @@ mod tests {
 
     #[test]
     fn resolves_niri_current_mode_from_index() {
-        let value = serde_json::json!({
+        let value = json!({
             "current_mode": 1,
             "modes": [
                 { "width": 1920, "height": 1200, "refresh_rate": 60000 },
@@ -974,5 +1309,378 @@ mod tests {
         let mode = resolve_niri_current_mode(&value).expect("mode should resolve");
         assert_eq!(mode.get("width").and_then(|v| v.as_u64()), Some(2880));
         assert_eq!(mode.get("height").and_then(|v| v.as_u64()), Some(1800));
+    }
+
+    #[test]
+    fn detects_hyprland_backend_from_session_names() {
+        assert_eq!(detect_backend_from_session("Hyprland"), DisplayBackend::Hyprland);
+        assert_eq!(detect_backend_from_session("hypr"), DisplayBackend::Hyprland);
+        assert_eq!(detect_backend_from_session("GNOME"), DisplayBackend::Gnome);
+    }
+
+    #[test]
+    fn parses_hyprland_monitor_json_into_layout() {
+        let layout = parse_hyprland_monitors(HYPRLAND_MONITORS_JSON).expect("layout should parse");
+
+        assert_eq!(layout.displays.len(), 2);
+
+        let primary = &layout.displays[0];
+        assert_eq!(primary.connector, "eDP-1");
+        assert_eq!(primary.width, 2880);
+        assert_eq!(primary.height, 1800);
+        assert_eq!(primary.refresh_rate, 120.0);
+        assert_eq!(primary.scale, 1.5);
+        assert_eq!(primary.x, 0);
+        assert_eq!(primary.y, 0);
+        assert_eq!(primary.transform, 0);
+        assert!(primary.primary);
+
+        let external = &layout.displays[1];
+        assert_eq!(external.connector, "DP-1");
+        assert_eq!(external.transform, 90);
+        assert_eq!(external.x, 1920);
+        assert_eq!(external.y, 0);
+        assert!(!external.primary);
+    }
+
+    #[test]
+    fn parses_hyprland_monitor_json_with_prefixed_noise() {
+        let raw = format!("warning: noisy prefix\n{HYPRLAND_MONITORS_JSON}");
+        let layout = parse_hyprland_monitors(&raw).expect("layout should parse");
+        assert_eq!(layout.displays.len(), 2);
+    }
+
+    #[test]
+    fn hyprland_primary_selection_prefers_edp1_over_focus() {
+        let layout = parse_hyprland_monitors(
+            r#"
+            [
+              {
+                "name": "eDP-1",
+                "width": 2880,
+                "height": 1800,
+                "refreshRate": 120.0,
+                "x": 0,
+                "y": 0,
+                "scale": 1.5,
+                "transform": 0,
+                "focused": false,
+                "disabled": false
+              },
+              {
+                "name": "DP-1",
+                "width": 1920,
+                "height": 1080,
+                "refreshRate": 60.0,
+                "x": 1920,
+                "y": 0,
+                "scale": 1.0,
+                "transform": 0,
+                "focused": true,
+                "disabled": false
+              }
+            ]
+            "#,
+        )
+        .expect("layout should parse");
+
+        assert!(layout.displays.iter().any(|display| display.connector == "eDP-1" && display.primary));
+        assert!(layout.displays.iter().any(|display| display.connector == "DP-1" && !display.primary));
+    }
+
+    #[test]
+    fn hyprland_primary_selection_falls_back_to_first_display_without_edp1() {
+        let layout = parse_hyprland_monitors(
+            r#"
+            [
+              {
+                "name": "DP-1",
+                "width": 1920,
+                "height": 1080,
+                "refreshRate": 60.0,
+                "x": 0,
+                "y": 0,
+                "scale": 1.0,
+                "transform": 0,
+                "focused": false,
+                "disabled": false
+              },
+              {
+                "name": "HDMI-A-1",
+                "width": 2560,
+                "height": 1440,
+                "refreshRate": 59.95,
+                "x": 1920,
+                "y": 0,
+                "scale": 1.0,
+                "transform": 0,
+                "focused": true,
+                "disabled": false
+              }
+            ]
+            "#,
+        )
+        .expect("layout should parse");
+
+        assert!(layout.displays[0].primary);
+        assert_eq!(layout.displays[0].connector, "DP-1");
+        assert!(!layout.displays[1].primary);
+    }
+
+    #[test]
+    fn counts_enabled_and_disabled_hyprland_monitors() {
+        let (enabled, disabled) =
+            hyprland_monitor_counts_from_json(HYPRLAND_MONITORS_JSON).expect("counts should parse");
+
+        assert_eq!(enabled, 2);
+        assert_eq!(disabled, 1);
+        assert_eq!(
+            hyprland_enabled_monitor_count_from_json(HYPRLAND_MONITORS_JSON).unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn maps_hyprland_transform_helpers() {
+        assert_eq!(hyprland_transform_degrees(0), 0);
+        assert_eq!(hyprland_transform_degrees(1), 90);
+        assert_eq!(hyprland_transform_degrees(2), 180);
+        assert_eq!(hyprland_transform_degrees(3), 270);
+
+        assert_eq!(hyprland_transform_value(&Orientation::Normal), 0);
+        assert_eq!(hyprland_transform_value(&Orientation::Left), 1);
+        assert_eq!(hyprland_transform_value(&Orientation::Inverted), 2);
+        assert_eq!(hyprland_transform_value(&Orientation::Right), 3);
+    }
+
+    #[test]
+    fn computes_hyprland_secondary_position_from_logical_size() {
+        assert_eq!(
+            hyprland_secondary_position((1920, 1200), &Orientation::Normal),
+            (0, 1200)
+        );
+        assert_eq!(
+            hyprland_secondary_position((1200, 1920), &Orientation::Left),
+            (-1200, 0)
+        );
+        assert_eq!(
+            hyprland_secondary_position((1200, 1920), &Orientation::Right),
+            (1200, 0)
+        );
+        assert_eq!(
+            hyprland_secondary_position((1920, 1200), &Orientation::Inverted),
+            (0, -1200)
+        );
+    }
+
+    #[test]
+    fn hyprland_primary_logical_size_accounts_for_transform() {
+        let display = DisplayInfo {
+            connector: "eDP-1".into(),
+            width: 2880,
+            height: 1800,
+            refresh_rate: 120.0,
+            scale: 1.5,
+            x: 0,
+            y: 0,
+            transform: 90,
+            primary: true,
+        };
+
+        assert_eq!(hyprland_primary_logical_size(&display), (1200, 1920));
+    }
+
+    #[test]
+    fn builds_hyprland_monitor_keyword_arguments() {
+        let display = DisplayInfo {
+            connector: "eDP-1".into(),
+            width: 2880,
+            height: 1800,
+            refresh_rate: 120.0,
+            scale: 1.5,
+            x: 0,
+            y: 0,
+            transform: 90,
+            primary: true,
+        };
+
+        let args = hyprland_monitor_keyword_args(&display);
+        assert_eq!(args[0], "keyword");
+        assert_eq!(args[1], "monitor");
+        assert_eq!(args[2], "eDP-1,2880x1800@120,0x0,1.5,transform,1");
+    }
+
+    #[test]
+    fn hyprland_connectors_to_disable_match_current_minus_target() {
+        let current = DisplayLayout {
+            displays: vec![
+                DisplayInfo {
+                    connector: "eDP-1".into(),
+                    width: 2880,
+                    height: 1800,
+                    refresh_rate: 120.0,
+                    scale: 1.5,
+                    x: 0,
+                    y: 0,
+                    transform: 0,
+                    primary: true,
+                },
+                DisplayInfo {
+                    connector: "DP-1".into(),
+                    width: 1920,
+                    height: 1080,
+                    refresh_rate: 60.0,
+                    scale: 1.0,
+                    x: 1920,
+                    y: 0,
+                    transform: 0,
+                    primary: false,
+                },
+            ],
+        };
+        let target = DisplayLayout {
+            displays: vec![DisplayInfo {
+                connector: "eDP-1".into(),
+                width: 2880,
+                height: 1800,
+                refresh_rate: 120.0,
+                scale: 1.5,
+                x: 0,
+                y: 0,
+                transform: 0,
+                primary: true,
+            }],
+        };
+
+        assert_eq!(hyprland_connectors_to_disable(&current, &target), vec!["DP-1"]);
+    }
+
+    #[test]
+    fn hyprland_layout_has_connector_detects_missing_internal_secondary() {
+        let layout = DisplayLayout {
+            displays: vec![
+                DisplayInfo {
+                    connector: "eDP-1".into(),
+                    width: 2880,
+                    height: 1800,
+                    refresh_rate: 120.0,
+                    scale: 1.5,
+                    x: 0,
+                    y: 0,
+                    transform: 0,
+                    primary: true,
+                },
+                DisplayInfo {
+                    connector: "DP-1".into(),
+                    width: 1920,
+                    height: 1080,
+                    refresh_rate: 60.0,
+                    scale: 1.0,
+                    x: 1920,
+                    y: 0,
+                    transform: 0,
+                    primary: false,
+                },
+            ],
+        };
+
+        assert!(hyprland_layout_has_connector(&layout, "eDP-1"));
+        assert!(!hyprland_layout_has_connector(&layout, "eDP-2"));
+    }
+
+    #[test]
+    fn hyprland_apply_order_puts_primary_display_first() {
+        let layout = DisplayLayout {
+            displays: vec![
+                DisplayInfo {
+                    connector: "DP-1".into(),
+                    width: 1920,
+                    height: 1080,
+                    refresh_rate: 60.0,
+                    scale: 1.0,
+                    x: 1920,
+                    y: 0,
+                    transform: 0,
+                    primary: false,
+                },
+                DisplayInfo {
+                    connector: "eDP-1".into(),
+                    width: 2880,
+                    height: 1800,
+                    refresh_rate: 120.0,
+                    scale: 1.5,
+                    x: 0,
+                    y: 0,
+                    transform: 0,
+                    primary: true,
+                },
+            ],
+        };
+
+        let ordered = hyprland_apply_order(&layout);
+        assert_eq!(ordered[0].connector, "eDP-1");
+        assert_eq!(ordered[1].connector, "DP-1");
+    }
+
+    #[test]
+    fn hyprland_should_update_secondary_requires_edp2_and_multiple_outputs() {
+        let external_only = DisplayLayout {
+            displays: vec![
+                DisplayInfo {
+                    connector: "eDP-1".into(),
+                    width: 2880,
+                    height: 1800,
+                    refresh_rate: 120.0,
+                    scale: 1.5,
+                    x: 0,
+                    y: 0,
+                    transform: 0,
+                    primary: true,
+                },
+                DisplayInfo {
+                    connector: "DP-1".into(),
+                    width: 1920,
+                    height: 1080,
+                    refresh_rate: 60.0,
+                    scale: 1.0,
+                    x: 1920,
+                    y: 0,
+                    transform: 0,
+                    primary: false,
+                },
+            ],
+        };
+
+        assert!(!hyprland_should_update_secondary(2, &external_only));
+
+        let dual_internal = DisplayLayout {
+            displays: vec![
+                DisplayInfo {
+                    connector: "eDP-1".into(),
+                    width: 2880,
+                    height: 1800,
+                    refresh_rate: 120.0,
+                    scale: 1.5,
+                    x: 0,
+                    y: 0,
+                    transform: 0,
+                    primary: true,
+                },
+                DisplayInfo {
+                    connector: "eDP-2".into(),
+                    width: 2880,
+                    height: 1800,
+                    refresh_rate: 120.0,
+                    scale: 1.5,
+                    x: 0,
+                    y: 1200,
+                    transform: 0,
+                    primary: false,
+                },
+            ],
+        };
+
+        assert!(hyprland_should_update_secondary(2, &dual_internal));
+        assert!(!hyprland_should_update_secondary(1, &dual_internal));
     }
 }
