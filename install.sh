@@ -22,8 +22,8 @@ Examples:
   ./install.sh --no-usb-media-remap
   sudo -E ./install.sh
 
-This script auto-detects GNOME, KDE Plasma, or Niri, runs the matching setup
-script, then installs the optional Zenbook Duo Control UI.
+This script auto-detects GNOME, KDE Plasma, Hyprland, or Niri, runs the
+matching setup script, then installs the optional Zenbook Duo Control UI.
 EOF
 }
 
@@ -86,6 +86,9 @@ pick_desktop() {
     if contains_token "${value}" "kde" || contains_token "${value}" "plasma"; then
       detected+=("kde")
     fi
+    if [[ "${value}" == *hyprland* ]]; then
+      detected+=("hyprland")
+    fi
     if contains_token "${value}" "niri"; then
       detected+=("niri")
     fi
@@ -121,48 +124,73 @@ pick_desktop() {
   echo "Run one of these manually instead:" >&2
   echo "  ./setup-gnome.sh" >&2
   echo "  ./setup-kde.sh" >&2
+  echo "  ./setup-hyprland.sh" >&2
   echo "  ./setup-niri.sh" >&2
   return 1
 }
 
-if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-  usage
-  exit 0
+pick_setup_script() {
+  local repo_dir="${1:-}"
+  local desktop="${2:-}"
+  local setup_script=""
+
+  case "${desktop}" in
+    gnome)
+      setup_script="${repo_dir}/setup-gnome.sh"
+      ;;
+    kde)
+      setup_script="${repo_dir}/setup-kde.sh"
+      ;;
+    hyprland)
+      setup_script="${repo_dir}/setup-hyprland.sh"
+      ;;
+    niri)
+      setup_script="${repo_dir}/setup-niri.sh"
+      ;;
+    *)
+      echo "ERROR: Unsupported desktop target: ${desktop}" >&2
+      return 1
+      ;;
+  esac
+
+  if [ ! -f "${setup_script}" ]; then
+    echo "ERROR: Missing setup script for ${desktop}: ${setup_script}" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${setup_script}"
+}
+
+main() {
+  if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    usage
+    exit 0
+  fi
+
+  desktop="$(pick_desktop)"
+  repo_dir="$(ensure_repo_checkout)"
+  setup_script="$(pick_setup_script "${repo_dir}" "${desktop}")"
+
+  echo "Detected desktop: ${desktop}"
+  echo "Running $(basename "${setup_script}")..."
+  if [ -r /dev/tty ]; then
+    "${setup_script}" "$@" </dev/tty
+  else
+    "${setup_script}" "$@"
+  fi
+
+  echo "Running install-ui.sh..."
+  if [ -r /dev/tty ]; then
+    "${repo_dir}/install-ui.sh" </dev/tty
+  else
+    "${repo_dir}/install-ui.sh"
+  fi
+
+  echo
+  echo "If this is a fresh install, you may need to log out and back in."
+  echo "If anything looks stale after updating, run: systemctl --user restart zenbook-duo-session-agent.service"
+}
+
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+  main "$@"
 fi
-
-desktop="$(pick_desktop)"
-repo_dir="$(ensure_repo_checkout)"
-case "${desktop}" in
-  gnome)
-    setup_script="${repo_dir}/setup-gnome.sh"
-    ;;
-  kde)
-    setup_script="${repo_dir}/setup-kde.sh"
-    ;;
-  niri)
-    setup_script="${repo_dir}/setup-niri.sh"
-    ;;
-  *)
-    echo "ERROR: Unsupported desktop target: ${desktop}" >&2
-    exit 1
-    ;;
-esac
-
-echo "Detected desktop: ${desktop}"
-echo "Running $(basename "${setup_script}")..."
-if [ -r /dev/tty ]; then
-  "${setup_script}" "$@" </dev/tty
-else
-  "${setup_script}" "$@"
-fi
-
-echo "Running install-ui.sh..."
-if [ -r /dev/tty ]; then
-  "${repo_dir}/install-ui.sh" </dev/tty
-else
-  "${repo_dir}/install-ui.sh"
-fi
-
-echo
-echo "If this is a fresh install, you may need to log out and back in."
-echo "If anything looks stale after updating, run: systemctl --user restart zenbook-duo-session-agent.service"

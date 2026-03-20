@@ -7,7 +7,7 @@ This project adds better Linux support for the Zenbook Duo by running a small ba
 ### What you need
 
 - An ASUS Zenbook Duo
-- GNOME on Wayland, KDE Plasma on Wayland, or Niri (tested on Fedora; Ubuntu GNOME should also work)
+- GNOME on Wayland, KDE Plasma on Wayland, Hyprland, or Niri (tested on Fedora; Ubuntu GNOME should also work)
 - A Terminal and your sudo password (the installer needs to change system settings)
 
 ### Install (recommended)
@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/inst
 ```
 
 Notes:
-- `install.sh` auto-detects GNOME, KDE Plasma, or Niri and then runs the matching setup script plus the UI installer.
+- `install.sh` auto-detects GNOME, KDE Plasma, Hyprland, or Niri and then runs the matching setup script plus the UI installer.
 - If you prefer to run it with sudo, use `sudo -E ./install.sh` (so per-user setup targets your user session).
 - If you re-run the installer, restart the session agent: `systemctl --user restart zenbook-duo-session-agent.service`
 
@@ -39,6 +39,8 @@ Manual fallback:
 ./setup-gnome.sh
 # or
 ./setup-kde.sh
+# or
+./setup-hyprland.sh
 # or
 ./setup-niri.sh
 ```
@@ -104,17 +106,20 @@ Notes:
 ### Requirements
 
 - ASUS Zenbook Duo (USB vendor `0B05`, product `1B2C`)
-- Linux with GNOME on Wayland or KDE Plasma on Wayland (tested with Fedora)
+- Linux with GNOME on Wayland, KDE Plasma on Wayland, Hyprland, or Niri (tested with Fedora)
 - `systemd` for service management
 - GNOME: `gdctl` (part of `mutter`) for display configuration
 - KDE: `kscreen-doctor` (part of `kscreen`) for display configuration
+- Hyprland: `hyprctl` (part of `hyprland`) for display configuration
+- Niri: `niri` for display configuration
 
-### What `./setup-gnome.sh` / `./setup-kde.sh` / `./setup-niri.sh` change
+### What `./setup-gnome.sh` / `./setup-kde.sh` / `./setup-hyprland.sh` / `./setup-niri.sh` change
 
 - Installs dependencies:
   - Common: `usbutils`, `iio-sensor-proxy`, `systemd`
   - GNOME: `mutter`/`gdctl` (via `setup-gnome.sh`)
   - KDE: `kscreen`/`kscreen-doctor` (via `setup-kde.sh`)
+  - Hyprland: `hyprland`/`hyprctl` (via `setup-hyprland.sh`)
   - Niri: `niri` (via `setup-niri.sh`)
 - Adds your user to the `input` group (logout/login required)
 - Installs a udev rule for the Zenbook Duo keyboard
@@ -124,16 +129,22 @@ Notes:
   - `zenbook-duo-session-agent.service` (user session)
 - Installs Rust runtime binaries to `/usr/local/libexec/zenbook-duo`
 - Adds sudoers rules for brightness writes used by the session agent
+- `setup-hyprland.sh` can also install an optional `~/.config/hypr/zenbook-duo.conf` snippet that imports the session environment and starts the session agent without storing display layout policy in Hyprland config
 
 ### Troubleshooting
 
 - Nothing happens when docking/undocking:
   - Check the services are running: `systemctl status zenbook-duo-rust-daemon.service` and `systemctl --user status zenbook-duo-session-agent.service`
   - Watch daemon logs: `journalctl -u zenbook-duo-rust-daemon.service -f`
+  - On Hyprland, if the user service is missing session environment variables, re-run `./setup-hyprland.sh` and enable the optional snippet or add `source = ~/.config/hypr/zenbook-duo.conf` to `~/.config/hypr/hyprland.conf`
 - `Failed to read events: No such device (os error 19)` when reattaching the keyboard:
   - This comes from the optional USB media remap helper when the event node disappears during hotplug.
   - Make sure you are on the latest version, then restart the session agent once: `systemctl --user restart zenbook-duo-session-agent.service`
   - You do not need a separate `/etc/udev/rules.d/*uinput*` rule for this project.
+- `hyprctl` command errors or no Hyprland display changes:
+  - Confirm `hyprctl monitors -j` works in your session
+  - Make sure `zenbook-duo-session-agent.service` is running under your user session
+  - If you use the optional snippet, confirm `source = ~/.config/hypr/zenbook-duo.conf` exists exactly once in `~/.config/hypr/hyprland.conf`
 - `KBLIGHT - Device lost, re-scanning` in a loop:
   - You likely need to log out and back in so your session gets the `input` group membership
 
@@ -154,7 +165,7 @@ sudo udevadm trigger
 | Fedora / RHEL-based | `dnf` |
 | Debian / Ubuntu-based | `apt` |
 
-Other distros: install dependencies manually and run `./setup-gnome.sh`, `./setup-kde.sh`, or `./setup-niri.sh` (it exits if it cannot detect your package manager).
+Other distros: install dependencies manually and run `./setup-gnome.sh`, `./setup-kde.sh`, `./setup-hyprland.sh`, or `./setup-niri.sh` (it exits if it cannot detect your package manager).
 
 ### Control Panel UI (Tauri + React)
 
