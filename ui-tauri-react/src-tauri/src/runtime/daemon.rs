@@ -17,6 +17,7 @@ use crate::runtime::{logger, paths, state::RuntimeState};
 use crate::{commands, hardware, models::{EventCategory, HardwareEvent}};
 
 pub async fn run() -> Result<(), String> {
+    crate::runtime::runtime_dir::ensure_target_user_runtime_dir()?;
     ensure_parent(paths::daemon_socket_path().as_path())
         .map_err(|e| format!("Failed to prepare daemon runtime dir: {e}"))?;
     remove_stale_socket(paths::daemon_socket_path().as_path());

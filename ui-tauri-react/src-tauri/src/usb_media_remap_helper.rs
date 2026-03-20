@@ -8,7 +8,6 @@ use signal_hook::flag;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -186,6 +185,18 @@ fn handle_event(
             }
             return Ok(());
         }
+        Key::KEY_F5 => {
+            if value == 1 {
+                step_brightness("down")?;
+            }
+            return Ok(());
+        }
+        Key::KEY_F6 => {
+            if value == 1 {
+                step_brightness("up")?;
+            }
+            return Ok(());
+        }
         Key::KEY_F11 => {
             if value == 1 {
                 open_emoji_picker(args.user.as_deref());
@@ -199,8 +210,6 @@ fn handle_event(
         Key::KEY_F1 => Key::KEY_MUTE,
         Key::KEY_F2 => Key::KEY_VOLUMEDOWN,
         Key::KEY_F3 => Key::KEY_VOLUMEUP,
-        Key::KEY_F5 => Key::KEY_BRIGHTNESSDOWN,
-        Key::KEY_F6 => Key::KEY_BRIGHTNESSUP,
         _ => key,
     };
 
@@ -369,6 +378,47 @@ fn current_time_ms() -> u128 {
         .as_millis()
 }
 
+fn step_brightness(direction: &str) -> Result<(), String> {
+    let primary = Path::new("/sys/class/backlight/intel_backlight");
+    if !primary.exists() {
+        return Err("no intel_backlight device found".into());
+    }
+
+    let primary_max = read_backlight_value(&primary.join("max_brightness"))?;
+    let current = read_backlight_value(&primary.join("brightness"))?;
+    let next = next_brightness_value(current, primary_max, direction);
+
+    fs::write(primary.join("brightness"), next.to_string())
+        .map_err(|e| format!("Failed to write primary brightness: {e}"))?;
+
+    let secondary = Path::new("/sys/class/backlight/card1-eDP-2-backlight");
+    if secondary.exists() {
+        let secondary_max = read_backlight_value(&secondary.join("max_brightness"))?;
+        let mirrored = next.min(secondary_max);
+        fs::write(secondary.join("brightness"), mirrored.to_string())
+            .map_err(|e| format!("Failed to write secondary brightness: {e}"))?;
+    }
+
+    Ok(())
+}
+
+fn read_backlight_value(path: &Path) -> Result<i32, String> {
+    fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?
+        .trim()
+        .parse::<i32>()
+        .map_err(|e| format!("Invalid brightness value in {}: {e}", path.display()))
+}
+
+fn next_brightness_value(current: i32, max: i32, direction: &str) -> i32 {
+    let step = (max / 20).max(1);
+    if direction == "up" {
+        (current + step).min(max)
+    } else {
+        (current - step).max(0)
+    }
+}
+
 fn default_pid_file() -> String {
     paths::current_user_runtime_dir()
         .join("usb_media_remap.pid")
@@ -396,12 +446,18 @@ fn base_dir_from_pid_file(pid_file: &str) -> PathBuf {
 }
 
 fn ensure_dir(dir: &Path) -> Result<(), String> {
-    fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
-    if let Err(e) = fs::set_permissions(dir, fs::Permissions::from_mode(0o700)) {
-        // Root may run this helper; permissions aren't critical and chmod may fail on some fs.
-        if e.kind() != std::io::ErrorKind::PermissionDenied {
-            return Err(format!("Failed to set {} permissions: {e}", dir.display()));
-        }
+    crate::runtime::runtime_dir::ensure_dir_owned_like_parent(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brightness_step_uses_five_percent_chunks() {
+        assert_eq!(next_brightness_value(200, 400, "up"), 220);
+        assert_eq!(next_brightness_value(200, 400, "down"), 180);
+        assert_eq!(next_brightness_value(395, 400, "up"), 400);
+        assert_eq!(next_brightness_value(5, 400, "down"), 0);
     }
-    Ok(())
 }

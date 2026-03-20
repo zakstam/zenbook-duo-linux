@@ -2,7 +2,6 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::time::Duration;
 
@@ -358,22 +357,7 @@ fn ensure_duo_dir_for_pid(pid_file: &str) -> Result<(), String> {
     let dir = std::path::Path::new(pid_file)
         .parent()
         .ok_or_else(|| format!("Invalid pid file path: {pid_file}"))?;
-
-    fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
-
-    // Per-user directory: only needs to be writable by the current user and root.
-    // If the directory already exists with different ownership (e.g. created by an old version),
-    // chmod may fail - don't hard fail on that.
-    if let Err(e) = fs::set_permissions(dir, fs::Permissions::from_mode(0o700)) {
-        if e.kind() != std::io::ErrorKind::PermissionDenied {
-            return Err(format!(
-                "Failed to set {} permissions: {e}",
-                dir.display()
-            ));
-        }
-    }
-
-    Ok(())
+    crate::runtime::runtime_dir::ensure_dir_owned_like_parent(dir)
 }
 
 fn log_error<T: Into<String>>(message: T) -> String {

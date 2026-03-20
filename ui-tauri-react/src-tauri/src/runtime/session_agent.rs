@@ -149,8 +149,7 @@ async fn handle_session_command(stream: UnixStream) -> Result<(), String> {
 }
 
 fn ensure_user_runtime_dir() -> Result<(), String> {
-    fs::create_dir_all(paths::current_user_runtime_dir())
-        .map_err(|e| format!("Failed to create session runtime dir: {e}"))
+    crate::runtime::runtime_dir::ensure_current_user_runtime_dir()
 }
 
 fn remove_stale_socket(path: &Path) {
@@ -448,12 +447,15 @@ fn watch_keyboard_hotkeys() -> Result<(), String> {
                 match device.fetch_events() {
                     Ok(events) => {
                         for event in events {
-                            if event.event_type() == EventType::ABSOLUTE && event.code() == 0x28 {
+                            if event.event_type() == EventType::ABSOLUTE
+                                && is_hotkey_abs_code(event.code())
+                            {
                                 let value = event.value();
                                 if let Err(err) = handle_abs_misc_value(value) {
                                     log::warn!(
-                                        "failed to handle ABS_MISC value {} from {}: {}",
+                                        "failed to handle hotkey ABS value {} (code {}) from {}: {}",
                                         value,
+                                        event.code(),
                                         path.display(),
                                         err
                                     );
@@ -508,12 +510,25 @@ fn find_keyboard_abs_devices() -> Result<Vec<std::path::PathBuf>, String> {
         let Some(abs_axes) = device.supported_absolute_axes() else {
             continue;
         };
-        if abs_axes.contains(AbsoluteAxisType(0x28)) {
+        if supported_hotkey_abs_codes()
+            .into_iter()
+            .any(|axis| abs_axes.contains(axis))
+        {
             devices.push(path);
         }
     }
 
     Ok(devices)
+}
+
+fn supported_hotkey_abs_codes() -> [AbsoluteAxisType; 2] {
+    [AbsoluteAxisType(0x28), AbsoluteAxisType::ABS_VOLUME]
+}
+
+fn is_hotkey_abs_code(code: u16) -> bool {
+    supported_hotkey_abs_codes()
+        .into_iter()
+        .any(|axis| axis.0 == code)
 }
 
 fn handle_abs_misc_value(value: i32) -> Result<(), String> {
@@ -646,5 +661,17 @@ fn parse_rotation_line(line: &str) -> Option<Orientation> {
         "bottom-up" => Some(Orientation::Inverted),
         "normal" => Some(Orientation::Normal),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watches_both_known_hotkey_abs_codes() {
+        assert!(is_hotkey_abs_code(0x28));
+        assert!(is_hotkey_abs_code(AbsoluteAxisType::ABS_VOLUME.0));
+        assert!(!is_hotkey_abs_code(0x27));
     }
 }
