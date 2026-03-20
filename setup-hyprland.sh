@@ -203,6 +203,7 @@ settings_file.write_text(json.dumps(data, indent=2) + "\n")
 PY
     else
         sudo -u "${TARGET_USER}" mkdir -p "${CONFIG_DIR}"
+        sudo chown -R "${TARGET_USER}:${TARGET_USER}" "${CONFIG_DIR}" 2>/dev/null || true
         sudo -u "${TARGET_USER}" "${PYTHON3}" - "${SETTINGS_FILE}" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}" <<'PY'
 import json
 import sys

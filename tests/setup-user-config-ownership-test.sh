@@ -130,6 +130,12 @@ run_case() {
     cat "${TEMP_DIR}/test.log" >&2 || true
     exit 1
   fi
+
+  if ! grep -Fq "sudo chown -R tester:tester ${HOME_DIR}/.config/zenbook-duo" "${TEMP_DIR}/test.log"; then
+    echo "FAIL: ${script_name} should repair ownership for an existing root-owned config directory" >&2
+    cat "${TEMP_DIR}/test.log" >&2 || true
+    exit 1
+  fi
 }
 
 run_case setup-gnome.sh
