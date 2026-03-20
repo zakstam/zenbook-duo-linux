@@ -4,14 +4,7 @@ use std::path::Path;
 
 use rusb::UsbContext;
 
-fn persist_backlight_level(level: u8) {
-    if let Err(e) = fs::write("/tmp/duo/kb_backlight_level", level.to_string()) {
-        log::warn!("Failed to write /tmp/duo/kb_backlight_level: {e}");
-    }
-}
-
-/// USB HID SET_REPORT for keyboard backlight control.
-/// Ports the Python `backlight.py` logic using rusb.
+/// USB HID SET_REPORT for keyboard backlight control using rusb.
 ///
 /// Protocol:
 ///   Report ID: 0x5A
@@ -76,16 +69,13 @@ pub fn set_backlight_usb(level: u8) -> Result<(), String> {
             .write_control(request_type, request, value, index, &data, timeout)
             .map_err(|e| format!("USB write error: {e}"))?;
 
-        // Persist the level (best-effort; UI reads this file)
-        persist_backlight_level(level);
         return Ok(());
     }
 
     Err("Zenbook Duo keyboard not found via USB".into())
 }
 
-/// Bluetooth HID Feature Report for keyboard backlight.
-/// Ports `bt_backlight.py` using ioctl HIDIOCSFEATURE.
+/// Bluetooth HID Feature Report for keyboard backlight using ioctl HIDIOCSFEATURE.
 pub fn set_backlight_bluetooth(level: u8) -> Result<(), String> {
     let level = level.min(3);
 
@@ -122,7 +112,6 @@ pub fn set_backlight_bluetooth(level: u8) -> Result<(), String> {
         ));
     }
 
-    persist_backlight_level(level);
     Ok(())
 }
 
@@ -158,18 +147,7 @@ pub fn set_backlight(level: u8) -> Result<(), String> {
         Err(e) => e,
     };
 
-    // Fallback: shell out to the duo command
-    let output = std::process::Command::new("/usr/local/bin/duo")
-        .args(["kbb", &level.to_string()])
-        .output()
-        .map_err(|e| format!("Failed to run duo command: {e}"))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "duo kbb failed (usb: {usb_err}; bt: {bt_err}): {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
+    Err(format!(
+        "Failed to set keyboard backlight natively (usb: {usb_err}; bt: {bt_err})"
+    ))
 }

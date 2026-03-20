@@ -1,30 +1,21 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 use crate::models::{ConnectionType, DuoStatus, Orientation};
+use crate::runtime::{paths, state::RuntimeState};
 
-const STATUS_PATH: &str = "/tmp/duo/status";
-const KB_BACKLIGHT_PATH: &str = "/tmp/duo/kb_backlight_level";
 const INTEL_BACKLIGHT_BRIGHTNESS: &str = "/sys/class/backlight/intel_backlight/brightness";
 const INTEL_BACKLIGHT_MAX: &str = "/sys/class/backlight/intel_backlight/max_brightness";
 
-pub fn read_status_file() -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    if let Ok(contents) = fs::read_to_string(STATUS_PATH) {
-        for line in contents.lines() {
-            if let Some((key, value)) = line.split_once('=') {
-                map.insert(key.trim().to_string(), value.trim().to_string());
-            }
-        }
-    }
-    map
+fn load_runtime_state() -> Option<RuntimeState> {
+    let path = paths::state_file_path();
+    let contents = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
 }
 
 pub fn read_backlight_level() -> u8 {
-    fs::read_to_string(KB_BACKLIGHT_PATH)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
+    load_runtime_state()
+        .map(|state| state.status.backlight_level)
         .unwrap_or(0)
 }
 
@@ -79,52 +70,41 @@ pub fn detect_connection_type() -> ConnectionType {
 }
 
 pub fn is_service_active() -> bool {
+    is_unit_active_system("zenbook-duo-rust-daemon.service")
+        && is_unit_active_user("zenbook-duo-session-agent.service")
+}
+
+fn is_unit_active_user(unit: &str) -> bool {
     std::process::Command::new("systemctl")
-        .args(["--user", "is-active", "zenbook-duo-user.service"])
+        .args(["--user", "is-active", unit])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "active")
+        .unwrap_or(false)
+}
+
+fn is_unit_active_system(unit: &str) -> bool {
+    std::process::Command::new("systemctl")
+        .args(["is-active", unit])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "active")
         .unwrap_or(false)
 }
 
 pub fn get_full_status() -> DuoStatus {
-    let status_map = read_status_file();
-
-    let keyboard_attached = status_map
-        .get("KEYBOARD_ATTACHED")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false);
-
-    let monitor_count = status_map
-        .get("MONITOR_COUNT")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-
-    let wifi_enabled = status_map
-        .get("WIFI_BEFORE")
-        .map(|v| v == "enabled" || v == "unblocked")
-        .or_else(|| {
-            status_map
-                .get("WIFI_ENABLED")
-                .map(|v| v == "true" || v == "1")
-        })
-        .unwrap_or(false);
-
-    let bluetooth_enabled = status_map
-        .get("BLUETOOTH_BEFORE")
-        .map(|v| v == "enabled" || v == "unblocked")
-        .or_else(|| {
-            status_map
-                .get("BT_ENABLED")
-                .map(|v| v == "true" || v == "1")
-        })
-        .unwrap_or(false);
+    if let Some(mut status) = load_runtime_state().map(|state| state.status) {
+        status.display_brightness = read_display_brightness();
+        status.max_brightness = read_max_brightness();
+        status.connection_type = detect_connection_type();
+        status.service_active = is_service_active();
+        return status;
+    }
 
     DuoStatus {
-        keyboard_attached,
+        keyboard_attached: false,
         connection_type: detect_connection_type(),
-        monitor_count,
-        wifi_enabled,
-        bluetooth_enabled,
+        monitor_count: 0,
+        wifi_enabled: false,
+        bluetooth_enabled: false,
         backlight_level: read_backlight_level(),
         display_brightness: read_display_brightness(),
         max_brightness: read_max_brightness(),
@@ -134,14 +114,18 @@ pub fn get_full_status() -> DuoStatus {
 }
 
 pub fn clear_log() -> Result<(), String> {
-    let log_path = "/tmp/duo/duo.log";
-    fs::write(log_path, "").map_err(|e| e.to_string())
+    let runtime_path = paths::log_file_path();
+    if let Some(parent) = runtime_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(runtime_path, "").map_err(|e| e.to_string())
 }
 
 pub fn read_log_lines(count: usize) -> Vec<String> {
-    let log_path = "/tmp/duo/duo.log";
-    fs::read_to_string(log_path)
-        .unwrap_or_default()
+    let runtime_path = paths::log_file_path();
+    let contents = fs::read_to_string(&runtime_path).unwrap_or_default();
+
+    contents
         .lines()
         .rev()
         .take(count)

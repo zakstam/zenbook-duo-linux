@@ -1,6 +1,8 @@
 pub mod commands;
 pub mod hardware;
-mod models;
+pub mod ipc;
+pub mod models;
+pub mod runtime;
 pub mod usb_media_remap_helper;
 mod watchers;
 
@@ -159,19 +161,19 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 }
                 id if id.starts_with("bl_") => {
                     if let Ok(level) = id[3..].parse::<u8>() {
-                        let _ = hardware::hid::set_backlight(level);
+                        let _ = commands::backlight::set_backlight_daemon_first(level);
                     }
                 }
                 "usb_media_remap" => {
-                    let status = commands::usb_media_remap::get_status();
+                    let status = commands::usb_media_remap::daemon_first_status();
                     if status.running {
-                        let _ = commands::usb_media_remap::stop_remap();
+                        let _ = commands::usb_media_remap::daemon_first_stop();
                     } else {
-                        let _ = commands::usb_media_remap::start_remap();
+                        let _ = commands::usb_media_remap::daemon_first_start();
                     }
                 }
                 "usb_media_remap_pause" => {
-                    let _ = commands::usb_media_remap::toggle_pause();
+                    let _ = commands::usb_media_remap::daemon_first_toggle_pause();
                 }
                 _ => {}
             }

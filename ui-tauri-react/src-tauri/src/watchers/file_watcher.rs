@@ -5,6 +5,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::commands::events::{push_event, EventBuffer};
 use crate::models::{EventCategory, HardwareEvent};
+use crate::runtime::paths;
 
 pub fn start(app: AppHandle, buffer: EventBuffer) {
     std::thread::spawn(move || {
@@ -18,10 +19,9 @@ pub fn start(app: AppHandle, buffer: EventBuffer) {
             }
         };
 
-        // Watch /tmp/duo/ directory
-        let duo_dir = Path::new("/tmp/duo");
-        if duo_dir.exists() {
-            let _ = watcher.watch(duo_dir, RecursiveMode::NonRecursive);
+        let runtime_dir = paths::system_runtime_dir();
+        if runtime_dir.exists() {
+            let _ = watcher.watch(runtime_dir.as_path(), RecursiveMode::NonRecursive);
         }
 
         // Watch sysfs backlight
@@ -44,28 +44,18 @@ pub fn start(app: AppHandle, buffer: EventBuffer) {
                             .unwrap_or_default();
 
                         match filename.as_str() {
-                            "status" => {
+                            "state.json" => {
                                 let _ = app.emit("duo://status-changed", ());
                                 let hw_event = HardwareEvent::info(
                                     EventCategory::Service,
-                                    "Status file updated",
+                                    "Runtime state updated",
                                     "file_watcher",
                                 );
                                 push_event(&buffer, hw_event);
                                 let _ = app.emit("duo://hardware-event", ());
                             }
-                            "duo.log" => {
+                            "daemon.log" => {
                                 let _ = app.emit("duo://log-updated", ());
-                            }
-                            "kb_backlight_level" => {
-                                let _ = app.emit("duo://status-changed", ());
-                                let hw_event = HardwareEvent::info(
-                                    EventCategory::Keyboard,
-                                    "Keyboard backlight changed",
-                                    "file_watcher",
-                                );
-                                push_event(&buffer, hw_event);
-                                let _ = app.emit("duo://hardware-event", ());
                             }
                             "brightness" => {
                                 let _ = app.emit("duo://status-changed", ());

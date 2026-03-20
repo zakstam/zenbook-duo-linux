@@ -94,7 +94,7 @@ export default function Controls() {
                   Service Control
                 </h3>
                 <p className="text-[11px] text-muted-foreground">
-                  zenbook-duo-user is{" "}
+                  Rust runtime is{" "}
                   <span className={cn(
                     "font-semibold",
                     store.status.serviceActive ? "text-emerald-500" : "text-destructive"

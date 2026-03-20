@@ -1,8 +1,10 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::hardware::display_config;
 use crate::models::{Profile, ProfileList};
+use crate::runtime::client;
 
 fn profiles_path() -> PathBuf {
     let config_dir = dirs::config_dir()
@@ -62,14 +64,29 @@ pub fn activate_profile(id: String) -> Result<(), String> {
         .clone();
 
     // Apply backlight
-    let _ = crate::hardware::hid::set_backlight(profile.backlight_level);
+    let _ = match client::request(DaemonRequest::SetBacklight {
+        level: profile.backlight_level,
+    }) {
+        Ok(DaemonResponse::Ack) => Ok(()),
+        _ => crate::commands::backlight::set_backlight_daemon_first(profile.backlight_level),
+    };
 
     // Apply orientation
-    let _ = display_config::set_orientation(&profile.orientation);
+    let _ = match client::request(DaemonRequest::SetOrientation {
+        orientation: profile.orientation.clone(),
+    }) {
+        Ok(DaemonResponse::Ack) => Ok(()),
+        _ => display_config::set_orientation(&profile.orientation),
+    };
 
     // Apply display layout if present
     if let Some(ref layout) = profile.display_layout {
-        let _ = display_config::apply_display_layout(layout);
+        let _ = match client::request(DaemonRequest::ApplyDisplayLayout {
+            layout: layout.clone(),
+        }) {
+            Ok(DaemonResponse::Ack) => Ok(()),
+            _ => display_config::apply_display_layout(layout),
+        };
     }
 
     Ok(())
