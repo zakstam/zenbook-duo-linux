@@ -105,6 +105,12 @@ if command -v dnf &>/dev/null; then
         hyprland \
         iio-sensor-proxy \
         systemd
+elif command -v pacman &>/dev/null; then
+    sudo pacman -S --needed --noconfirm \
+        usbutils \
+        hyprland \
+        iio-sensor-proxy \
+        systemd
 elif command -v apt &>/dev/null; then
     sudo apt install -y \
         usbutils \

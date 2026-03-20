@@ -94,6 +94,12 @@ if command -v dnf &>/dev/null; then
         kscreen \
         iio-sensor-proxy \
         systemd
+elif command -v pacman &>/dev/null; then
+    sudo pacman -S --needed --noconfirm \
+        usbutils \
+        kscreen \
+        iio-sensor-proxy \
+        systemd
 elif command -v apt &>/dev/null; then
     sudo apt install -y \
         usbutils \

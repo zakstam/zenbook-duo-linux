@@ -107,6 +107,12 @@ if command -v dnf &>/dev/null; then
         mutter \
         iio-sensor-proxy \
         systemd
+elif command -v pacman &>/dev/null; then
+    sudo pacman -S --needed --noconfirm \
+        usbutils \
+        mutter \
+        iio-sensor-proxy \
+        systemd
 elif command -v apt &>/dev/null; then
     sudo apt install -y \
         usbutils \

@@ -7,7 +7,7 @@ This project adds better Linux support for the Zenbook Duo by running a small ba
 ### What you need
 
 - An ASUS Zenbook Duo
-- GNOME on Wayland, KDE Plasma on Wayland, Hyprland, or Niri (tested on Fedora; Ubuntu GNOME should also work)
+- GNOME on Wayland, KDE Plasma on Wayland, Hyprland, or Niri (tested on Fedora; Arch and Ubuntu install paths are supported)
 - A Terminal and your sudo password (the installer needs to change system settings)
 
 ### Install (recommended)
@@ -65,6 +65,7 @@ To remove the optional UI app:
 
 - Fedora / RHEL-based: `sudo dnf remove zenbook-duo-control`
 - Debian / Ubuntu-based: `sudo apt remove zenbook-duo-control`
+- Arch-based: remove the installed package with your normal pacman workflow if you packaged the UI locally
 
 ---
 
@@ -106,7 +107,7 @@ Notes:
 ### Requirements
 
 - ASUS Zenbook Duo (USB vendor `0B05`, product `1B2C`)
-- Linux with GNOME on Wayland, KDE Plasma on Wayland, Hyprland, or Niri (tested with Fedora)
+- Linux with GNOME on Wayland, KDE Plasma on Wayland, Hyprland, or Niri (tested with Fedora; installer supports Arch via `pacman`)
 - `systemd` for service management
 - GNOME: `gdctl` (part of `mutter`) for display configuration
 - KDE: `kscreen-doctor` (part of `kscreen`) for display configuration
@@ -163,6 +164,7 @@ sudo udevadm trigger
 | Distro | Package Manager |
 |--------|----------------|
 | Fedora / RHEL-based | `dnf` |
+| Arch-based | `pacman` |
 | Debian / Ubuntu-based | `apt` |
 
 Other distros: install dependencies manually and run `./setup-gnome.sh`, `./setup-kde.sh`, `./setup-hyprland.sh`, or `./setup-niri.sh` (it exits if it cannot detect your package manager).
