@@ -8,13 +8,18 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::RwLock;
+use tokio::time::{timeout, Duration};
 
 use crate::ipc::protocol::{
     DaemonRequest, DaemonResponse, Envelope, LifecyclePhase, PROTOCOL_VERSION, SessionCommand,
     SessionResponse,
 };
 use crate::runtime::{logger, paths, state::RuntimeState};
-use crate::{commands, hardware, models::{EventCategory, HardwareEvent}};
+use crate::{
+    commands,
+    hardware,
+    models::{DisplayLayout, EventCategory, HardwareEvent, Orientation},
+};
 
 pub async fn run() -> Result<(), String> {
     crate::runtime::runtime_dir::ensure_target_user_runtime_dir()?;
@@ -176,44 +181,10 @@ async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> 
                 }
             }
             DaemonRequest::SetOrientation { orientation } => {
-                let mut guard = state.write().await;
-                match forward_session_command(&state, SessionCommand::SetOrientation {
-                    orientation: orientation.clone(),
-                })
-                .await
-                {
-                    Ok(()) => {
-                        guard.status.orientation = orientation;
-                        let _ = logger::append_line(format!(
-                            "rust-daemon: applied orientation -> {:?}",
-                            guard.status.orientation
-                        ));
-                        guard.touch();
-                        persist_state(&guard);
-                        DaemonResponse::Ack
-                    }
-                    Err(message) => DaemonResponse::Error { message },
-                }
+                apply_orientation(&state, orientation).await
             }
             DaemonRequest::ApplyDisplayLayout { layout } => {
-                let mut guard = state.write().await;
-                match forward_session_command(&state, SessionCommand::ApplyDisplayLayout {
-                    layout: layout.clone(),
-                })
-                .await
-                {
-                    Ok(()) => {
-                        guard.status.monitor_count = layout.displays.len() as u32;
-                        let _ = logger::append_line(format!(
-                            "rust-daemon: applied display layout with {} displays",
-                            guard.status.monitor_count
-                        ));
-                        guard.touch();
-                        persist_state(&guard);
-                        DaemonResponse::Ack
-                    }
-                    Err(message) => DaemonResponse::Error { message },
-                }
+                apply_display_layout_request(&state, layout).await
             }
             DaemonRequest::UsbMediaRemapStart => {
                 let _ = logger::append_line("rust-daemon: start usb media remap request");
@@ -400,6 +371,69 @@ pub(crate) async fn forward_session_command(
     }
 }
 
+pub(crate) async fn session_display_layout(
+    state: Arc<RwLock<RuntimeState>>,
+) -> Option<DisplayLayout> {
+    match request_session(state, SessionCommand::GetDisplayLayout).await {
+        Ok(SessionResponse::DisplayLayout { layout }) => Some(layout),
+        _ => None,
+    }
+}
+
+async fn apply_orientation(
+    state: &Arc<RwLock<RuntimeState>>,
+    orientation: Orientation,
+) -> DaemonResponse {
+    match forward_session_command(
+        state,
+        SessionCommand::SetOrientation {
+            orientation: orientation.clone(),
+        },
+    )
+    .await
+    {
+        Ok(()) => {
+            let mut guard = state.write().await;
+            guard.status.orientation = orientation;
+            let _ = logger::append_line(format!(
+                "rust-daemon: applied orientation -> {:?}",
+                guard.status.orientation
+            ));
+            guard.touch();
+            persist_state(&guard);
+            DaemonResponse::Ack
+        }
+        Err(message) => DaemonResponse::Error { message },
+    }
+}
+
+async fn apply_display_layout_request(
+    state: &Arc<RwLock<RuntimeState>>,
+    layout: DisplayLayout,
+) -> DaemonResponse {
+    match forward_session_command(
+        state,
+        SessionCommand::ApplyDisplayLayout {
+            layout: layout.clone(),
+        },
+    )
+    .await
+    {
+        Ok(()) => {
+            let mut guard = state.write().await;
+            crate::runtime::probe::apply_layout_to_status(&mut guard.status, Some(&layout));
+            let _ = logger::append_line(format!(
+                "rust-daemon: applied display layout with {} displays",
+                guard.status.monitor_count
+            ));
+            guard.touch();
+            persist_state(&guard);
+            DaemonResponse::Ack
+        }
+        Err(message) => DaemonResponse::Error { message },
+    }
+}
+
 async fn request_session(
     state: Arc<RwLock<RuntimeState>>,
     command: SessionCommand,
@@ -413,9 +447,9 @@ async fn request_session(
             .ok_or_else(|| "No session agent registered".to_string())?
     };
 
-    let stream = match UnixStream::connect(&socket_path).await {
-        Ok(stream) => stream,
-        Err(e) => {
+    let stream = match timeout(Duration::from_secs(3), UnixStream::connect(&socket_path)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(e)) => {
             mark_session_agent_disconnected(
                 &state,
                 &format!("Failed to connect to session agent: {e}"),
@@ -423,12 +457,19 @@ async fn request_session(
             .await;
             return Err(format!("Failed to connect to session agent: {e}"));
         }
+        Err(_) => {
+            mark_session_agent_disconnected(&state, "Timed out connecting to session agent").await;
+            return Err("Timed out connecting to session agent".to_string());
+        }
     };
     let (reader, mut writer) = stream.into_split();
 
     let line = serde_json::to_string(&Envelope::new(command))
         .map_err(|e| format!("Failed to encode session command: {e}"))?;
-    if let Err(e) = writer.write_all(line.as_bytes()).await {
+    if let Err(e) = timeout(Duration::from_secs(3), writer.write_all(line.as_bytes()))
+        .await
+        .map_err(|_| "Timed out writing session command".to_string())?
+    {
         mark_session_agent_disconnected(
             &state,
             &format!("Failed to write session command: {e}"),
@@ -436,7 +477,10 @@ async fn request_session(
         .await;
         return Err(format!("Failed to write session command: {e}"));
     }
-    if let Err(e) = writer.write_all(b"\n").await {
+    if let Err(e) = timeout(Duration::from_secs(3), writer.write_all(b"\n"))
+        .await
+        .map_err(|_| "Timed out terminating session command".to_string())?
+    {
         mark_session_agent_disconnected(
             &state,
             &format!("Failed to terminate session command: {e}"),
@@ -446,9 +490,17 @@ async fn request_session(
     }
 
     let mut lines = BufReader::new(reader).lines();
-    let reply = match lines.next_line().await {
-        Ok(Some(reply)) => reply,
-        Ok(None) => {
+    let reply = match timeout(Duration::from_secs(3), lines.next_line()).await {
+        Err(_) => {
+            mark_session_agent_disconnected(
+                &state,
+                "Timed out waiting for session response",
+            )
+            .await;
+            return Err("Timed out waiting for session response".to_string());
+        }
+        Ok(Ok(Some(reply))) => reply,
+        Ok(Ok(None)) => {
             mark_session_agent_disconnected(
                 &state,
                 "Session agent closed before replying",
@@ -456,7 +508,7 @@ async fn request_session(
             .await;
             return Err("Session agent closed before replying".to_string());
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             mark_session_agent_disconnected(
                 &state,
                 &format!("Failed to read session response: {e}"),
@@ -493,4 +545,72 @@ async fn mark_session_agent_disconnected(
         "rust-daemon: session agent disconnected: {}",
         reason
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[tokio::test]
+    async fn apply_orientation_does_not_deadlock_and_updates_state() {
+        let socket_path = unique_test_socket_path("orientation");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read test request")
+                .expect("session request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode session request");
+            match envelope.payload {
+                SessionCommand::SetOrientation { orientation } => {
+                    assert_eq!(orientation, Orientation::Left);
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply = serde_json::to_string(&Envelope::new(SessionResponse::Ack))
+                .expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+        }
+
+        let response = timeout(
+            Duration::from_secs(1),
+            apply_orientation(&state, Orientation::Left),
+        )
+        .await
+        .expect("orientation request should not hang");
+
+        assert!(matches!(response, DaemonResponse::Ack));
+        assert_eq!(state.read().await.status.orientation, Orientation::Left);
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    fn unique_test_socket_path(label: &str) -> PathBuf {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("zenbook-duo-{label}-{nanos}-{id}.sock"))
+    }
 }

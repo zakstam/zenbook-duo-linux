@@ -498,9 +498,7 @@ fn get_niri_display_layout() -> Result<DisplayLayout, String> {
             .get("logical")
             .and_then(|v| v.as_object())
             .ok_or_else(|| format!("Missing niri logical geometry for {connector}"))?;
-        let current_mode = output
-            .get("current_mode")
-            .and_then(|v| v.as_object())
+        let current_mode = resolve_niri_current_mode(&output)
             .ok_or_else(|| format!("Missing niri current mode for {connector}"))?;
 
         displays.push(DisplayInfo {
@@ -515,21 +513,42 @@ fn get_niri_display_layout() -> Result<DisplayLayout, String> {
             scale: logical.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0),
             x: logical.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
             y: logical.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-            transform: match output
-                .get("transform")
-                .and_then(|v| v.as_str())
-                .unwrap_or("normal")
-            {
-                "90" => 90,
-                "180" => 180,
-                "270" => 270,
-                _ => 0,
-            },
+            transform: parse_niri_transform(&output),
             primary: connector == "eDP-1",
         });
     }
 
     Ok(DisplayLayout { displays })
+}
+
+fn resolve_niri_current_mode(output: &serde_json::Value) -> Option<serde_json::Value> {
+    if let Some(mode) = output.get("current_mode").and_then(|v| v.as_object()) {
+        return Some(serde_json::Value::Object(mode.clone()));
+    }
+
+    let index = output.get("current_mode").and_then(|v| v.as_u64())? as usize;
+    output
+        .get("modes")
+        .and_then(|v| v.as_array())
+        .and_then(|modes| modes.get(index))
+        .cloned()
+}
+
+fn parse_niri_transform(output: &serde_json::Value) -> u32 {
+    output
+        .get("logical")
+        .and_then(|value| value.get("transform"))
+        .or_else(|| output.get("transform"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_ascii_lowercase())
+        .map(|value| match value.as_str() {
+            "90" => 90,
+            "180" => 180,
+            "270" => 270,
+            "flipped" | "inverted" => 180,
+            _ => 0,
+        })
+        .unwrap_or(0)
 }
 
 fn apply_niri_display_layout(layout: &DisplayLayout) -> Result<(), String> {
@@ -914,5 +933,46 @@ pub fn set_orientation(orientation: &Orientation) -> Result<(), String> {
         DisplayBackend::Unknown => {
             Err("Unsupported session backend for orientation control".into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_niri_transform_from_logical_object() {
+        let value = serde_json::json!({
+            "logical": { "transform": "Normal" }
+        });
+        assert_eq!(parse_niri_transform(&value), 0);
+
+        let value = serde_json::json!({
+            "logical": { "transform": "90" }
+        });
+        assert_eq!(parse_niri_transform(&value), 90);
+    }
+
+    #[test]
+    fn falls_back_to_top_level_niri_transform() {
+        let value = serde_json::json!({
+            "transform": "270"
+        });
+        assert_eq!(parse_niri_transform(&value), 270);
+    }
+
+    #[test]
+    fn resolves_niri_current_mode_from_index() {
+        let value = serde_json::json!({
+            "current_mode": 1,
+            "modes": [
+                { "width": 1920, "height": 1200, "refresh_rate": 60000 },
+                { "width": 2880, "height": 1800, "refresh_rate": 120000 }
+            ]
+        });
+
+        let mode = resolve_niri_current_mode(&value).expect("mode should resolve");
+        assert_eq!(mode.get("width").and_then(|v| v.as_u64()), Some(2880));
+        assert_eq!(mode.get("height").and_then(|v| v.as_u64()), Some(1800));
     }
 }

@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
+use std::time::Duration;
 
 use crate::ipc::protocol::{DaemonRequest, DaemonResponse, Envelope};
 use crate::runtime::paths;
@@ -7,6 +8,12 @@ use crate::runtime::paths;
 pub fn request(request: DaemonRequest) -> Result<DaemonResponse, String> {
     let mut stream = UnixStream::connect(paths::daemon_socket_path())
         .map_err(|e| format!("Failed to connect to daemon socket: {e}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|e| format!("Failed to set daemon read timeout: {e}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .map_err(|e| format!("Failed to set daemon write timeout: {e}"))?;
 
     let line = serde_json::to_string(&Envelope::new(request))
         .map_err(|e| format!("Failed to encode daemon request: {e}"))?;

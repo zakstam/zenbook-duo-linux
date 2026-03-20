@@ -15,9 +15,19 @@ pub fn start(state: Arc<RwLock<RuntimeState>>) {
         loop {
             interval.tick().await;
 
-            let mut guard = state.write().await;
             let mut next_status = crate::runtime::probe::current_status();
-            next_status.service_active = guard.session_agent.connected;
+            let session_connected = {
+                let guard = state.read().await;
+                guard.session_agent.connected
+            };
+            next_status.service_active = session_connected;
+
+            if let Some(layout) = crate::runtime::daemon::session_display_layout(state.clone()).await {
+                crate::runtime::probe::apply_layout_to_status(&mut next_status, Some(&layout));
+                next_status.service_active = true;
+            }
+
+            let mut guard = state.write().await;
             let previous = guard.status.clone();
 
             if previous != next_status {
