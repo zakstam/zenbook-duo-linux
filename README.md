@@ -122,6 +122,7 @@ Notes:
   - `zenbook-duo-rust-daemon.service` (system daemon)
   - `zenbook-duo-rust-lifecycle.service` (boot/shutdown + sleep hook)
   - `zenbook-duo-session-agent.service` (user session)
+  - The session agent is enabled from the user manager's `default.target`, then syncs the current dock state when your graphical session comes up after reboot/login
 - Installs Rust runtime binaries to `/usr/local/libexec/zenbook-duo`
 - Adds sudoers rules for brightness writes used by the session agent
 
@@ -130,6 +131,11 @@ Notes:
 - Nothing happens when docking/undocking:
   - Check the services are running: `systemctl status zenbook-duo-rust-daemon.service` and `systemctl --user status zenbook-duo-session-agent.service`
   - Watch daemon logs: `journalctl -u zenbook-duo-rust-daemon.service -f`
+- Reboot/login comes up in the wrong layout:
+  - After login, the session agent should auto-sync the current attached/detached state without a manual restart
+  - Check `systemctl --user status zenbook-duo-session-agent.service`
+  - Confirm your user manager has the desktop-session environment: `systemctl --user show-environment | grep -E 'DISPLAY|WAYLAND_DISPLAY|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|DESKTOP_SESSION|XDG_SESSION_TYPE'`
+  - If those variables are missing after reinstalling, rerun `./install.sh` from an active desktop session, then log out and back in once
 - `Failed to read events: No such device (os error 19)` when reattaching the keyboard:
   - This comes from the optional USB media remap helper when the event node disappears during hotplug.
   - Make sure you are on the latest version, then restart the session agent once: `systemctl --user restart zenbook-duo-session-agent.service`

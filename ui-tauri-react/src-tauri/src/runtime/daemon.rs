@@ -11,13 +11,12 @@ use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
 
 use crate::ipc::protocol::{
-    DaemonRequest, DaemonResponse, Envelope, LifecyclePhase, PROTOCOL_VERSION, SessionCommand,
-    SessionResponse,
+    DaemonRequest, DaemonResponse, Envelope, LifecyclePhase, SessionCommand, SessionResponse,
+    PROTOCOL_VERSION,
 };
 use crate::runtime::{logger, paths, state::RuntimeState};
 use crate::{
-    commands,
-    hardware,
+    commands, hardware,
     models::{DisplayLayout, EventCategory, HardwareEvent, Orientation},
 };
 
@@ -118,7 +117,8 @@ async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> 
 
         let response = match envelope.payload {
             DaemonRequest::Ping => DaemonResponse::Pong,
-            DaemonRequest::HandleLifecycle { phase } => match handle_lifecycle(&state, phase).await {
+            DaemonRequest::HandleLifecycle { phase } => match handle_lifecycle(&state, phase).await
+            {
                 Ok(()) => DaemonResponse::Ack,
                 Err(message) => DaemonResponse::Error { message },
             },
@@ -126,9 +126,7 @@ async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> 
                 let guard = state.read().await;
                 let mut status = guard.status.clone();
                 status.service_active = guard.session_agent.connected;
-                DaemonResponse::Status {
-                    status,
-                }
+                DaemonResponse::Status { status }
             }
             DaemonRequest::GetDisplayLayout => {
                 match request_session(state.clone(), SessionCommand::GetDisplayLayout).await {
@@ -162,24 +160,24 @@ async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> 
                 persist_state(&guard);
                 DaemonResponse::Ack
             }
-            DaemonRequest::SetBacklight { level } => {
-                match hardware::hid::set_backlight(level) {
-                    Ok(()) => {
-                        let mut guard = state.write().await;
-                        guard.status.backlight_level = level;
-                        let _ = logger::append_line(format!("rust-daemon: set backlight request -> {level}"));
-                        guard.recent_events.push(HardwareEvent::info(
-                            EventCategory::Keyboard,
-                            format!("Backlight set to {level}"),
-                            "rust-daemon",
-                        ));
-                        guard.touch();
-                        persist_state(&guard);
-                        DaemonResponse::Ack
-                    }
-                    Err(message) => DaemonResponse::Error { message },
+            DaemonRequest::SetBacklight { level } => match hardware::hid::set_backlight(level) {
+                Ok(()) => {
+                    let mut guard = state.write().await;
+                    guard.status.backlight_level = level;
+                    let _ = logger::append_line(format!(
+                        "rust-daemon: set backlight request -> {level}"
+                    ));
+                    guard.recent_events.push(HardwareEvent::info(
+                        EventCategory::Keyboard,
+                        format!("Backlight set to {level}"),
+                        "rust-daemon",
+                    ));
+                    guard.touch();
+                    persist_state(&guard);
+                    DaemonResponse::Ack
                 }
-            }
+                Err(message) => DaemonResponse::Error { message },
+            },
             DaemonRequest::SetOrientation { orientation } => {
                 apply_orientation(&state, orientation).await
             }
@@ -215,19 +213,10 @@ async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> 
                 backend,
                 socket_path,
             } => {
-                let mut guard = state.write().await;
-                guard.session_agent.connected = true;
-                guard.session_agent.session_id = Some(session_id);
-                guard.session_agent.backend = Some(backend);
-                guard.session_agent.socket_path = Some(socket_path);
-                guard.status.service_active = true;
-                let _ = logger::append_line(format!(
-                    "rust-daemon: session agent registered ({:?})",
-                    guard.session_agent.backend
-                ));
-                guard.touch();
-                persist_state(&guard);
-                DaemonResponse::Ack
+                match handle_session_registration(&state, session_id, backend, socket_path).await {
+                    Ok(()) => DaemonResponse::Ack,
+                    Err(message) => DaemonResponse::Error { message },
+                }
             }
             DaemonRequest::TailLogs { lines } => DaemonResponse::Logs {
                 lines: hardware::sysfs::read_log_lines(lines),
@@ -338,12 +327,7 @@ async fn handle_lifecycle(
                 persist_state(&guard);
             }
 
-            match forward_session_command(
-                state,
-                SessionCommand::SetDockMode { attached, scale },
-            )
-            .await
-            {
+            match replay_current_dock_mode(state, attached, scale).await {
                 Ok(()) => Ok(()),
                 Err(err) => {
                     logger::append_line(format!(
@@ -356,6 +340,47 @@ async fn handle_lifecycle(
             }
         }
     }
+}
+
+async fn handle_session_registration(
+    state: &Arc<RwLock<RuntimeState>>,
+    session_id: String,
+    backend: crate::ipc::protocol::SessionBackend,
+    socket_path: String,
+) -> Result<(), String> {
+    let (attached, scale) = {
+        let mut guard = state.write().await;
+        guard.session_agent.connected = true;
+        guard.session_agent.session_id = Some(session_id);
+        guard.session_agent.backend = Some(backend);
+        guard.session_agent.socket_path = Some(socket_path);
+        guard.status.service_active = true;
+        let _ = logger::append_line(format!(
+            "rust-daemon: session agent registered ({:?})",
+            guard.session_agent.backend
+        ));
+        guard.touch();
+        persist_state(&guard);
+        (guard.status.keyboard_attached, guard.settings.default_scale)
+    };
+
+    if let Err(err) = replay_current_dock_mode(state, attached, scale).await {
+        log::warn!("session registration dock replay failed: {err}");
+        let _ = logger::append_line(format!(
+            "rust-daemon: session registration dock replay skipped: {}",
+            err
+        ));
+    }
+
+    Ok(())
+}
+
+async fn replay_current_dock_mode(
+    state: &Arc<RwLock<RuntimeState>>,
+    attached: bool,
+    scale: f64,
+) -> Result<(), String> {
+    forward_session_command(state, SessionCommand::SetDockMode { attached, scale }).await
 }
 
 pub(crate) async fn forward_session_command(
@@ -470,11 +495,8 @@ async fn request_session(
         .await
         .map_err(|_| "Timed out writing session command".to_string())?
     {
-        mark_session_agent_disconnected(
-            &state,
-            &format!("Failed to write session command: {e}"),
-        )
-        .await;
+        mark_session_agent_disconnected(&state, &format!("Failed to write session command: {e}"))
+            .await;
         return Err(format!("Failed to write session command: {e}"));
     }
     if let Err(e) = timeout(Duration::from_secs(3), writer.write_all(b"\n"))
@@ -492,20 +514,12 @@ async fn request_session(
     let mut lines = BufReader::new(reader).lines();
     let reply = match timeout(Duration::from_secs(3), lines.next_line()).await {
         Err(_) => {
-            mark_session_agent_disconnected(
-                &state,
-                "Timed out waiting for session response",
-            )
-            .await;
+            mark_session_agent_disconnected(&state, "Timed out waiting for session response").await;
             return Err("Timed out waiting for session response".to_string());
         }
         Ok(Ok(Some(reply))) => reply,
         Ok(Ok(None)) => {
-            mark_session_agent_disconnected(
-                &state,
-                "Session agent closed before replying",
-            )
-            .await;
+            mark_session_agent_disconnected(&state, "Session agent closed before replying").await;
             return Err("Session agent closed before replying".to_string());
         }
         Ok(Err(e)) => {
@@ -518,16 +532,13 @@ async fn request_session(
         }
     };
 
-    let envelope: Envelope<SessionResponse> = serde_json::from_str(&reply)
-        .map_err(|e| format!("Invalid session response JSON: {e}"))?;
+    let envelope: Envelope<SessionResponse> =
+        serde_json::from_str(&reply).map_err(|e| format!("Invalid session response JSON: {e}"))?;
 
     Ok(envelope.payload)
 }
 
-async fn mark_session_agent_disconnected(
-    state: &Arc<RwLock<RuntimeState>>,
-    reason: &str,
-) {
+async fn mark_session_agent_disconnected(state: &Arc<RwLock<RuntimeState>>, reason: &str) {
     let mut guard = state.write().await;
     let was_connected = guard.session_agent.connected || guard.status.service_active;
     guard.session_agent = Default::default();
@@ -550,6 +561,7 @@ async fn mark_session_agent_disconnected(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc::protocol::SessionBackend;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -578,8 +590,8 @@ mod tests {
                 }
                 other => panic!("unexpected session command: {other:?}"),
             }
-            let reply = serde_json::to_string(&Envelope::new(SessionResponse::Ack))
-                .expect("encode ack");
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
             writer.write_all(reply.as_bytes()).await.expect("write ack");
             writer.write_all(b"\n").await.expect("terminate ack");
         });
@@ -600,6 +612,173 @@ mod tests {
 
         assert!(matches!(response, DaemonResponse::Ack));
         assert_eq!(state.read().await.status.orientation, Orientation::Left);
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn session_registration_replays_current_detached_dock_state() {
+        let socket_path = unique_test_socket_path("register-detached");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read test request")
+                .expect("session request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode session request");
+            match envelope.payload {
+                SessionCommand::SetDockMode { attached, scale } => {
+                    assert!(!attached);
+                    assert_eq!(scale, 1.66);
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.status.keyboard_attached = false;
+            guard.settings.default_scale = 1.66;
+        }
+
+        handle_session_registration(
+            &state,
+            "test-session".into(),
+            SessionBackend::Gnome,
+            socket_path.to_string_lossy().into_owned(),
+        )
+        .await
+        .expect("registration should succeed");
+
+        let guard = state.read().await;
+        assert!(guard.session_agent.connected);
+        assert_eq!(
+            guard.session_agent.session_id.as_deref(),
+            Some("test-session")
+        );
+        drop(guard);
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn session_registration_succeeds_even_if_dock_replay_fails() {
+        let socket_path = unique_test_socket_path("register-fail");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read test request")
+                .expect("session request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode session request");
+            match envelope.payload {
+                SessionCommand::SetDockMode { attached, scale } => {
+                    assert!(attached);
+                    assert_eq!(scale, 2.0);
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply = serde_json::to_string(&Envelope::new(SessionResponse::Error {
+                message: "display replay failed".into(),
+            }))
+            .expect("encode error");
+            writer
+                .write_all(reply.as_bytes())
+                .await
+                .expect("write error");
+            writer.write_all(b"\n").await.expect("terminate error");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.status.keyboard_attached = true;
+            guard.settings.default_scale = 2.0;
+        }
+
+        let result = handle_session_registration(
+            &state,
+            "test-session".into(),
+            SessionBackend::Kde,
+            socket_path.to_string_lossy().into_owned(),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "registration should ignore dock replay errors"
+        );
+        assert!(state.read().await.session_agent.connected);
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn session_registration_replays_current_attached_dock_state() {
+        let socket_path = unique_test_socket_path("register-attached");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read test request")
+                .expect("session request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode session request");
+            match envelope.payload {
+                SessionCommand::SetDockMode { attached, scale } => {
+                    assert!(attached);
+                    assert_eq!(scale, 1.25);
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.status.keyboard_attached = true;
+            guard.settings.default_scale = 1.25;
+        }
+
+        handle_session_registration(
+            &state,
+            "test-session".into(),
+            SessionBackend::Niri,
+            socket_path.to_string_lossy().into_owned(),
+        )
+        .await
+        .expect("registration should succeed");
+
+        assert!(state.read().await.session_agent.connected);
 
         server.await.expect("join session server");
         let _ = fs::remove_file(&socket_path);

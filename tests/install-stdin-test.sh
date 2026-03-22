@@ -62,4 +62,14 @@ if [[ ! -f "${checkout_output}/setup-niri.sh" ]]; then
   exit 1
 fi
 
+if ! grep -q 'WantedBy=default.target' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: user service should be enabled from default.target" >&2
+  exit 1
+fi
+
+if ! grep -q 'import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: installer should import graphical session environment for the user manager" >&2
+  exit 1
+fi
+
 echo "PASS"

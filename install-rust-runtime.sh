@@ -48,6 +48,21 @@ run_user_systemctl() {
     systemctl --user "$@"
 }
 
+import_user_environment() {
+  run_user_systemctl import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE || true
+
+  if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    if [ "${TARGET_USER}" = "${USER:-}" ] && [ "${EUID}" != "0" ]; then
+      dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
+    else
+      sudo -u "${TARGET_USER}" \
+        XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+        dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: Missing required command: $1" >&2
@@ -140,7 +155,7 @@ TimeoutStopSec=5
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target
 EOF
 
 sudo rm -f "${SYSTEM_SLEEP_HOOK_PATH}"
@@ -157,6 +172,7 @@ sudo systemctl restart "${SYSTEM_SERVICE_NAME}"
 sudo systemctl restart "${LIFECYCLE_SERVICE_NAME}"
 
 run_user_systemctl daemon-reload
+import_user_environment
 run_user_systemctl disable zenbook-duo-user.service 2>/dev/null || true
 run_user_systemctl stop zenbook-duo-user.service 2>/dev/null || true
 run_user_systemctl enable "${USER_SERVICE_NAME}"
