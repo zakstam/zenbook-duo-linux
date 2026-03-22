@@ -67,8 +67,30 @@ if ! grep -q 'WantedBy=default.target' "${ROOT_DIR}/install-rust-runtime.sh"; th
   exit 1
 fi
 
-if ! grep -q 'import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE' "${ROOT_DIR}/install-rust-runtime.sh"; then
+if ! grep -q 'import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE' "${ROOT_DIR}/install-rust-runtime.sh"; then
   echo "FAIL: installer should import graphical session environment for the user manager" >&2
+  exit 1
+fi
+
+for setup_script in setup-gnome.sh setup-kde.sh setup-niri.sh; do
+  if ! grep -q 'command -v pacman' "${ROOT_DIR}/${setup_script}"; then
+    echo "FAIL: ${setup_script} should support pacman-based systems" >&2
+    exit 1
+  fi
+done
+
+if ! grep -q 'PKG_MGR="pacman"' "${ROOT_DIR}/install-ui.sh"; then
+  echo "FAIL: install-ui.sh should detect pacman-based systems" >&2
+  exit 1
+fi
+
+if ! grep -q 'install_ui_direct' "${ROOT_DIR}/install-ui.sh"; then
+  echo "FAIL: install-ui.sh should have a direct-install path for pacman systems" >&2
+  exit 1
+fi
+
+if ! grep -q 'sudo pacman -Rns --noconfirm zenbook-duo-control' "${ROOT_DIR}/uninstall.sh"; then
+  echo "FAIL: uninstall.sh should try pacman removal when available" >&2
   exit 1
 fi
 

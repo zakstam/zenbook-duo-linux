@@ -75,6 +75,8 @@ pub fn run() {
             commands::usb_media_remap::usb_media_remap_start,
             commands::usb_media_remap::usb_media_remap_stop,
             commands::usb_media_remap::usb_media_remap_toggle_pause,
+            commands::touchscreen::list_touchscreens,
+            commands::touchscreen::set_touchscreen_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

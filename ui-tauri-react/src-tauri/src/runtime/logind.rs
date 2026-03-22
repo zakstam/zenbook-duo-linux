@@ -7,8 +7,14 @@ use crate::runtime::{logger, state::RuntimeState};
 
 pub fn start(state: Arc<RwLock<RuntimeState>>) {
     tokio::spawn(async move {
-        if let Err(err) = watch_logind(state).await {
+        if let Err(err) = watch_logind(state.clone()).await {
             log::warn!("logind runtime watcher failed: {err}");
+            crate::runtime::daemon::notify_runtime_error(
+                &state,
+                "Zenbook Duo Runtime Error",
+                &format!("Logind watcher failed: {err}"),
+            )
+            .await;
             let _ = logger::append_line(format!("rust-daemon: logind watcher failed: {err}"));
         }
     });

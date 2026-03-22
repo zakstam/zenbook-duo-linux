@@ -153,15 +153,22 @@ if [ "$KEEP_UI" = false ]; then
     elif command -v apt >/dev/null 2>&1; then
         sudo apt remove -y zenbook-duo-control 2>/dev/null || true
         sudo apt autoremove -y 2>/dev/null || true
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -Rns --noconfirm zenbook-duo-control 2>/dev/null || true
     elif command -v rpm >/dev/null 2>&1; then
         sudo rpm -e zenbook-duo-control 2>/dev/null || true
     elif command -v dpkg >/dev/null 2>&1; then
         sudo dpkg -r zenbook-duo-control 2>/dev/null || true
     fi
 
+    sudo rm -f /usr/local/bin/zenbook-duo-control
+    sudo rm -f /usr/share/applications/zenbook-duo-control.desktop
+    sudo rm -f /usr/share/pixmaps/zenbook-duo-control.png
+
     # Remove any legacy user-local desktop entry created by older install-ui.sh versions.
     rm -f "$TARGET_HOME/.local/share/applications/zenbook-duo-control.desktop" 2>/dev/null || true
     update-desktop-database "$TARGET_HOME/.local/share/applications" 2>/dev/null || true
+    update-desktop-database /usr/share/applications 2>/dev/null || true
 fi
 
 # ============================================================================

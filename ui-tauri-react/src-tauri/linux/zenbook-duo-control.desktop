@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Zenbook Duo Control
+Comment=Zenbook Duo Linux Control Panel
+Exec=zenbook-duo-control
+Icon=zenbook-duo-control
+Terminal=false
+Categories=Utility;Settings;
+StartupNotify=true

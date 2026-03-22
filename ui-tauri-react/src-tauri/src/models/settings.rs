@@ -17,6 +17,8 @@ pub struct DuoSettings {
     pub usb_media_remap_enabled: bool,
     #[serde(default)]
     pub setup_completed: bool,
+    #[serde(default)]
+    pub touchscreen_disabled: Vec<String>,
 }
 
 impl Default for DuoSettings {
@@ -29,6 +31,7 @@ impl Default for DuoSettings {
             theme: ThemePreference::System,
             usb_media_remap_enabled: default_usb_media_remap_enabled(),
             setup_completed: false,
+            touchscreen_disabled: Vec::new(),
         }
     }
 }

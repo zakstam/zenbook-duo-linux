@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import BacklightSlider from "@/components/BacklightSlider";
 import OrientationButtons from "@/components/OrientationButtons";
-import { restartService } from "@/lib/tauri";
+import { restartService, listTouchscreens, setTouchscreenEnabled, loadSettings, saveSettings } from "@/lib/tauri";
+import type { TouchscreenDevice } from "@/types/duo";
+import { Switch } from "@/components/ui/switch";
 import { refreshStatus, useDispatch, useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -11,6 +13,7 @@ import {
   IconRotate,
   IconServer,
   IconCheck,
+  IconHandFinger,
 } from "@tabler/icons-react";
 
 export default function Controls() {
@@ -18,6 +21,28 @@ export default function Controls() {
   const store = useStore();
   const [restarting, setRestarting] = useState(false);
   const [restarted, setRestarted] = useState(false);
+  const [touchscreens, setTouchscreens] = useState<TouchscreenDevice[]>([]);
+
+  useEffect(() => {
+    listTouchscreens().then(setTouchscreens).catch(console.error);
+  }, []);
+
+  const handleTouchToggle = async (connector: string, enabled: boolean) => {
+    try {
+      await setTouchscreenEnabled(connector, enabled);
+      setTouchscreens((prev) =>
+        prev.map((ts) => (ts.connector === connector ? { ...ts, enabled } : ts))
+      );
+      const settings = await loadSettings();
+      const disabled = settings.touchscreenDisabled ?? [];
+      settings.touchscreenDisabled = enabled
+        ? disabled.filter((c) => c !== connector)
+        : [...disabled.filter((c) => c !== connector), connector];
+      await saveSettings(settings);
+    } catch (e) {
+      console.error("Failed to toggle touchscreen:", e);
+    }
+  };
 
   const handleRestart = async () => {
     setRestarting(true);
@@ -123,6 +148,42 @@ export default function Controls() {
             </Button>
           </div>
         </div>
+
+        {touchscreens.length > 0 && (
+          <div className="glass-card animate-stagger-in stagger-4 rounded-xl p-5">
+            <div className="mb-5 flex items-center gap-2.5">
+              <div className="flex size-7 items-center justify-center rounded-lg bg-purple-500/12 text-purple-500 dark:bg-purple-400/10 dark:text-purple-400">
+                <IconHandFinger className="size-3.5" stroke={1.75} />
+              </div>
+              <div>
+                <h3 className="text-[13px] font-semibold text-foreground">
+                  Touchscreen
+                </h3>
+                <p className="text-[11px] text-muted-foreground">
+                  Enable or disable touch input per display
+                </p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {touchscreens.map((ts) => (
+                <div key={ts.connector} className="flex items-center justify-between">
+                  <span className="text-[13px]">
+                    {ts.connector}
+                    <span className="text-muted-foreground ml-2 text-[11px]">
+                      {ts.name}
+                    </span>
+                  </span>
+                  <Switch
+                    checked={ts.enabled}
+                    onCheckedChange={(checked) =>
+                      handleTouchToggle(ts.connector, checked)
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

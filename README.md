@@ -7,7 +7,7 @@ This project adds better Linux support for the Zenbook Duo by running a small ba
 ### What you need
 
 - An ASUS Zenbook Duo
-- GNOME on Wayland, KDE Plasma on Wayland, or Niri (tested on Fedora; Ubuntu GNOME should also work)
+- GNOME on Wayland, KDE Plasma on Wayland, or Niri
 - A Terminal and your sudo password (the installer needs to change system settings)
 
 ### Install (recommended)
@@ -63,6 +63,7 @@ To remove the optional UI app:
 
 - Fedora / RHEL-based: `sudo dnf remove zenbook-duo-control`
 - Debian / Ubuntu-based: `sudo apt remove zenbook-duo-control`
+- Arch / CachyOS: `sudo rm -f /usr/local/bin/zenbook-duo-control /usr/share/applications/zenbook-duo-control.desktop /usr/share/pixmaps/zenbook-duo-control.png`
 
 ---
 
@@ -134,7 +135,7 @@ Notes:
 - Reboot/login comes up in the wrong layout:
   - After login, the session agent should auto-sync the current attached/detached state without a manual restart
   - Check `systemctl --user status zenbook-duo-session-agent.service`
-  - Confirm your user manager has the desktop-session environment: `systemctl --user show-environment | grep -E 'DISPLAY|WAYLAND_DISPLAY|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|DESKTOP_SESSION|XDG_SESSION_TYPE'`
+  - Confirm your user manager has the desktop-session environment: `systemctl --user show-environment | grep -E 'DISPLAY|WAYLAND_DISPLAY|NIRI_SOCKET|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|DESKTOP_SESSION|XDG_SESSION_TYPE'`
   - If those variables are missing after reinstalling, rerun `./install.sh` from an active desktop session, then log out and back in once
 - `Failed to read events: No such device (os error 19)` when reattaching the keyboard:
   - This comes from the optional USB media remap helper when the event node disappears during hotplug.
@@ -159,12 +160,14 @@ sudo udevadm trigger
 |--------|----------------|
 | Fedora / RHEL-based | `dnf` |
 | Debian / Ubuntu-based | `apt` |
+| Arch / CachyOS | `pacman` |
 
 Other distros: install dependencies manually and run `./setup-gnome.sh`, `./setup-kde.sh`, or `./setup-niri.sh` (it exits if it cannot detect your package manager).
 
 ### Control Panel UI (Tauri + React)
 
 - Build & install: `./install-ui.sh`
+- Arch / CachyOS note: `install-ui.sh` builds the UI locally, then installs `zenbook-duo-control` to `/usr/local/bin` and desktop assets under `/usr/share`
 - Dev mode:
 
 ```bash

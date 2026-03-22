@@ -13,5 +13,10 @@ pub fn read_log(lines: usize) -> Vec<String> {
 
 #[tauri::command]
 pub fn clear_log() -> Result<(), String> {
-    logger::clear().or_else(|_| sysfs::clear_log())
+    match client::request(DaemonRequest::ClearLogs) {
+        Ok(DaemonResponse::Ack) => Ok(()),
+        Ok(DaemonResponse::Error { message }) => Err(message),
+        Ok(_) => logger::clear().or_else(|_| sysfs::clear_log()),
+        Err(_) => logger::clear().or_else(|_| sysfs::clear_log()),
+    }
 }

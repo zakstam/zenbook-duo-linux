@@ -12,6 +12,8 @@ pub struct RuntimeState {
     pub status: DuoStatus,
     pub settings: DuoSettings,
     pub session_agent: SessionAgentState,
+    #[serde(default)]
+    pub last_runtime_notification: Option<RuntimeNotificationState>,
     pub remembered_wifi_enabled: Option<bool>,
     pub remembered_bluetooth_enabled: Option<bool>,
     pub last_updated: DateTime<Utc>,
@@ -24,6 +26,7 @@ impl Default for RuntimeState {
             status: DuoStatus::default(),
             settings: DuoSettings::default(),
             session_agent: SessionAgentState::default(),
+            last_runtime_notification: None,
             remembered_wifi_enabled: None,
             remembered_bluetooth_enabled: None,
             last_updated: Utc::now(),
@@ -39,6 +42,13 @@ pub struct SessionAgentState {
     pub session_id: Option<String>,
     pub backend: Option<SessionBackend>,
     pub socket_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeNotificationState {
+    pub key: String,
+    pub emitted_at: DateTime<Utc>,
 }
 
 impl RuntimeState {

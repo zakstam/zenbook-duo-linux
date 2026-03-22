@@ -52,6 +52,7 @@ const defaultSettings: DuoSettings = {
   theme: "system",
   usbMediaRemapEnabled: true,
   setupCompleted: false,
+  touchscreenDisabled: [],
 };
 
 const initialState: AppState = {

@@ -41,6 +41,14 @@ export interface DuoSettings {
   theme: ThemePreference;
   usbMediaRemapEnabled: boolean;
   setupCompleted: boolean;
+  touchscreenDisabled: string[];
+}
+
+export interface TouchscreenDevice {
+  name: string;
+  i2cId: string;
+  connector: string;
+  enabled: boolean;
 }
 
 export interface UsbMediaRemapStatus {

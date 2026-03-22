@@ -19,27 +19,40 @@ use crate::runtime::{paths, state::RuntimeState};
 
 pub async fn run() -> Result<(), String> {
     ensure_user_runtime_dir()?;
-    remove_stale_socket(paths::current_user_session_socket_path().as_path());
+    let listener = bind_session_listener(paths::current_user_session_socket_path().as_path())?;
 
-    register_with_daemon().await?;
+    let backend = wait_for_ready_backend().await?;
+    register_with_daemon(backend).await?;
     tokio::spawn(async {
         if let Err(err) = watch_rotation().await {
             log::warn!("session-agent rotation watcher failed: {err}");
+            let _ = send_runtime_notification(
+                "Zenbook Duo Runtime Error",
+                &format!("Rotation watcher failed: {err}"),
+                true,
+            );
         }
     });
     tokio::spawn(async {
         if let Err(err) = watch_brightness_sync().await {
             log::warn!("session-agent brightness watcher failed: {err}");
+            let _ = send_runtime_notification(
+                "Zenbook Duo Runtime Error",
+                &format!("Brightness sync watcher failed: {err}"),
+                true,
+            );
         }
     });
     tokio::task::spawn_blocking(|| {
         if let Err(err) = watch_keyboard_hotkeys() {
             log::warn!("session-agent keyboard hotkey watcher failed: {err}");
+            let _ = send_runtime_notification(
+                "Zenbook Duo Runtime Error",
+                &format!("Keyboard hotkey watcher failed: {err}"),
+                true,
+            );
         }
     });
-
-    let listener = UnixListener::bind(paths::current_user_session_socket_path())
-        .map_err(|e| format!("Failed to bind session agent socket: {e}"))?;
 
     loop {
         let (stream, _) = listener
@@ -54,13 +67,12 @@ pub async fn run() -> Result<(), String> {
     }
 }
 
-async fn register_with_daemon() -> Result<(), String> {
+async fn register_with_daemon(backend: SessionBackend) -> Result<(), String> {
     let stream = UnixStream::connect(paths::daemon_socket_path())
         .await
         .map_err(|e| format!("Failed to connect to daemon socket: {e}"))?;
     let (reader, mut writer) = stream.into_split();
 
-    let backend = detect_backend();
     let request = Envelope::new(DaemonRequest::RegisterSessionAgent {
         session_id: detect_session_id(),
         backend,
@@ -131,6 +143,14 @@ async fn handle_session_command(stream: UnixStream) -> Result<(), String> {
                     Err(message) => SessionResponse::Error { message },
                 }
             }
+            SessionCommand::ShowNotification {
+                title,
+                message,
+                urgent,
+            } => match send_runtime_notification(&title, &message, urgent) {
+                Ok(()) => SessionResponse::Ack,
+                Err(message) => SessionResponse::Error { message },
+            },
             SessionCommand::OpenEmojiPicker => SessionResponse::Ack,
         };
         let line = serde_json::to_string(&Envelope::new(response))
@@ -146,6 +166,49 @@ async fn handle_session_command(stream: UnixStream) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn bind_session_listener(path: &Path) -> Result<UnixListener, String> {
+    remove_stale_socket(path);
+    UnixListener::bind(path).map_err(|e| format!("Failed to bind session agent socket: {e}"))
+}
+
+fn niri_runtime_dir() -> Option<std::path::PathBuf> {
+    env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from)
+}
+
+fn resolve_niri_socket() -> Option<std::path::PathBuf> {
+    let env_socket = env::var_os("NIRI_SOCKET").map(std::path::PathBuf::from);
+    resolve_niri_socket_from(env_socket.as_deref(), niri_runtime_dir().as_deref())
+}
+
+fn resolve_niri_socket_from(env_socket: Option<&Path>, runtime_dir: Option<&Path>) -> Option<std::path::PathBuf> {
+    if let Some(env_socket) = env_socket {
+        if env_socket.exists() {
+            return Some(env_socket.to_path_buf());
+        }
+    }
+
+    let runtime_dir = runtime_dir?;
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+
+    for entry in fs::read_dir(runtime_dir).ok()? {
+        let entry = entry.ok()?;
+        let path = entry.path();
+        let name = path.file_name()?.to_str()?;
+        if !name.starts_with("niri.") || !name.ends_with(".sock") {
+            continue;
+        }
+
+        let metadata = entry.metadata().ok()?;
+        let modified = metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        match &newest {
+            Some((current_modified, _)) if *current_modified >= modified => {}
+            _ => newest = Some((modified, path)),
+        }
+    }
+
+    newest.map(|(_, path)| path)
 }
 
 fn ensure_user_runtime_dir() -> Result<(), String> {
@@ -170,25 +233,106 @@ fn detect_backend() -> SessionBackend {
         .or_else(|_| env::var("DESKTOP_SESSION"))
         .unwrap_or_default()
         .to_lowercase();
+    detect_backend_from(current, resolve_niri_socket().is_some())
+}
 
+fn detect_backend_from(current: String, has_niri_socket: bool) -> SessionBackend {
     if current.contains("gnome") {
         SessionBackend::Gnome
     } else if current.contains("plasma") || current.contains("kde") {
         SessionBackend::Kde
-    } else if current.contains("niri") {
+    } else if current.contains("niri") || has_niri_socket {
         SessionBackend::Niri
     } else {
         SessionBackend::Unknown
     }
 }
 
+fn detect_ready_backend() -> SessionBackend {
+    detect_ready_backend_from(detect_backend(), backend_is_ready)
+}
+
+fn detect_ready_backend_from<F>(hinted: SessionBackend, mut is_ready: F) -> SessionBackend
+where
+    F: FnMut(SessionBackend) -> bool,
+{
+    for backend in backend_probe_order(hinted) {
+        if is_ready(backend.clone()) {
+            return backend;
+        }
+    }
+    SessionBackend::Unknown
+}
+
+fn backend_probe_order(hinted: SessionBackend) -> Vec<SessionBackend> {
+    let mut order = Vec::new();
+    if hinted != SessionBackend::Unknown {
+        order.push(hinted);
+    }
+    for backend in [SessionBackend::Niri, SessionBackend::Gnome, SessionBackend::Kde] {
+        if !order.contains(&backend) {
+            order.push(backend);
+        }
+    }
+    order
+}
+
+fn backend_is_ready(backend: SessionBackend) -> bool {
+    match backend {
+        SessionBackend::Gnome => Command::new("gdctl")
+            .arg("show")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false),
+        SessionBackend::Kde => Command::new("kscreen-doctor")
+            .arg("-j")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false),
+        SessionBackend::Niri => build_niri_command(&["msg", "--json", "outputs"])
+            .and_then(|mut command| {
+                command
+                    .output()
+                    .map_err(|e| format!("Failed to run niri readiness probe: {e}"))
+            })
+            .map(|output| output.status.success())
+            .unwrap_or(false),
+        SessionBackend::Unknown => false,
+    }
+}
+
+async fn wait_for_ready_backend() -> Result<SessionBackend, String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut hinted_backend = detect_backend();
+
+    loop {
+        let backend = detect_ready_backend_from(hinted_backend.clone(), backend_is_ready);
+        if backend != SessionBackend::Unknown {
+            return Ok(backend);
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return Err("No supported session backend became ready before timeout".into());
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        hinted_backend = detect_backend();
+    }
+}
+
 fn apply_dock_mode(attached: bool, scale: f64) -> Result<(), String> {
-    match detect_backend() {
+    match detect_ready_backend() {
         SessionBackend::Gnome => apply_gnome_dock_mode(attached, scale),
         SessionBackend::Kde => apply_kde_dock_mode(attached),
         SessionBackend::Niri => apply_niri_dock_mode(attached),
         SessionBackend::Unknown => Err("Unsupported session backend for dock mode".into()),
+    }?;
+
+    if let Err(err) = send_dock_mode_notification(attached) {
+        log::warn!("failed to send dock-mode notification: {err}");
     }
+
+    Ok(())
 }
 
 fn apply_gnome_dock_mode(attached: bool, scale: f64) -> Result<(), String> {
@@ -246,15 +390,14 @@ fn apply_kde_dock_mode(attached: bool) -> Result<(), String> {
 
 fn apply_niri_dock_mode(attached: bool) -> Result<(), String> {
     if attached {
-        run_command("niri", &["msg", "output", "eDP-1", "on"])?;
-        run_command("niri", &["msg", "output", "eDP-2", "off"])
+        run_niri_command(&["msg", "output", "eDP-1", "on"])?;
+        run_niri_command(&["msg", "output", "eDP-2", "off"])
     } else {
-        run_command("niri", &["msg", "output", "eDP-1", "on"])?;
-        run_command("niri", &["msg", "output", "eDP-2", "on"])?;
+        run_niri_command(&["msg", "output", "eDP-1", "on"])?;
+        run_niri_command(&["msg", "output", "eDP-2", "on"])?;
         let (_, h) = niri_output_logical_size("eDP-1").unwrap_or((0, 0));
-        run_command("niri", &["msg", "output", "eDP-1", "position", "set", "0", "0"])?;
-        run_command(
-            "niri",
+        run_niri_command(&["msg", "output", "eDP-1", "position", "set", "0", "0"])?;
+        run_niri_command(
             &[
                 "msg",
                 "output",
@@ -301,8 +444,7 @@ fn kde_output_logical_size(name: &str) -> Result<(i64, i64), String> {
 }
 
 fn niri_output_logical_size(name: &str) -> Result<(i64, i64), String> {
-    let output = Command::new("niri")
-        .args(["msg", "--json", "outputs"])
+    let output = build_niri_command(&["msg", "--json", "outputs"])?
         .output()
         .map_err(|e| format!("Failed to run niri msg: {e}"))?;
     if !output.status.success() {
@@ -341,6 +483,69 @@ fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<(), String> {
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
+}
+
+fn build_niri_command(args: &[&str]) -> Result<Command, String> {
+    let mut command = Command::new("niri");
+    command.args(args);
+    if let Some(socket) = resolve_niri_socket() {
+        command.env("NIRI_SOCKET", socket);
+    }
+    Ok(command)
+}
+
+fn run_niri_command(args: &[&str]) -> Result<(), String> {
+    let output = build_niri_command(args)?
+        .output()
+        .map_err(|e| format!("Failed to run niri msg: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn dock_mode_notification_message(attached: bool) -> &'static str {
+    if attached {
+        "Keyboard attached: bottom screen disabled"
+    } else {
+        "Keyboard detached: bottom screen enabled"
+    }
+}
+
+fn send_dock_mode_notification(attached: bool) -> Result<(), String> {
+    send_runtime_notification(
+        "Zenbook Duo Control",
+        dock_mode_notification_message(attached),
+        false,
+    )
+}
+
+fn send_runtime_notification(title: &str, message: &str, urgent: bool) -> Result<(), String> {
+    let runtime_dir = env::var("XDG_RUNTIME_DIR")
+        .map_err(|_| "XDG_RUNTIME_DIR is not set for runtime notifications".to_string())?;
+    let bus_address = env::var("DBUS_SESSION_BUS_ADDRESS")
+        .unwrap_or_else(|_| format!("unix:path={runtime_dir}/bus"));
+    let urgency = if urgent { "critical" } else { "normal" };
+
+    Command::new("notify-send")
+        .args([
+            "-a",
+            "Zenbook Duo Control",
+            "-u",
+            urgency,
+            "-i",
+            "input-keyboard",
+            title,
+            message,
+        ])
+        .env("XDG_RUNTIME_DIR", runtime_dir)
+        .env("DBUS_SESSION_BUS_ADDRESS", bus_address)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to launch runtime notification: {e}"))
 }
 
 async fn watch_brightness_sync() -> Result<(), String> {
@@ -667,11 +872,143 @@ fn parse_rotation_line(line: &str) -> Option<Orientation> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn watches_both_known_hotkey_abs_codes() {
         assert!(is_hotkey_abs_code(0x28));
         assert!(is_hotkey_abs_code(AbsoluteAxisType::ABS_VOLUME.0));
         assert!(!is_hotkey_abs_code(0x27));
+    }
+
+    #[test]
+    fn dock_mode_notification_mentions_bottom_screen_enabled_on_detach() {
+        assert_eq!(
+            dock_mode_notification_message(false),
+            "Keyboard detached: bottom screen enabled"
+        );
+    }
+
+    #[test]
+    fn dock_mode_notification_mentions_bottom_screen_disabled_on_attach() {
+        assert_eq!(
+            dock_mode_notification_message(true),
+            "Keyboard attached: bottom screen disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_session_listener_creates_socket_before_registration() {
+        let socket_path = unique_test_socket_path("session-listener");
+        let listener = bind_session_listener(&socket_path).expect("bind test session listener");
+
+        assert!(socket_path.exists(), "listener should create the socket path");
+
+        drop(listener);
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[test]
+    fn resolve_niri_socket_prefers_existing_env_socket() {
+        let runtime_dir = temp_runtime_dir("niri-env");
+        let env_socket = runtime_dir.join("niri.wayland-1.env.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&env_socket).expect("bind env socket");
+
+        let resolved = resolve_niri_socket_from(
+            Some(env_socket.as_path()),
+            Some(runtime_dir.as_path()),
+        )
+        .expect("resolve niri socket");
+
+        assert_eq!(resolved, env_socket);
+
+        drop(listener);
+        let _ = fs::remove_file(&env_socket);
+        let _ = fs::remove_dir_all(&runtime_dir);
+    }
+
+    #[test]
+    fn resolve_niri_socket_falls_back_to_latest_runtime_socket() {
+        let runtime_dir = temp_runtime_dir("niri-fallback");
+        let older_socket = runtime_dir.join("niri.wayland-1.older.sock");
+        let newer_socket = runtime_dir.join("niri.wayland-1.newer.sock");
+        let older_listener =
+            std::os::unix::net::UnixListener::bind(&older_socket).expect("bind older socket");
+        std::thread::sleep(Duration::from_millis(10));
+        let newer_listener =
+            std::os::unix::net::UnixListener::bind(&newer_socket).expect("bind newer socket");
+
+        let resolved = resolve_niri_socket_from(None, Some(runtime_dir.as_path()))
+            .expect("resolve niri socket");
+
+        assert_eq!(resolved, newer_socket);
+
+        drop(older_listener);
+        drop(newer_listener);
+        let _ = fs::remove_file(&older_socket);
+        let _ = fs::remove_file(&newer_socket);
+        let _ = fs::remove_dir_all(&runtime_dir);
+    }
+
+    #[test]
+    fn detect_backend_falls_back_to_niri_when_socket_is_available() {
+        assert_eq!(
+            detect_backend_from("".to_string(), true),
+            SessionBackend::Niri
+        );
+    }
+
+    #[test]
+    fn detect_backend_remains_unknown_without_desktop_hint_or_socket() {
+        assert_eq!(
+            detect_backend_from("".to_string(), false),
+            SessionBackend::Unknown
+        );
+    }
+
+    #[test]
+    fn detect_ready_backend_prefers_hint_when_ready() {
+        let ready = detect_ready_backend_from(SessionBackend::Kde, |backend| {
+            backend == SessionBackend::Kde
+        });
+        assert_eq!(ready, SessionBackend::Kde);
+    }
+
+    #[test]
+    fn detect_ready_backend_falls_through_to_other_ready_backend() {
+        let ready = detect_ready_backend_from(SessionBackend::Unknown, |backend| {
+            backend == SessionBackend::Niri
+        });
+        assert_eq!(ready, SessionBackend::Niri);
+    }
+
+    #[test]
+    fn detect_ready_backend_returns_unknown_when_nothing_is_ready() {
+        let ready = detect_ready_backend_from(SessionBackend::Gnome, |_| false);
+        assert_eq!(ready, SessionBackend::Unknown);
+    }
+
+    fn unique_test_socket_path(label: &str) -> PathBuf {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("zenbook-duo-{label}-{nanos}-{id}.sock"))
+    }
+
+    fn temp_runtime_dir(label: &str) -> PathBuf {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("zenbook-duo-{label}-{nanos}-{id}"));
+        fs::create_dir_all(&dir).expect("create temp runtime dir");
+        dir
     }
 }

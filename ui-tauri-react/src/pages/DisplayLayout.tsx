@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import DisplayCanvas from "@/components/DisplayCanvas";
-import { getDisplayLayout, applyDisplayLayout } from "@/lib/tauri";
-import type { DisplayLayout as LayoutType } from "@/types/duo";
+import { getDisplayLayout, applyDisplayLayout, listTouchscreens, setTouchscreenEnabled, loadSettings, saveSettings } from "@/lib/tauri";
+import type { DisplayLayout as LayoutType, TouchscreenDevice } from "@/types/duo";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -21,6 +22,28 @@ export default function DisplayLayout() {
   const [layout, setLayout] = useState<LayoutType>({ displays: [] });
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState("");
+  const [touchscreens, setTouchscreens] = useState<TouchscreenDevice[]>([]);
+
+  useEffect(() => {
+    listTouchscreens().then(setTouchscreens).catch(console.error);
+  }, []);
+
+  const handleTouchToggle = async (connector: string, enabled: boolean) => {
+    try {
+      await setTouchscreenEnabled(connector, enabled);
+      setTouchscreens((prev) =>
+        prev.map((ts) => (ts.connector === connector ? { ...ts, enabled } : ts))
+      );
+      const settings = await loadSettings();
+      const disabled = settings.touchscreenDisabled ?? [];
+      settings.touchscreenDisabled = enabled
+        ? disabled.filter((c) => c !== connector)
+        : [...disabled.filter((c) => c !== connector), connector];
+      await saveSettings(settings);
+    } catch (e) {
+      console.error("Failed to toggle touchscreen:", e);
+    }
+  };
 
   useEffect(() => {
     getDisplayLayout()
@@ -100,9 +123,26 @@ export default function DisplayLayout() {
                   </span>
                 )}
               </div>
-              <span className="font-mono text-[12px] text-muted-foreground">
-                {d.width}x{d.height} @ {d.refreshRate.toFixed(1)}Hz | {d.scale}x | ({d.x}, {d.y})
-              </span>
+              <div className="flex items-center gap-4">
+                <span className="font-mono text-[12px] text-muted-foreground">
+                  {d.width}x{d.height} @ {d.refreshRate.toFixed(1)}Hz | {d.scale}x | ({d.x}, {d.y})
+                </span>
+                {(() => {
+                  const ts = touchscreens.find((t) => t.connector === d.connector);
+                  if (!ts) return null;
+                  return (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-muted-foreground">Touch</span>
+                      <Switch
+                        checked={ts.enabled}
+                        onCheckedChange={(checked) =>
+                          handleTouchToggle(d.connector, checked)
+                        }
+                      />
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
           ))}
         </div>

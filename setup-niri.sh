@@ -100,6 +100,12 @@ elif command -v apt &>/dev/null; then
         niri \
         iio-sensor-proxy \
         systemd
+elif command -v pacman &>/dev/null; then
+    sudo pacman -S --needed --noconfirm \
+        usbutils \
+        niri \
+        iio-sensor-proxy \
+        systemd
 else
     echo "Unsupported package manager. Please install dependencies manually:"
     echo "  usbutils, niri, iio-sensor-proxy, systemd"

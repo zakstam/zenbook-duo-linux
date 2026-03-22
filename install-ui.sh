@@ -146,6 +146,8 @@ if command -v dnf >/dev/null 2>&1; then
   PKG_MGR="dnf"
 elif command -v apt >/dev/null 2>&1; then
   PKG_MGR="apt"
+elif command -v pacman >/dev/null 2>&1; then
+  PKG_MGR="pacman"
 fi
 
 SUDO_KEEPALIVE_PID=""
@@ -208,6 +210,26 @@ install_prereqs_apt() {
     || echo "WARN: Could not install an AppIndicator *-dev package. Tray integration may not build on some desktops." >&2
 }
 
+install_prereqs_pacman() {
+  echo "Installing build prerequisites (pacman)..."
+  sudo pacman -S --needed --noconfirm \
+    git \
+    curl \
+    nodejs \
+    npm \
+    base-devel \
+    pkgconf \
+    openssl \
+    gtk3 \
+    webkit2gtk-4.1 \
+    librsvg \
+    desktop-file-utils
+
+  echo "Installing AppIndicator package (best-effort)..."
+  sudo pacman -S --needed --noconfirm libayatana-appindicator \
+    || echo "WARN: Could not install libayatana-appindicator. Tray integration may not build on some desktops." >&2
+}
+
 ensure_rust() {
   if command -v cargo >/dev/null 2>&1; then
     return 0
@@ -223,8 +245,10 @@ if [ "$PKG_MGR" = "dnf" ]; then
   install_prereqs_dnf
 elif [ "$PKG_MGR" = "apt" ]; then
   install_prereqs_apt
+elif [ "$PKG_MGR" = "pacman" ]; then
+  install_prereqs_pacman
 else
-  echo "WARN: Could not detect dnf/apt; skipping prereq installation." >&2
+  echo "WARN: Could not detect dnf/apt/pacman; skipping prereq installation." >&2
 fi
 
 echo "Prerequisites step complete."
@@ -237,6 +261,38 @@ need_cmd npm
 need_cmd cargo
 
 echo "Toolchain looks good. Starting clone/build/install..."
+
+install_ui_direct() {
+  local built_binary="src-tauri/target/release/zenbook-duo-control"
+  local desktop_src="src-tauri/linux/zenbook-duo-control.desktop"
+  local icon_src="src-tauri/icons/icon.png"
+
+  echo "Building UI binary directly for pacman-based systems..."
+  npx tauri build --no-bundle
+
+  [ -f "${built_binary}" ] || die "No built UI binary found at ${built_binary}"
+  [ -f "${desktop_src}" ] || die "Desktop entry template missing at ${desktop_src}"
+  [ -f "${icon_src}" ] || die "Icon missing at ${icon_src}"
+
+  local was_running=false
+  if pgrep -x zenbook-duo-control >/dev/null 2>&1; then
+    was_running=true
+    stop_running_app || true
+  fi
+
+  echo "Installing UI binary and desktop assets..."
+  sudo install -Dm755 "${built_binary}" /usr/local/bin/zenbook-duo-control
+  sudo install -Dm644 "${desktop_src}" /usr/share/applications/zenbook-duo-control.desktop
+  sudo install -Dm644 "${icon_src}" /usr/share/pixmaps/zenbook-duo-control.png
+
+  if [ "${was_running}" = true ]; then
+    start_app_background || true
+  fi
+
+  rm -f "$HOME/.local/share/applications/zenbook-duo-control.desktop" 2>/dev/null || true
+  update-desktop-database /usr/share/applications 2>/dev/null || true
+  gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
+}
 
 if [ -z "$TARGET_DIR" ]; then
   # If the script is running from inside the repo, build in-place by default
@@ -292,8 +348,17 @@ if [ "$PKG_MGR" = "dnf" ]; then
   npm run build -- --bundles rpm
 elif [ "$PKG_MGR" = "apt" ]; then
   npm run build -- --bundles deb
+elif [ "$PKG_MGR" = "pacman" ]; then
+  install_ui_direct
 else
   npm run build -- --bundles deb rpm
+fi
+
+if [ "$PKG_MGR" = "pacman" ]; then
+  echo ""
+  echo "Installed. You can launch 'Zenbook Duo Control' from your app menu,"
+  echo "or run: zenbook-duo-control"
+  exit 0
 fi
 
 RPM_GLOB="src-tauri/target/release/bundle/rpm/"'*.rpm'
@@ -340,7 +405,7 @@ elif [ "$PKG_MGR" = "apt" ]; then
   rm -f "$HOME/.local/share/applications/zenbook-duo-control.desktop" 2>/dev/null || true
   update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 else
-  die "Unsupported system (expected dnf or apt). Package is built under src-tauri/target/release/bundle/."
+  die "Unsupported system (expected dnf, apt, or pacman). Package is built under src-tauri/target/release/bundle/."
 fi
 
 echo ""

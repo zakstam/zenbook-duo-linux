@@ -79,6 +79,12 @@ async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) {
             }
             Err(err) => {
                 log::warn!("failed to auto-start usb media remap: {err}");
+                crate::runtime::daemon::notify_runtime_error(
+                    &state,
+                    "Zenbook Duo Runtime Error",
+                    &format!("USB media remap auto-start failed: {err}"),
+                )
+                .await;
                 let _ = logger::append_line(format!(
                     "rust-daemon: usb media remap auto-start failed: {}",
                     err
@@ -87,6 +93,12 @@ async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) {
         }
     } else if let Err(err) = crate::commands::usb_media_remap::stop_remap() {
         log::warn!("failed to auto-stop usb media remap: {err}");
+        crate::runtime::daemon::notify_runtime_error(
+            &state,
+            "Zenbook Duo Runtime Error",
+            &format!("USB media remap auto-stop failed: {err}"),
+        )
+        .await;
         let _ = logger::append_line(format!(
             "rust-daemon: usb media remap auto-stop failed: {}",
             err
@@ -102,6 +114,12 @@ async fn apply_policy_actions(state: Arc<RwLock<RuntimeState>>, actions: Vec<Pol
             PolicyAction::SetWifi(enabled) => {
                 if let Err(err) = crate::runtime::policy::set_wifi_enabled(enabled) {
                     log::warn!("failed to set wifi policy action: {err}");
+                    crate::runtime::daemon::notify_runtime_error(
+                        &state,
+                        "Zenbook Duo Runtime Error",
+                        &format!("Wi-Fi policy action failed: {err}"),
+                    )
+                    .await;
                     let _ = logger::append_line(format!(
                         "rust-daemon: wifi policy action failed (enabled={}): {}",
                         enabled, err
@@ -116,6 +134,12 @@ async fn apply_policy_actions(state: Arc<RwLock<RuntimeState>>, actions: Vec<Pol
             PolicyAction::SetBluetooth(enabled) => {
                 if let Err(err) = crate::runtime::policy::set_bluetooth_enabled(enabled) {
                     log::warn!("failed to set bluetooth policy action: {err}");
+                    crate::runtime::daemon::notify_runtime_error(
+                        &state,
+                        "Zenbook Duo Runtime Error",
+                        &format!("Bluetooth policy action failed: {err}"),
+                    )
+                    .await;
                     let _ = logger::append_line(format!(
                         "rust-daemon: bluetooth policy action failed (enabled={}): {}",
                         enabled, err
@@ -130,6 +154,12 @@ async fn apply_policy_actions(state: Arc<RwLock<RuntimeState>>, actions: Vec<Pol
             PolicyAction::SetBacklight(level) => {
                 if let Err(err) = crate::hardware::hid::set_backlight(level) {
                     log::warn!("failed to set backlight policy action: {err}");
+                    crate::runtime::daemon::notify_runtime_error(
+                        &state,
+                        "Zenbook Duo Runtime Error",
+                        &format!("Backlight policy action failed: {err}"),
+                    )
+                    .await;
                     let _ = logger::append_line(format!(
                         "rust-daemon: backlight policy action failed (level={}): {}",
                         level, err
@@ -162,6 +192,12 @@ async fn apply_policy_actions(state: Arc<RwLock<RuntimeState>>, actions: Vec<Pol
                 .await
                 {
                     log::warn!("failed to apply dock-mode policy action: {err}");
+                    crate::runtime::daemon::notify_runtime_error(
+                        &state,
+                        "Zenbook Duo Runtime Error",
+                        &format!("Dock-mode policy action failed: {err}"),
+                    )
+                    .await;
                     let _ = logger::append_line(format!(
                         "rust-daemon: dock-mode policy action failed (attached={}, scale={}): {}",
                         attached, scale, err

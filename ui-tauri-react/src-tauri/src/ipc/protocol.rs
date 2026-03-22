@@ -44,7 +44,10 @@ pub enum DaemonRequest {
         socket_path: String,
     },
     TailLogs { lines: usize },
+    ClearLogs,
     GetRecentEvents { limit: usize },
+    ListTouchscreens,
+    SetTouchscreenEnabled { connector: String, enabled: bool },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +61,7 @@ pub enum DaemonResponse {
     UsbMediaRemapStatus { status: UsbMediaRemapStatus },
     Logs { lines: Vec<String> },
     Events { events: Vec<HardwareEvent> },
+    Touchscreens { devices: Vec<crate::hardware::touchscreen::TouchscreenDevice> },
     Error { message: String },
 }
 
@@ -96,6 +100,11 @@ pub enum SessionCommand {
     SetDockMode { attached: bool, scale: f64 },
     ApplyDisplayLayout { layout: DisplayLayout },
     SetOrientation { orientation: Orientation },
+    ShowNotification {
+        title: String,
+        message: String,
+        urgent: bool,
+    },
     OpenEmojiPicker,
 }
 

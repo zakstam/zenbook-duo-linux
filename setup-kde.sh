@@ -100,6 +100,12 @@ elif command -v apt &>/dev/null; then
         kscreen \
         iio-sensor-proxy \
         systemd
+elif command -v pacman &>/dev/null; then
+    sudo pacman -S --needed --noconfirm \
+        usbutils \
+        kscreen \
+        iio-sensor-proxy \
+        systemd
 else
     echo "Unsupported package manager. Please install dependencies manually:"
     echo "  usbutils, kscreen/kscreen-doctor, iio-sensor-proxy, systemd"

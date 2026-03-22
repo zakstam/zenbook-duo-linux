@@ -14,6 +14,7 @@ import type {
   ReportDescriptor,
   HidrawCapture,
   UsbMediaRemapStatus,
+  TouchscreenDevice,
 } from "@/types/duo";
 
 // Status
@@ -71,6 +72,12 @@ export const diagReadReportDescriptor = (hidDeviceId: string) =>
   invoke<ReportDescriptor>("diag_read_report_descriptor", { hidDeviceId });
 export const diagCaptureHidrawPkexec = (hidrawPath: string, seconds: number) =>
   invoke<HidrawCapture>("diag_capture_hidraw_pkexec", { hidrawPath, seconds });
+
+// Touchscreen
+export const listTouchscreens = () =>
+  invoke<TouchscreenDevice[]>("list_touchscreens");
+export const setTouchscreenEnabled = (connector: string, enabled: boolean) =>
+  invoke<void>("set_touchscreen_enabled", { connector, enabled });
 
 // USB media remap
 export const usbMediaRemapStatus = () =>

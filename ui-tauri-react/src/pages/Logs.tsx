@@ -30,8 +30,8 @@ export default function Logs() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleClear = () => {
-    clearLogs(dispatch);
+  const handleClear = async () => {
+    await clearLogs(dispatch);
   };
 
   const filteredLogs = useMemo(() => {
