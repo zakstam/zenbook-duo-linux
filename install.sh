@@ -37,14 +37,14 @@ ensure_repo_checkout() {
   temp_dir="$(mktemp -d -t zenbook-duo-linux.XXXXXX)"
 
   if command -v git >/dev/null 2>&1; then
-    echo "Downloading zenbook-duo-linux..."
+    echo "Downloading zenbook-duo-linux..." >&2
     git clone --depth 1 "${REPO_URL}" "${temp_dir}" >/dev/null 2>&1
     printf '%s\n' "${temp_dir}"
     return 0
   fi
 
   if command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
-    echo "Downloading zenbook-duo-linux..."
+    echo "Downloading zenbook-duo-linux..." >&2
     curl -fsSL "${ARCHIVE_URL}" | tar -xz -C "${temp_dir}" --strip-components=1
     printf '%s\n' "${temp_dir}"
     return 0
