@@ -13,6 +13,8 @@ pub struct RuntimeState {
     pub settings: DuoSettings,
     pub session_agent: SessionAgentState,
     #[serde(default)]
+    pub usb_media_remap_reconcile: UsbMediaRemapReconcileState,
+    #[serde(default)]
     pub last_runtime_notification: Option<RuntimeNotificationState>,
     pub remembered_wifi_enabled: Option<bool>,
     pub remembered_bluetooth_enabled: Option<bool>,
@@ -26,6 +28,7 @@ impl Default for RuntimeState {
             status: DuoStatus::default(),
             settings: DuoSettings::default(),
             session_agent: SessionAgentState::default(),
+            usb_media_remap_reconcile: UsbMediaRemapReconcileState::default(),
             last_runtime_notification: None,
             remembered_wifi_enabled: None,
             remembered_bluetooth_enabled: None,
@@ -42,6 +45,14 @@ pub struct SessionAgentState {
     pub session_id: Option<String>,
     pub backend: Option<SessionBackend>,
     pub socket_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UsbMediaRemapReconcileState {
+    pub last_started_at: Option<DateTime<Utc>>,
+    pub last_start_log_at: Option<DateTime<Utc>>,
+    pub last_backoff_log_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

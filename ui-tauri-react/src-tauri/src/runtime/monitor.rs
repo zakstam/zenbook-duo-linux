@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
 use tokio::sync::RwLock;
 
 use crate::ipc::protocol::SessionCommand;
@@ -62,6 +63,8 @@ pub fn start(state: Arc<RwLock<RuntimeState>>) {
 }
 
 async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) {
+    const AUTO_START_RETRY_COOLDOWN_SECS: i64 = 15;
+
     let (should_run, is_running) = {
         let guard = state.read().await;
         let should_run = guard.status.keyboard_attached
@@ -72,13 +75,63 @@ async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) {
     };
 
     if should_run == is_running {
+        if should_run {
+            let mut guard = state.write().await;
+            guard.usb_media_remap_reconcile.last_started_at = None;
+            guard.usb_media_remap_reconcile.last_backoff_log_at = None;
+        }
         return;
     }
 
     if should_run {
+        let now = Utc::now();
+        {
+            let mut guard = state.write().await;
+            if let Some(last_started_at) = guard.usb_media_remap_reconcile.last_started_at {
+                if (now - last_started_at).num_seconds() < AUTO_START_RETRY_COOLDOWN_SECS {
+                    if guard
+                        .usb_media_remap_reconcile
+                        .last_backoff_log_at
+                        .map(|last_backoff_log_at| {
+                            (now - last_backoff_log_at).num_seconds()
+                                >= AUTO_START_RETRY_COOLDOWN_SECS
+                        })
+                        .unwrap_or(true)
+                    {
+                        guard.usb_media_remap_reconcile.last_backoff_log_at = Some(now);
+                        let _ = logger::append_line(format!(
+                            "rust-daemon: usb media remap auto-start backing off for {}s after repeated failures",
+                            AUTO_START_RETRY_COOLDOWN_SECS
+                        ));
+                    }
+                    return;
+                }
+            }
+            guard.usb_media_remap_reconcile.last_started_at = Some(now);
+            guard.usb_media_remap_reconcile.last_backoff_log_at = None;
+        }
+
         match crate::commands::usb_media_remap::start_remap() {
             Ok(()) => {
-                let _ = logger::append_line("rust-daemon: reconciled usb media remap -> started");
+                let mut should_log = false;
+                {
+                    let mut guard = state.write().await;
+                    if guard
+                        .usb_media_remap_reconcile
+                        .last_start_log_at
+                        .map(|last_log_at| {
+                            (now - last_log_at).num_seconds() >= AUTO_START_RETRY_COOLDOWN_SECS
+                        })
+                        .unwrap_or(true)
+                    {
+                        guard.usb_media_remap_reconcile.last_start_log_at = Some(now);
+                        should_log = true;
+                    }
+                }
+                if should_log {
+                    let _ =
+                        logger::append_line("rust-daemon: reconciled usb media remap -> started");
+                }
             }
             Err(err) => {
                 log::warn!("failed to auto-start usb media remap: {err}");
@@ -107,6 +160,10 @@ async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) {
             err
         ));
     } else {
+        let mut guard = state.write().await;
+        guard.usb_media_remap_reconcile.last_started_at = None;
+        guard.usb_media_remap_reconcile.last_backoff_log_at = None;
+        drop(guard);
         let _ = logger::append_line("rust-daemon: reconciled usb media remap -> stopped");
     }
 }

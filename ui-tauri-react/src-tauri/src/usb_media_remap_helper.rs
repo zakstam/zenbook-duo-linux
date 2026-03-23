@@ -40,11 +40,24 @@ where
         .or_else(find_keyboard_device)
         .ok_or_else(|| "USB keyboard event device not found".to_string())?;
 
+    log_info(&format!(
+        "Starting helper with keyboard device {}",
+        device_path.display()
+    ));
+
     let mut device = Device::open(&device_path)
         .map_err(|e| format!("Failed to open {}: {e}", device_path.display()))?;
-    device
-        .grab()
-        .map_err(|e| format!("Failed to grab device: {e}"))?;
+    device.grab().map_err(|e| {
+        format!(
+            "Failed to grab device {}: {}. Another process may already hold an exclusive grab.",
+            device_path.display(),
+            e
+        )
+    })?;
+    log_info(&format!(
+        "Grabbed keyboard device {} successfully",
+        device_path.display()
+    ));
 
     let mut keys = AttributeSet::<Key>::new();
     if let Some(supported) = device.supported_keys() {
@@ -104,6 +117,16 @@ where
 }
 
 pub fn log_error(message: &str) {
+    eprintln!("USB-REMAP - ERROR: {}", message);
+    log_line("ERROR", message);
+}
+
+pub fn log_info(message: &str) {
+    eprintln!("USB-REMAP - INFO: {}", message);
+    log_line("INFO", message);
+}
+
+fn log_line(level: &str, message: &str) {
     // Best-effort: derive the log location from --pid-file (or default).
     let pid_file = pid_file_from_env_args();
     let base_dir = base_dir_from_pid_file(&pid_file);
@@ -111,7 +134,7 @@ pub fn log_error(message: &str) {
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
     let log_path = base_dir.join("duo.log");
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-        let _ = writeln!(file, "{} - USB-REMAP - ERROR: {}", timestamp, message);
+        let _ = writeln!(file, "{} - USB-REMAP - {}: {}", timestamp, level, message);
     }
 }
 

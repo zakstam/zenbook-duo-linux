@@ -142,7 +142,7 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         ],
     )?;
 
-    let _tray = TrayIconBuilder::new()
+    let tray_builder = TrayIconBuilder::new()
         .menu(&menu)
         .tooltip("Zenbook Duo Control")
         .on_menu_event(move |app, event| {
@@ -179,7 +179,15 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 }
                 _ => {}
             }
-        })
+        });
+
+    let tray_builder = if let Some(icon) = app.default_window_icon() {
+        tray_builder.icon(icon.clone())
+    } else {
+        tray_builder
+    };
+
+    let _tray = tray_builder
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
