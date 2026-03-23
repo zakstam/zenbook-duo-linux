@@ -1,5 +1,5 @@
-use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::hardware::display_config;
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::models::{DisplayLayout, Orientation};
 use crate::runtime::client;
 

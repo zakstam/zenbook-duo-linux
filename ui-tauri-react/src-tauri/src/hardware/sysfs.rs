@@ -60,10 +60,16 @@ pub fn detect_connection_type() -> ConnectionType {
         }
     }
 
-    if saw_bluetooth {
-        ConnectionType::Bluetooth
-    } else if saw_usb {
+    // The keyboard can expose both paired Bluetooth and docked USB HID interfaces at the
+    // same time. Prefer USB so docked behavior, including the media remap helper, stays active.
+    classify_connection_type(saw_usb, saw_bluetooth)
+}
+
+fn classify_connection_type(saw_usb: bool, saw_bluetooth: bool) -> ConnectionType {
+    if saw_usb {
         ConnectionType::Usb
+    } else if saw_bluetooth {
+        ConnectionType::Bluetooth
     } else {
         ConnectionType::None
     }
@@ -134,4 +140,27 @@ pub fn read_log_lines(count: usize) -> Vec<String> {
         .into_iter()
         .rev()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefers_usb_when_both_transport_interfaces_are_visible() {
+        assert_eq!(classify_connection_type(true, true), ConnectionType::Usb);
+    }
+
+    #[test]
+    fn returns_bluetooth_when_only_bluetooth_is_visible() {
+        assert_eq!(
+            classify_connection_type(false, true),
+            ConnectionType::Bluetooth
+        );
+    }
+
+    #[test]
+    fn returns_none_when_no_transport_is_visible() {
+        assert_eq!(classify_connection_type(false, false), ConnectionType::None);
+    }
 }

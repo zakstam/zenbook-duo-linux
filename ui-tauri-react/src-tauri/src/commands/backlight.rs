@@ -1,5 +1,5 @@
-use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::hardware::{hid, sysfs};
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::runtime::client;
 
 #[tauri::command]

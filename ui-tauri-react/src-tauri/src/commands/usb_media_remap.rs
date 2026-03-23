@@ -368,12 +368,12 @@ fn log_error<T: Into<String>>(message: T) -> String {
         .map(|p| p.join("duo.log"))
         .unwrap_or_else(|| std::env::temp_dir().join("zenbook-duo-usb-remap.log"));
 
-    let _ = fs::create_dir_all(log_path.parent().unwrap_or_else(|| std::path::Path::new("/tmp")));
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-    {
+    let _ = fs::create_dir_all(
+        log_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/tmp")),
+    );
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
         let _ = writeln!(file, "{} - USB-REMAP - ERROR: {}", timestamp, message);
     }
     message

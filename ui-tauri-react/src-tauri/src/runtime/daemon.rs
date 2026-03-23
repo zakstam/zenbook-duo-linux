@@ -359,8 +359,13 @@ async fn handle_lifecycle(
                 for connector in &disabled {
                     let devices = hardware::touchscreen::list_touchscreens();
                     if let Some(dev) = devices.iter().find(|d| &d.connector == connector) {
-                        if let Err(e) = hardware::touchscreen::set_touchscreen_enabled(&dev.i2c_id, false) {
-                            eprintln!("rust-daemon: failed to restore touchscreen disabled for {}: {}", connector, e);
+                        if let Err(e) =
+                            hardware::touchscreen::set_touchscreen_enabled(&dev.i2c_id, false)
+                        {
+                            eprintln!(
+                                "rust-daemon: failed to restore touchscreen disabled for {}: {}",
+                                connector, e
+                            );
                         }
                     }
                 }
@@ -1117,10 +1122,18 @@ mod tests {
             guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
         }
 
-        notify_runtime_error(&state, "Zenbook Duo Runtime Error", "Session agent disconnected")
-            .await;
-        notify_runtime_error(&state, "Zenbook Duo Runtime Error", "Session agent disconnected")
-            .await;
+        notify_runtime_error(
+            &state,
+            "Zenbook Duo Runtime Error",
+            "Session agent disconnected",
+        )
+        .await;
+        notify_runtime_error(
+            &state,
+            "Zenbook Duo Runtime Error",
+            "Session agent disconnected",
+        )
+        .await;
 
         server.await.expect("join session server");
         let _ = fs::remove_file(&socket_path);

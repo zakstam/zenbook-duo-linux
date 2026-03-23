@@ -110,11 +110,7 @@ pub fn log_error(message: &str) {
     let _ = ensure_dir(&base_dir);
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
     let log_path = base_dir.join("duo.log");
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-    {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
         let _ = writeln!(file, "{} - USB-REMAP - ERROR: {}", timestamp, message);
     }
 }

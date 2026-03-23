@@ -22,7 +22,9 @@ pub fn start(state: Arc<RwLock<RuntimeState>>) {
             };
             next_status.service_active = session_connected;
 
-            if let Some(layout) = crate::runtime::daemon::session_display_layout(state.clone()).await {
+            if let Some(layout) =
+                crate::runtime::daemon::session_display_layout(state.clone()).await
+            {
                 crate::runtime::probe::apply_layout_to_status(&mut next_status, Some(&layout));
                 next_status.service_active = true;
             }
@@ -41,7 +43,8 @@ pub fn start(state: Arc<RwLock<RuntimeState>>) {
                     connection_label(&updated.connection_type),
                 ));
                 guard.status = next_status;
-                let actions = crate::runtime::policy::apply_transition_policy(&mut guard, &previous);
+                let actions =
+                    crate::runtime::policy::apply_transition_policy(&mut guard, &previous);
                 push_status_events(&mut guard, &previous, &updated);
                 guard.touch();
                 if let Err(err) = guard.save() {
@@ -213,7 +216,11 @@ async fn apply_policy_actions(state: Arc<RwLock<RuntimeState>>, actions: Vec<Pol
     }
 }
 
-fn push_status_events(state: &mut RuntimeState, old: &crate::models::DuoStatus, new: &crate::models::DuoStatus) {
+fn push_status_events(
+    state: &mut RuntimeState,
+    old: &crate::models::DuoStatus,
+    new: &crate::models::DuoStatus,
+) {
     if old.keyboard_attached != new.keyboard_attached {
         state.recent_events.push(HardwareEvent::info(
             EventCategory::Usb,
@@ -229,7 +236,10 @@ fn push_status_events(state: &mut RuntimeState, old: &crate::models::DuoStatus, 
     if old.connection_type != new.connection_type {
         state.recent_events.push(HardwareEvent::info(
             EventCategory::Keyboard,
-            format!("Connection type changed to {}", connection_label(&new.connection_type)),
+            format!(
+                "Connection type changed to {}",
+                connection_label(&new.connection_type)
+            ),
             "rust-daemon",
         ));
     }
@@ -269,7 +279,10 @@ fn push_status_events(state: &mut RuntimeState, old: &crate::models::DuoStatus, 
     if old.orientation != new.orientation {
         state.recent_events.push(HardwareEvent::info(
             EventCategory::Rotation,
-            format!("Orientation changed to {}", orientation_label(&new.orientation)),
+            format!(
+                "Orientation changed to {}",
+                orientation_label(&new.orientation)
+            ),
             "rust-daemon",
         ));
     }

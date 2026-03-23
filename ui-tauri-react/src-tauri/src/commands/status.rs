@@ -1,5 +1,5 @@
-use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::hardware::sysfs;
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::models::DuoStatus;
 use crate::runtime::client;
 

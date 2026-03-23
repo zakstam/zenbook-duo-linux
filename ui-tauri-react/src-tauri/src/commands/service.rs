@@ -1,7 +1,7 @@
 use std::process::Command;
 
-use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::hardware::sysfs;
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::runtime::client;
 
 #[tauri::command]

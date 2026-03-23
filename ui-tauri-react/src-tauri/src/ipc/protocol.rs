@@ -25,14 +25,24 @@ impl<T> Envelope<T> {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonRequest {
     Ping,
-    HandleLifecycle { phase: LifecyclePhase },
+    HandleLifecycle {
+        phase: LifecyclePhase,
+    },
     GetStatus,
     GetDisplayLayout,
     GetSettings,
-    SaveSettings { settings: DuoSettings },
-    SetBacklight { level: u8 },
-    SetOrientation { orientation: Orientation },
-    ApplyDisplayLayout { layout: DisplayLayout },
+    SaveSettings {
+        settings: DuoSettings,
+    },
+    SetBacklight {
+        level: u8,
+    },
+    SetOrientation {
+        orientation: Orientation,
+    },
+    ApplyDisplayLayout {
+        layout: DisplayLayout,
+    },
     UsbMediaRemapStatus,
     UsbMediaRemapStart,
     UsbMediaRemapStop,
@@ -43,11 +53,18 @@ pub enum DaemonRequest {
         backend: SessionBackend,
         socket_path: String,
     },
-    TailLogs { lines: usize },
+    TailLogs {
+        lines: usize,
+    },
     ClearLogs,
-    GetRecentEvents { limit: usize },
+    GetRecentEvents {
+        limit: usize,
+    },
     ListTouchscreens,
-    SetTouchscreenEnabled { connector: String, enabled: bool },
+    SetTouchscreenEnabled {
+        connector: String,
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,14 +72,30 @@ pub enum DaemonRequest {
 pub enum DaemonResponse {
     Pong,
     Ack,
-    Status { status: DuoStatus },
-    DisplayLayout { layout: DisplayLayout },
-    Settings { settings: DuoSettings },
-    UsbMediaRemapStatus { status: UsbMediaRemapStatus },
-    Logs { lines: Vec<String> },
-    Events { events: Vec<HardwareEvent> },
-    Touchscreens { devices: Vec<crate::hardware::touchscreen::TouchscreenDevice> },
-    Error { message: String },
+    Status {
+        status: DuoStatus,
+    },
+    DisplayLayout {
+        layout: DisplayLayout,
+    },
+    Settings {
+        settings: DuoSettings,
+    },
+    UsbMediaRemapStatus {
+        status: UsbMediaRemapStatus,
+    },
+    Logs {
+        lines: Vec<String>,
+    },
+    Events {
+        events: Vec<HardwareEvent>,
+    },
+    Touchscreens {
+        devices: Vec<crate::hardware::touchscreen::TouchscreenDevice>,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,9 +112,16 @@ pub enum LifecyclePhase {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonEvent {
-    StatusChanged { status: DuoStatus },
-    HardwareEvent { event: HardwareEvent },
-    SessionAgentChanged { connected: bool, backend: Option<SessionBackend> },
+    StatusChanged {
+        status: DuoStatus,
+    },
+    HardwareEvent {
+        event: HardwareEvent,
+    },
+    SessionAgentChanged {
+        connected: bool,
+        backend: Option<SessionBackend>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -97,9 +137,16 @@ pub enum SessionBackend {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionCommand {
     GetDisplayLayout,
-    SetDockMode { attached: bool, scale: f64 },
-    ApplyDisplayLayout { layout: DisplayLayout },
-    SetOrientation { orientation: Orientation },
+    SetDockMode {
+        attached: bool,
+        scale: f64,
+    },
+    ApplyDisplayLayout {
+        layout: DisplayLayout,
+    },
+    SetOrientation {
+        orientation: Orientation,
+    },
     ShowNotification {
         title: String,
         message: String,

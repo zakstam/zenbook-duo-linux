@@ -18,7 +18,10 @@ pub fn ensure_current_user_runtime_dir() -> Result<(), String> {
 }
 
 pub fn ensure_dir_owned_like_parent(dir: &Path) -> Result<(), String> {
-    let owner = dir.parent().and_then(owner_from_metadata).or_else(target_identity_opt);
+    let owner = dir
+        .parent()
+        .and_then(owner_from_metadata)
+        .or_else(target_identity_opt);
     ensure_dir_with_owner(dir, owner)
 }
 
@@ -26,10 +29,15 @@ fn ensure_dir_with_owner(dir: &Path, owner: Option<(u32, u32)>) -> Result<(), St
     fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
 
     if let Some((uid, gid)) = owner {
-        let metadata = fs::metadata(dir)
-            .map_err(|e| format!("Failed to stat {}: {e}", dir.display()))?;
-        if should_repair_ownership(Uid::current().as_raw(), metadata.uid(), metadata.gid(), uid, gid)
-        {
+        let metadata =
+            fs::metadata(dir).map_err(|e| format!("Failed to stat {}: {e}", dir.display()))?;
+        if should_repair_ownership(
+            Uid::current().as_raw(),
+            metadata.uid(),
+            metadata.gid(),
+            uid,
+            gid,
+        ) {
             chown_path(dir, uid, gid)?;
         }
     }
@@ -41,7 +49,8 @@ fn ensure_dir_with_owner(dir: &Path, owner: Option<(u32, u32)>) -> Result<(), St
 }
 
 fn validate_current_user_dir(dir: &Path) -> Result<(), String> {
-    let metadata = fs::metadata(dir).map_err(|e| format!("Failed to stat {}: {e}", dir.display()))?;
+    let metadata =
+        fs::metadata(dir).map_err(|e| format!("Failed to stat {}: {e}", dir.display()))?;
     let current_uid = Uid::current().as_raw();
     if metadata.uid() != current_uid {
         return Err(format!(
@@ -130,7 +139,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("zenbook-duo-{name}-{}-{unique}", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "zenbook-duo-{name}-{}-{unique}",
+            std::process::id()
+        ))
     }
 
     #[test]

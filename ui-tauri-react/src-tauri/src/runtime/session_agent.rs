@@ -80,8 +80,8 @@ async fn register_with_daemon(backend: SessionBackend) -> Result<(), String> {
             .to_string_lossy()
             .into_owned(),
     });
-    let line =
-        serde_json::to_string(&request).map_err(|e| format!("Failed to encode registration: {e}"))?;
+    let line = serde_json::to_string(&request)
+        .map_err(|e| format!("Failed to encode registration: {e}"))?;
     writer
         .write_all(line.as_bytes())
         .await
@@ -103,7 +103,9 @@ async fn register_with_daemon(backend: SessionBackend) -> Result<(), String> {
     match envelope.payload {
         DaemonResponse::Ack => Ok(()),
         DaemonResponse::Error { message } => Err(message),
-        other => Err(format!("Unexpected daemon registration response: {other:?}")),
+        other => Err(format!(
+            "Unexpected daemon registration response: {other:?}"
+        )),
     }
 }
 
@@ -182,7 +184,10 @@ fn resolve_niri_socket() -> Option<std::path::PathBuf> {
     resolve_niri_socket_from(env_socket.as_deref(), niri_runtime_dir().as_deref())
 }
 
-fn resolve_niri_socket_from(env_socket: Option<&Path>, runtime_dir: Option<&Path>) -> Option<std::path::PathBuf> {
+fn resolve_niri_socket_from(
+    env_socket: Option<&Path>,
+    runtime_dir: Option<&Path>,
+) -> Option<std::path::PathBuf> {
     if let Some(env_socket) = env_socket {
         if env_socket.exists() {
             return Some(env_socket.to_path_buf());
@@ -201,7 +206,9 @@ fn resolve_niri_socket_from(env_socket: Option<&Path>, runtime_dir: Option<&Path
         }
 
         let metadata = entry.metadata().ok()?;
-        let modified = metadata.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let modified = metadata
+            .modified()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         match &newest {
             Some((current_modified, _)) if *current_modified >= modified => {}
             _ => newest = Some((modified, path)),
@@ -269,7 +276,11 @@ fn backend_probe_order(hinted: SessionBackend) -> Vec<SessionBackend> {
     if hinted != SessionBackend::Unknown {
         order.push(hinted);
     }
-    for backend in [SessionBackend::Niri, SessionBackend::Gnome, SessionBackend::Kde] {
+    for backend in [
+        SessionBackend::Niri,
+        SessionBackend::Gnome,
+        SessionBackend::Kde,
+    ] {
         if !order.contains(&backend) {
             order.push(backend);
         }
@@ -279,16 +290,26 @@ fn backend_probe_order(hinted: SessionBackend) -> Vec<SessionBackend> {
 
 fn backend_is_ready(backend: SessionBackend) -> bool {
     match backend {
-        SessionBackend::Gnome => Command::new("gdctl")
-            .arg("show")
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false),
-        SessionBackend::Kde => Command::new("kscreen-doctor")
-            .arg("-j")
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false),
+        SessionBackend::Gnome => {
+            if !gui_session_env_ready() {
+                return false;
+            }
+            Command::new("gdctl")
+                .arg("show")
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false)
+        }
+        SessionBackend::Kde => {
+            if !gui_session_env_ready() {
+                return false;
+            }
+            Command::new("kscreen-doctor")
+                .arg("-j")
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false)
+        }
         SessionBackend::Niri => build_niri_command(&["msg", "--json", "outputs"])
             .and_then(|mut command| {
                 command
@@ -299,6 +320,13 @@ fn backend_is_ready(backend: SessionBackend) -> bool {
             .unwrap_or(false),
         SessionBackend::Unknown => false,
     }
+}
+
+fn gui_session_env_ready() -> bool {
+    let has_runtime_dir = env::var_os("XDG_RUNTIME_DIR").is_some();
+    let has_wayland = env::var_os("WAYLAND_DISPLAY").is_some();
+    let has_x11 = env::var_os("DISPLAY").is_some();
+    has_runtime_dir && (has_wayland || has_x11)
 }
 
 async fn wait_for_ready_backend() -> Result<SessionBackend, String> {
@@ -369,6 +397,7 @@ fn apply_gnome_dock_mode(attached: bool, scale: f64) -> Result<(), String> {
 }
 
 fn apply_kde_dock_mode(attached: bool) -> Result<(), String> {
+    ensure_gui_session_env("KDE display control")?;
     if attached {
         run_command(
             "kscreen-doctor",
@@ -397,21 +426,20 @@ fn apply_niri_dock_mode(attached: bool) -> Result<(), String> {
         run_niri_command(&["msg", "output", "eDP-2", "on"])?;
         let (_, h) = niri_output_logical_size("eDP-1").unwrap_or((0, 0));
         run_niri_command(&["msg", "output", "eDP-1", "position", "set", "0", "0"])?;
-        run_niri_command(
-            &[
-                "msg",
-                "output",
-                "eDP-2",
-                "position",
-                "set",
-                "0",
-                &h.to_string(),
-            ],
-        )
+        run_niri_command(&[
+            "msg",
+            "output",
+            "eDP-2",
+            "position",
+            "set",
+            "0",
+            &h.to_string(),
+        ])
     }
 }
 
 fn kde_output_logical_size(name: &str) -> Result<(i64, i64), String> {
+    ensure_gui_session_env("KDE display query")?;
     let output = Command::new("kscreen-doctor")
         .arg("-j")
         .output()
@@ -482,6 +510,16 @@ fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<(), String> {
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn ensure_gui_session_env(action: &str) -> Result<(), String> {
+    if gui_session_env_ready() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{action} requires XDG_RUNTIME_DIR and either WAYLAND_DISPLAY or DISPLAY"
+        ))
     }
 }
 
@@ -689,7 +727,8 @@ fn watch_keyboard_hotkeys() -> Result<(), String> {
 
 fn find_keyboard_abs_devices() -> Result<Vec<std::path::PathBuf>, String> {
     let mut devices = Vec::new();
-    let entries = fs::read_dir("/dev/input").map_err(|e| format!("Failed to read /dev/input: {e}"))?;
+    let entries =
+        fs::read_dir("/dev/input").map_err(|e| format!("Failed to read /dev/input: {e}"))?;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -791,7 +830,10 @@ fn step_brightness(direction: &str) -> Result<(), String> {
     }
 
     let output = Command::new("sudo")
-        .args(["/usr/bin/tee", "/sys/class/backlight/intel_backlight/brightness"])
+        .args([
+            "/usr/bin/tee",
+            "/sys/class/backlight/intel_backlight/brightness",
+        ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -906,7 +948,10 @@ mod tests {
         let socket_path = unique_test_socket_path("session-listener");
         let listener = bind_session_listener(&socket_path).expect("bind test session listener");
 
-        assert!(socket_path.exists(), "listener should create the socket path");
+        assert!(
+            socket_path.exists(),
+            "listener should create the socket path"
+        );
 
         drop(listener);
         let _ = fs::remove_file(&socket_path);
@@ -916,13 +961,12 @@ mod tests {
     fn resolve_niri_socket_prefers_existing_env_socket() {
         let runtime_dir = temp_runtime_dir("niri-env");
         let env_socket = runtime_dir.join("niri.wayland-1.env.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&env_socket).expect("bind env socket");
+        let listener =
+            std::os::unix::net::UnixListener::bind(&env_socket).expect("bind env socket");
 
-        let resolved = resolve_niri_socket_from(
-            Some(env_socket.as_path()),
-            Some(runtime_dir.as_path()),
-        )
-        .expect("resolve niri socket");
+        let resolved =
+            resolve_niri_socket_from(Some(env_socket.as_path()), Some(runtime_dir.as_path()))
+                .expect("resolve niri socket");
 
         assert_eq!(resolved, env_socket);
 

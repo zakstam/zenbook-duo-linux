@@ -30,11 +30,7 @@ fn read_i2c_device_name(i2c_id: &str) -> Option<String> {
 
 /// Checks if the i2c device is currently bound to its driver.
 fn is_bound(i2c_id: &str) -> bool {
-    Path::new(&format!(
-        "/sys/bus/i2c/drivers/i2c_hid_acpi/{}",
-        i2c_id
-    ))
-    .exists()
+    Path::new(&format!("/sys/bus/i2c/drivers/i2c_hid_acpi/{}", i2c_id)).exists()
 }
 
 pub fn list_touchscreens() -> Vec<TouchscreenDevice> {
@@ -72,7 +68,12 @@ pub fn set_touchscreen_enabled(i2c_id: &str, enabled: bool) -> Result<(), String
     } else {
         "/sys/bus/i2c/drivers/i2c_hid_acpi/unbind"
     };
-    fs::write(path, i2c_id)
-        .map_err(|e| format!("Failed to {} touchscreen {}: {}",
-            if enabled { "bind" } else { "unbind" }, i2c_id, e))
+    fs::write(path, i2c_id).map_err(|e| {
+        format!(
+            "Failed to {} touchscreen {}: {}",
+            if enabled { "bind" } else { "unbind" },
+            i2c_id,
+            e
+        )
+    })
 }

@@ -1,7 +1,7 @@
-use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::hardware::sysfs;
-use crate::runtime::logger;
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::runtime::client;
+use crate::runtime::logger;
 
 #[tauri::command]
 pub fn read_log(lines: usize) -> Vec<String> {

@@ -382,7 +382,11 @@ fn get_kde_display_layout() -> Result<DisplayLayout, String> {
 
     let mut displays = Vec::new();
     for output in outputs {
-        if !output.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if !output
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             continue;
         }
 
@@ -486,7 +490,10 @@ fn get_niri_display_layout() -> Result<DisplayLayout, String> {
 
     let mut displays = Vec::new();
     for output in outputs {
-        if output.get("current_mode").is_some_and(|value| value.is_null()) {
+        if output
+            .get("current_mode")
+            .is_some_and(|value| value.is_null())
+        {
             continue;
         }
 
@@ -503,8 +510,14 @@ fn get_niri_display_layout() -> Result<DisplayLayout, String> {
 
         displays.push(DisplayInfo {
             connector: connector.to_string(),
-            width: current_mode.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            height: current_mode.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            width: current_mode
+                .get("width")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32,
+            height: current_mode
+                .get("height")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32,
             refresh_rate: current_mode
                 .get("refresh_rate")
                 .and_then(|v| v.as_f64())
@@ -769,7 +782,12 @@ fn kde_enabled_output_count() -> Result<usize, String> {
         .ok_or_else(|| "Missing KDE outputs array".to_string())?;
     Ok(outputs
         .iter()
-        .filter(|output| output.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false))
+        .filter(|output| {
+            output
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        })
         .count())
 }
 
@@ -877,7 +895,11 @@ fn niri_enabled_output_count() -> Result<usize, String> {
 
     Ok(outputs
         .iter()
-        .filter(|output| !output.get("current_mode").is_some_and(|value| value.is_null()))
+        .filter(|output| {
+            !output
+                .get("current_mode")
+                .is_some_and(|value| value.is_null())
+        })
         .count())
 }
 
@@ -893,7 +915,10 @@ fn niri_transform_token(orientation: &Orientation) -> &'static str {
 fn set_niri_orientation(orientation: &Orientation) -> Result<(), String> {
     let token = niri_transform_token(orientation);
     run_command("niri", &["msg", "output", "eDP-1", "transform", token])?;
-    run_command("niri", &["msg", "output", "eDP-1", "position", "set", "0", "0"])?;
+    run_command(
+        "niri",
+        &["msg", "output", "eDP-1", "position", "set", "0", "0"],
+    )?;
 
     if niri_enabled_output_count().unwrap_or(1) <= 1 {
         return Ok(());

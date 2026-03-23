@@ -11,7 +11,10 @@ pub enum PolicyAction {
     SetDockMode { attached: bool, scale: f64 },
 }
 
-pub fn apply_transition_policy(state: &mut RuntimeState, previous: &DuoStatus) -> Vec<PolicyAction> {
+pub fn apply_transition_policy(
+    state: &mut RuntimeState,
+    previous: &DuoStatus,
+) -> Vec<PolicyAction> {
     let mut actions = Vec::new();
 
     if state.status.keyboard_attached {

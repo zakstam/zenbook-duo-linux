@@ -22,9 +22,8 @@ fn main() {
         phase: phase.clone(),
     }) {
         Ok(DaemonResponse::Ack) => Ok(()),
-        Ok(DaemonResponse::Error { message }) => fallback_lifecycle(&phase).map_err(|fallback| {
-            format!("{message}; fallback failed: {fallback}")
-        }),
+        Ok(DaemonResponse::Error { message }) => fallback_lifecycle(&phase)
+            .map_err(|fallback| format!("{message}; fallback failed: {fallback}")),
         Ok(_) => fallback_lifecycle(&phase),
         Err(_) => fallback_lifecycle(&phase),
     };

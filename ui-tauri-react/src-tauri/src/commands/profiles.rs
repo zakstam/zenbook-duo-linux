@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::hardware::display_config;
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::models::{Profile, ProfileList};
 use crate::runtime::client;
 

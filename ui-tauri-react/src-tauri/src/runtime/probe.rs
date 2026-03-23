@@ -9,7 +9,10 @@ pub fn current_status() -> DuoStatus {
     status.connection_type = sysfs::detect_connection_type();
     status.wifi_enabled = wifi_enabled();
     status.bluetooth_enabled = bluetooth_enabled();
-    apply_layout_to_status(&mut status, display_config::get_display_layout().ok().as_ref());
+    apply_layout_to_status(
+        &mut status,
+        display_config::get_display_layout().ok().as_ref(),
+    );
     status
 }
 
@@ -46,26 +49,15 @@ pub fn bluetooth_enabled() -> bool {
         .unwrap_or(false)
 }
 
-fn monitor_count(
-    layout: Option<&crate::models::DisplayLayout>,
-    current: u32,
-) -> u32 {
+fn monitor_count(layout: Option<&crate::models::DisplayLayout>, current: u32) -> u32 {
     layout
         .map(|layout| layout.displays.len() as u32)
         .filter(|count| *count > 0)
-        .or_else(|| {
-            if current > 0 {
-                Some(current)
-            } else {
-                None
-            }
-        })
+        .or_else(|| if current > 0 { Some(current) } else { None })
         .unwrap_or(0)
 }
 
-fn inferred_orientation(
-    layout: Option<&crate::models::DisplayLayout>,
-) -> Option<Orientation> {
+fn inferred_orientation(layout: Option<&crate::models::DisplayLayout>) -> Option<Orientation> {
     let layout = layout?;
     let display = layout
         .displays

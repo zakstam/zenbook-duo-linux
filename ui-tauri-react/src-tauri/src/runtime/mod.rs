@@ -1,7 +1,7 @@
 pub mod client;
 pub mod daemon;
-pub mod logind;
 pub mod logger;
+pub mod logind;
 pub mod monitor;
 pub mod paths;
 pub mod policy;
