@@ -24,7 +24,7 @@
       }
     ],
     "trayIcon": {
-      "iconPath": "icons/icon.png",
+      "iconPath": "icons/32x32.png",
       "iconAsTemplate": false,
       "tooltip": "Zenbook Duo Control"
     }
