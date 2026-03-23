@@ -1,13 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useStore, useDispatch, refreshSettings } from "@/lib/store";
-import {
-  saveSettings,
-  usbMediaRemapStart,
-  usbMediaRemapStatus,
-  usbMediaRemapStop,
-  usbMediaRemapTogglePause,
-} from "@/lib/tauri";
-import type { DuoSettings, ThemePreference, UsbMediaRemapStatus } from "@/types/duo";
+import { saveSettings } from "@/lib/tauri";
+import type { DuoSettings, ThemePreference } from "@/types/duo";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -15,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { useUsbMediaRemap } from "@/hooks/use-usb-media-remap";
 import {
   Select,
   SelectContent,
@@ -28,24 +23,21 @@ export default function Settings() {
   const store = useStore();
   const dispatch = useDispatch();
   const { setTheme } = useTheme();
-  const isUsb = store.status.connectionType === "usb";
   const [saving, setSaving] = useState(false);
-  const [remapBusy, setRemapBusy] = useState(false);
-  const [remapStatus, setRemapStatus] = useState<UsbMediaRemapStatus>({
-    running: false,
-    pid: null,
-    paused: false,
-  });
-  // Desired switch state while we wait for pkexec + pid-file status to catch up.
-  const [remapDesired, setRemapDesired] = useState<boolean | null>(null);
-  const remapOpIdRef = useRef(0);
-  const remapDesiredRef = useRef<boolean | null>(null);
-
-  useEffect(() => {
-    remapDesiredRef.current = remapDesired;
-  }, [remapDesired]);
   const [localSettings, setLocalSettings] = useState<DuoSettings>({
     ...store.settings,
+  });
+  const {
+    isUsb,
+    remapBusy,
+    remapDesired,
+    remapStatus,
+    statusLabel,
+    setEnabled,
+    togglePause,
+  } = useUsbMediaRemap({
+    settings: localSettings,
+    onSettingsSaved: setLocalSettings,
   });
 
   const updateLocal = (key: keyof DuoSettings, value: unknown) => {
@@ -73,75 +65,6 @@ export default function Settings() {
       setSaving(false);
     }
   };
-
-  const refreshRemapStatus = async () => {
-    try {
-      const status = await usbMediaRemapStatus();
-      setRemapStatus(status);
-      // Use a functional update to avoid stale-closure issues with timers.
-      setRemapDesired((desired) =>
-        desired !== null && status.running === desired ? null : desired
-      );
-    } catch (err) {
-      console.error("Failed to read USB remap status:", err);
-    }
-  };
-
-  const handleRemapToggle = async (nextEnabled: boolean) => {
-    if (!isUsb) {
-      toast.error("USB Media Remap is only available when the keyboard is connected via USB.");
-      return;
-    }
-    setRemapBusy(true);
-    const opId = (remapOpIdRef.current += 1);
-    setRemapDesired(nextEnabled);
-    try {
-      const nextSettings = {
-        ...localSettings,
-        usbMediaRemapEnabled: nextEnabled,
-      };
-
-      if (nextEnabled) {
-        await usbMediaRemapStart();
-      } else {
-        await usbMediaRemapStop();
-      }
-
-      setLocalSettings(nextSettings);
-      await saveSettings(nextSettings);
-      await refreshSettings(dispatch);
-      toast.success(nextEnabled ? "USB media remap enabled" : "USB media remap disabled");
-    } catch (err) {
-      console.error("Failed to toggle USB remap:", err);
-      if (remapOpIdRef.current === opId) {
-        setRemapDesired(null);
-      }
-      const msg =
-        typeof err === "string"
-          ? err
-          : err && typeof err === "object" && "message" in err
-            ? String((err as { message?: unknown }).message)
-            : "Failed to toggle USB media remap";
-      toast.error(msg);
-    } finally {
-      setRemapBusy(false);
-      // Refresh immediately, then keep polling briefly to allow the stop/start to complete.
-      void refreshRemapStatus();
-      let attempts = 0;
-      const interval = setInterval(() => {
-        attempts += 1;
-        void refreshRemapStatus();
-        // Stop polling once the backend converged, or after a reasonable timeout.
-        if (remapDesiredRef.current === null || attempts >= 80) {
-          clearInterval(interval);
-        }
-      }, 250);
-    }
-  };
-
-  useEffect(() => {
-    void refreshRemapStatus();
-  }, []);
 
   return (
     <div>
@@ -253,34 +176,18 @@ export default function Settings() {
             <div className="flex items-center gap-3">
               <Switch
                 checked={remapDesired ?? remapStatus.running}
-                onCheckedChange={handleRemapToggle}
+                onCheckedChange={setEnabled}
                 disabled={!isUsb || remapBusy || remapDesired !== null}
               />
               <span className="text-[12px] text-muted-foreground">
-                {remapDesired !== null
-                  ? remapDesired
-                    ? "Enabling..."
-                    : "Disabling..."
-                  : remapStatus.running
-                    ? remapStatus.paused
-                      ? "Paused"
-                      : "On"
-                    : "Off"}
+                {statusLabel}
               </span>
               {remapStatus.running && remapDesired === null && (
                 <Button
                   size="sm"
                   variant={remapStatus.paused ? "default" : "outline"}
                   className="gap-1.5"
-                  onClick={async () => {
-                    try {
-                      await usbMediaRemapTogglePause();
-                      await refreshRemapStatus();
-                    } catch (err) {
-                      console.error("Failed to toggle pause:", err);
-                      toast.error("Failed to toggle pause");
-                    }
-                  }}
+                  onClick={togglePause}
                 >
                   {remapStatus.paused ? (
                     <><IconPlayerPlay className="size-3.5" stroke={1.5} /> Resume</>

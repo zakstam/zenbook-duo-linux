@@ -1,7 +1,15 @@
 import { useMemo } from "react";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
+import { useUsbMediaRemap } from "@/hooks/use-usb-media-remap";
 import {
+  IconPlayerPause,
+  IconPlayerPlay,
+  IconPlayerStop,
+  IconPlayerTrackNext,
   IconKeyboard,
   IconDeviceDesktop,
   IconWifi,
@@ -19,6 +27,16 @@ const cardAccents = {
 
 export default function Status() {
   const store = useStore();
+  const {
+    isUsb,
+    remapBusy,
+    remapDesired,
+    remapStatus,
+    statusLabel,
+    controlsDisabled,
+    setEnabled,
+    togglePause,
+  } = useUsbMediaRemap();
 
   const keyboardConnected = store.status.connectionType !== "none";
 
@@ -86,6 +104,56 @@ export default function Status() {
                 <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
                   {store.status.backlightLevel}/3
                 </span>
+              </div>
+            </StatusRow>
+            <StatusRow label="USB remap">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {statusLabel}
+                </span>
+                {store.status.connectionType === "bluetooth" && (
+                  <Badge className="border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200">
+                    USB only
+                  </Badge>
+                )}
+                {remapStatus.running && remapDesired === null ? (
+                  <>
+                    <Button
+                      size="xs"
+                      variant={remapStatus.paused ? "default" : "outline"}
+                      onClick={togglePause}
+                      disabled={!isUsb || remapBusy}
+                    >
+                      {remapStatus.paused ? (
+                        <><IconPlayerPlay className="size-3" stroke={1.5} /> Resume</>
+                      ) : (
+                        <><IconPlayerPause className="size-3" stroke={1.5} /> Pause</>
+                      )}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => void setEnabled(false)}
+                      disabled={controlsDisabled}
+                    >
+                      <IconPlayerStop className="size-3" stroke={1.5} />
+                      Stop
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => void setEnabled(true)}
+                    disabled={controlsDisabled}
+                  >
+                    <IconPlayerTrackNext className="size-3" stroke={1.5} />
+                    Start
+                  </Button>
+                )}
+                {(remapBusy || remapDesired !== null) && (
+                  <Spinner className="text-muted-foreground" />
+                )}
               </div>
             </StatusRow>
           </div>
