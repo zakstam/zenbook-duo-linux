@@ -72,9 +72,14 @@ pub fn start_remap() -> Result<(), String> {
     let helper_path = helper_binary_path()?;
     let user = current_username().map_err(log_error)?;
 
-    let mut cmd = Command::new("pkexec");
-    cmd.arg(helper_path)
-        .arg("--pid-file")
+    let mut cmd = if running_as_root() {
+        Command::new(&helper_path)
+    } else {
+        let mut cmd = Command::new("pkexec");
+        cmd.arg(&helper_path);
+        cmd
+    };
+    cmd.arg("--pid-file")
         .arg(&pid_path)
         .arg("--user")
         .arg(user);
@@ -97,11 +102,14 @@ pub fn stop_remap() -> Result<(), String> {
     for pid_path in pid_files {
         ensure_duo_dir_for_pid(&pid_path)?;
 
-        let mut cmd = Command::new("pkexec");
-        cmd.arg(&helper_path)
-            .arg("--stop")
-            .arg("--pid-file")
-            .arg(&pid_path);
+        let mut cmd = if running_as_root() {
+            Command::new(&helper_path)
+        } else {
+            let mut cmd = Command::new("pkexec");
+            cmd.arg(&helper_path);
+            cmd
+        };
+        cmd.arg("--stop").arg("--pid-file").arg(&pid_path);
 
         let status = cmd
             .status()
@@ -314,12 +322,16 @@ fn send_desktop_notification(message: &str) -> Result<(), String> {
     let runtime_dir = format!("/run/user/{uid}");
     let bus_address = format!("unix:path={runtime_dir}/bus");
 
-    let status = Command::new("runuser")
+    let mut cmd = if running_as_root() {
+        let mut cmd = Command::new("runuser");
+        cmd.args(["-u", &user, "--", "env"]);
+        cmd
+    } else {
+        Command::new("env")
+    };
+
+    let status = cmd
         .args([
-            "-u",
-            &user,
-            "--",
-            "env",
             &format!("XDG_RUNTIME_DIR={runtime_dir}"),
             &format!("DBUS_SESSION_BUS_ADDRESS={bus_address}"),
             "notify-send",
@@ -337,6 +349,10 @@ fn send_desktop_notification(message: &str) -> Result<(), String> {
     } else {
         Err(format!("notify-send exited with {status}"))
     }
+}
+
+fn running_as_root() -> bool {
+    Uid::current().is_root()
 }
 
 fn helper_binary_path() -> Result<std::path::PathBuf, String> {

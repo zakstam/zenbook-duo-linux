@@ -32,7 +32,6 @@ where
     }
 
     ensure_dir(&base_dir)?;
-    write_pid(&args.pid_file)?;
 
     let device_path = args
         .device
@@ -83,6 +82,8 @@ where
         .map_err(|e| format!("Failed to set keys for uinput: {e}"))?
         .build()
         .map_err(|e| format!("Failed to create uinput device: {e}"))?;
+
+    write_pid(&args.pid_file)?;
 
     let terminate = Arc::new(AtomicBool::new(false));
     flag::register(signal_hook::consts::SIGTERM, Arc::clone(&terminate))
@@ -373,12 +374,15 @@ fn open_emoji_picker(user: Option<&str>) {
     let runtime_dir = format!("/run/user/{uid}");
     let bus_address = format!("unix:path={runtime_dir}/bus");
 
-    let mut cmd = Command::new("runuser");
-    cmd.arg("-u")
-        .arg(user)
-        .arg("--")
-        .arg("env")
-        .arg(format!("XDG_RUNTIME_DIR={runtime_dir}"))
+    let mut cmd = if nix::unistd::Uid::current().is_root() {
+        let mut cmd = Command::new("runuser");
+        cmd.arg("-u").arg(user).arg("--").arg("env");
+        cmd
+    } else {
+        Command::new("env")
+    };
+
+    cmd.arg(format!("XDG_RUNTIME_DIR={runtime_dir}"))
         .arg(format!("DBUS_SESSION_BUS_ADDRESS={bus_address}"));
 
     if Path::new(&format!("{runtime_dir}/wayland-0")).exists() {
