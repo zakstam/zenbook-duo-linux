@@ -265,7 +265,7 @@ echo "Toolchain looks good. Starting clone/build/install..."
 install_ui_direct() {
   local built_binary="src-tauri/target/release/zenbook-duo-control"
   local desktop_src="src-tauri/linux/zenbook-duo-control.desktop"
-  local icon_src="src-tauri/icons/icon.png"
+  local icon_src="src-tauri/icons/128x128.png"
 
   echo "Building UI binary directly for pacman-based systems..."
   npx tauri build --no-bundle
@@ -342,7 +342,11 @@ UI_DIR="$TARGET_DIR/ui-tauri-react"
 
 echo "Building UI in: $UI_DIR"
 cd "$UI_DIR"
-npm install
+if [ -f package-lock.json ]; then
+  npm ci
+else
+  npm install
+fi
 # Avoid building AppImage by selecting bundles explicitly.
 if [ "$PKG_MGR" = "dnf" ]; then
   npm run build -- --bundles rpm

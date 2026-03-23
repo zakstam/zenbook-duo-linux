@@ -15,15 +15,17 @@ usage() {
 install.sh - unified installer for Zenbook Duo Linux
 
 Usage:
-  ./install.sh [setup-script-args...]
+  ./install.sh [install-options...] [-- setup-script-args...]
 
 Examples:
   ./install.sh
+  ./install.sh --skip-ui
   ./install.sh --no-usb-media-remap
+  ./install.sh -- --no-usb-media-remap
   sudo -E ./install.sh
 
 This script auto-detects GNOME, KDE Plasma, or Niri, runs the matching setup
-script, then installs the optional Zenbook Duo Control UI.
+script, then installs the Zenbook Duo Control UI unless --skip-ui is passed.
 EOF
 }
 
@@ -130,8 +132,39 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   exit 0
 fi
 
+INSTALL_UI=true
+SETUP_ARGS=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --skip-ui)
+      INSTALL_UI=false
+      shift
+      ;;
+    --)
+      shift
+      SETUP_ARGS+=("$@")
+      break
+      ;;
+    *)
+      SETUP_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
 desktop="$(pick_desktop)"
 repo_dir="$(ensure_repo_checkout)"
+repo_dir_is_temp=false
+if [ "${repo_dir}" != "${SCRIPT_DIR}" ] && [[ "${repo_dir}" == /tmp/* || "${repo_dir}" == /var/tmp/* || "${repo_dir}" == /private/tmp/* ]]; then
+  repo_dir_is_temp=true
+fi
+cleanup() {
+  if [ "${repo_dir_is_temp}" = true ]; then
+    rm -rf "${repo_dir}"
+  fi
+}
+trap cleanup EXIT
+
 case "${desktop}" in
   gnome)
     setup_script="${repo_dir}/setup-gnome.sh"
@@ -151,16 +184,20 @@ esac
 echo "Detected desktop: ${desktop}"
 echo "Running $(basename "${setup_script}")..."
 if [ -r /dev/tty ]; then
-  "${setup_script}" "$@" </dev/tty
+  "${setup_script}" "${SETUP_ARGS[@]}" </dev/tty
 else
-  "${setup_script}" "$@"
+  "${setup_script}" "${SETUP_ARGS[@]}"
 fi
 
-echo "Running install-ui.sh..."
-if [ -r /dev/tty ]; then
-  "${repo_dir}/install-ui.sh" </dev/tty
+if [ "${INSTALL_UI}" = true ]; then
+  echo "Running install-ui.sh..."
+  if [ -r /dev/tty ]; then
+    "${repo_dir}/install-ui.sh" </dev/tty
+  else
+    "${repo_dir}/install-ui.sh"
+  fi
 else
-  "${repo_dir}/install-ui.sh"
+  echo "Skipping UI install (--skip-ui)."
 fi
 
 echo

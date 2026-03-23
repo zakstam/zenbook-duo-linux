@@ -29,3 +29,9 @@ RUSTC_WRAPPER=sccache npm run build:local
 ```
 
 If `mold` is installed on Linux, you can reduce link time with a local Cargo config. An example is provided in `.cargo/config.toml.example`.
+
+To set up the recommended local tooling automatically:
+
+```bash
+./scripts/setup-fast-build.sh
+```
