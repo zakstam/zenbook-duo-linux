@@ -1,13 +1,14 @@
 use chrono::Local;
 use evdev::uinput::VirtualDeviceBuilder;
 use evdev::{AttributeSet, Device, EventType, InputEvent, Key};
-use nix::fcntl::{Flock, FlockArg};
+use nix::fcntl::{fcntl, FcntlArg, Flock, FlockArg, OFlag};
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use signal_hook::flag;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +54,8 @@ where
             e
         )
     })?;
+    configure_nonblocking(&device)
+        .map_err(|e| format!("Failed to configure {} as non-blocking: {e}", device_path.display()))?;
     log_info(&format!(
         "Grabbed keyboard device {} successfully",
         device_path.display()
@@ -84,6 +87,7 @@ where
         .map_err(|e| format!("Failed to create uinput device: {e}"))?;
 
     write_pid(&args.pid_file)?;
+    let _pid_guard = PidFileGuard::new(args.pid_file.clone());
 
     let terminate = Arc::new(AtomicBool::new(false));
     flag::register(signal_hook::consts::SIGTERM, Arc::clone(&terminate))
@@ -94,9 +98,15 @@ where
     let pause_file = base_dir.join("usb_media_remap.paused");
 
     while !terminate.load(Ordering::Relaxed) {
-        let events = device
-            .fetch_events()
-            .map_err(|e| format!("Failed to read events: {e}"))?;
+        let events = match device.fetch_events() {
+            Ok(events) => events,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(format!("Failed to read events: {e}")),
+        };
         let paused = pause_file.exists();
         for event in events {
             if terminate.load(Ordering::Relaxed) {
@@ -113,7 +123,8 @@ where
         }
     }
 
-    let _ = fs::remove_file(&args.pid_file);
+    let _ = device.ungrab();
+    log_info("Stopping helper");
     Ok(())
 }
 
@@ -256,6 +267,29 @@ fn write_pid(path: &str) -> Result<(), String> {
     }
     fs::write(path, std::process::id().to_string())
         .map_err(|e| format!("Failed to write pid file: {e}"))
+}
+
+fn configure_nonblocking(device: &Device) -> Result<(), nix::Error> {
+    let fd = device.as_raw_fd();
+    let current_flags = OFlag::from_bits_truncate(fcntl(fd, FcntlArg::F_GETFL)?);
+    fcntl(fd, FcntlArg::F_SETFL(current_flags | OFlag::O_NONBLOCK))?;
+    Ok(())
+}
+
+struct PidFileGuard {
+    path: String,
+}
+
+impl PidFileGuard {
+    fn new(path: String) -> Self {
+        Self { path }
+    }
+}
+
+impl Drop for PidFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 fn stop_process(path: &str) -> Result<(), String> {

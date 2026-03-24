@@ -37,7 +37,8 @@ pub async fn usb_media_remap_stop() -> Result<(), String> {
 }
 
 pub fn get_status() -> UsbMediaRemapStatus {
-    let pid = read_pid(&pid_path());
+    let pid_path = pid_path();
+    let pid = read_pid(&pid_path).or_else(|| recover_running_helper_pid(&pid_path));
     if let Some(pid) = pid {
         if is_pid_running(pid) {
             return UsbMediaRemapStatus {
@@ -46,7 +47,7 @@ pub fn get_status() -> UsbMediaRemapStatus {
                 paused: std::path::Path::new(&pause_file_path()).exists(),
             };
         }
-        let _ = fs::remove_file(pid_path());
+        let _ = fs::remove_file(&pid_path);
     }
 
     UsbMediaRemapStatus {
@@ -72,19 +73,19 @@ pub fn start_remap() -> Result<(), String> {
     let helper_path = helper_binary_path()?;
     let user = current_username().map_err(log_error)?;
 
-    let mut cmd = if running_as_root() {
-        Command::new(&helper_path)
+    let (mut cmd, launcher_name) = if running_as_root() {
+        (Command::new(&helper_path), helper_path.display().to_string())
     } else {
         let mut cmd = Command::new("pkexec");
         cmd.arg(&helper_path);
-        cmd
+        (cmd, "pkexec".to_string())
     };
     cmd.arg("--pid-file")
         .arg(&pid_path)
         .arg("--user")
         .arg(user);
 
-    start_remap_spawn_and_wait(cmd, Duration::from_secs(START_TIMEOUT_SECS))
+    start_remap_spawn_and_wait(cmd, Duration::from_secs(START_TIMEOUT_SECS), &launcher_name)
 }
 
 pub fn stop_remap() -> Result<(), String> {
@@ -102,21 +103,21 @@ pub fn stop_remap() -> Result<(), String> {
     for pid_path in pid_files {
         ensure_duo_dir_for_pid(&pid_path)?;
 
-        let mut cmd = if running_as_root() {
-            Command::new(&helper_path)
+        let (mut cmd, launcher_name) = if running_as_root() {
+            (Command::new(&helper_path), helper_path.display().to_string())
         } else {
             let mut cmd = Command::new("pkexec");
             cmd.arg(&helper_path);
-            cmd
+            (cmd, "pkexec".to_string())
         };
         cmd.arg("--stop").arg("--pid-file").arg(&pid_path);
 
         let status = cmd
             .status()
-            .map_err(|e| log_error(format!("Failed to stop remapper (pkexec): {e}")))?;
+            .map_err(|e| log_error(format!("Failed to stop remapper ({launcher_name}): {e}")))?;
         if !status.success() {
             return Err(log_error(format!(
-                "Failed to stop remapper (pkexec exited with {status})"
+                "Failed to stop remapper ({launcher_name} exited with {status})"
             )));
         }
     }
@@ -132,10 +133,14 @@ pub fn stop_remap() -> Result<(), String> {
     Ok(())
 }
 
-fn start_remap_spawn_and_wait(mut cmd: Command, timeout: Duration) -> Result<(), String> {
+fn start_remap_spawn_and_wait(
+    mut cmd: Command,
+    timeout: Duration,
+    launcher_name: &str,
+) -> Result<(), String> {
     let mut child = cmd
         .spawn()
-        .map_err(|e| log_error(format!("Failed to start remapper (pkexec): {e}")))?;
+        .map_err(|e| log_error(format!("Failed to start remapper ({launcher_name}): {e}")))?;
 
     let start = std::time::Instant::now();
     while start.elapsed() < timeout {
@@ -148,7 +153,7 @@ fn start_remap_spawn_and_wait(mut cmd: Command, timeout: Duration) -> Result<(),
         }
         if let Ok(Some(status)) = child.try_wait() {
             return Err(log_error(format!(
-                "Remapper failed to start (pkexec exited with {status})"
+                "Remapper failed to start ({launcher_name} exited with {status})"
             )));
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -288,16 +293,11 @@ pub fn daemon_first_toggle_pause() -> Result<(), String> {
 }
 
 fn running_pid_files() -> Vec<String> {
-    let mut out = Vec::new();
-
     let p1 = pid_path();
-    if let Some(pid) = read_pid(&p1) {
-        if is_pid_running(pid) {
-            out.push(p1);
-        }
+    if get_status().running {
+        return vec![p1];
     }
-
-    out
+    Vec::new()
 }
 
 fn runtime_dir_for_target_user() -> std::path::PathBuf {
@@ -367,6 +367,49 @@ fn helper_binary_path() -> Result<std::path::PathBuf, String> {
         HELPER_BINARY_NAME,
         current_exe.display()
     )))
+}
+
+fn recover_running_helper_pid(pid_path: &str) -> Option<u32> {
+    let pid = find_running_helper_pid(pid_path)?;
+    let _ = ensure_duo_dir_for_pid(pid_path);
+    let _ = fs::write(pid_path, pid.to_string());
+    Some(pid)
+}
+
+fn find_running_helper_pid(pid_path: &str) -> Option<u32> {
+    let proc_dir = fs::read_dir("/proc").ok()?;
+    for entry in proc_dir.flatten() {
+        let name = entry.file_name();
+        let pid = name.to_string_lossy().parse::<u32>().ok()?;
+        let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
+        if cmdline.is_empty() {
+            continue;
+        }
+        let args = cmdline
+            .split(|b| *b == 0)
+            .filter(|part| !part.is_empty())
+            .map(|part| String::from_utf8_lossy(part).into_owned())
+            .collect::<Vec<_>>();
+        if !helper_args_match_pid_file(&args, pid_path) {
+            continue;
+        }
+        if is_pid_running(pid) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+fn helper_args_match_pid_file(args: &[String], pid_path: &str) -> bool {
+    let Some(exe) = args.first() else {
+        return false;
+    };
+    if !exe.ends_with(HELPER_BINARY_NAME) {
+        return false;
+    }
+
+    args.windows(2)
+        .any(|window| window[0] == "--pid-file" && window[1] == pid_path)
 }
 
 fn ensure_duo_dir_for_pid(pid_file: &str) -> Result<(), String> {
