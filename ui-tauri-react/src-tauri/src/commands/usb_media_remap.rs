@@ -380,7 +380,9 @@ fn find_running_helper_pid(pid_path: &str) -> Option<u32> {
     let proc_dir = fs::read_dir("/proc").ok()?;
     for entry in proc_dir.flatten() {
         let name = entry.file_name();
-        let pid = name.to_string_lossy().parse::<u32>().ok()?;
+        let Ok(pid) = name.to_string_lossy().parse::<u32>() else {
+            continue;
+        };
         let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
         if cmdline.is_empty() {
             continue;
