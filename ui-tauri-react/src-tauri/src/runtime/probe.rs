@@ -92,6 +92,20 @@ mod tests {
                     y: 0,
                     transform: 90,
                     primary: true,
+                    current_mode: crate::models::DisplayMode {
+                        mode_id: "2880x1800@120".into(),
+                        width: 2880,
+                        height: 1800,
+                        refresh_rate: 120.0,
+                    },
+                    available_modes: vec![crate::models::DisplayMode {
+                        mode_id: "2880x1800@120".into(),
+                        width: 2880,
+                        height: 1800,
+                        refresh_rate: 120.0,
+                    }],
+                    refresh_policy: crate::models::RefreshPolicy::Fixed,
+                    supports_dynamic_refresh: false,
                 },
                 crate::models::DisplayInfo {
                     connector: "eDP-2".into(),
@@ -103,6 +117,20 @@ mod tests {
                     y: 1800,
                     transform: 0,
                     primary: false,
+                    current_mode: crate::models::DisplayMode {
+                        mode_id: "2880x1800@120".into(),
+                        width: 2880,
+                        height: 1800,
+                        refresh_rate: 120.0,
+                    },
+                    available_modes: vec![crate::models::DisplayMode {
+                        mode_id: "2880x1800@120".into(),
+                        width: 2880,
+                        height: 1800,
+                        refresh_rate: 120.0,
+                    }],
+                    refresh_policy: crate::models::RefreshPolicy::Fixed,
+                    supports_dynamic_refresh: false,
                 },
             ],
         };

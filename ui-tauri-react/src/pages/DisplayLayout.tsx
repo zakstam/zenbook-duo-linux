@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import DisplayCanvas from "@/components/DisplayCanvas";
 import { getDisplayLayout, applyDisplayLayout, listTouchscreens, setTouchscreenEnabled, loadSettings, saveSettings } from "@/lib/tauri";
-import type { DisplayLayout as LayoutType, TouchscreenDevice } from "@/types/duo";
+import type { DisplayInfo, DisplayLayout as LayoutType, TouchscreenDevice } from "@/types/duo";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -17,6 +17,24 @@ import {
   IconCheck,
   IconAlertTriangle,
 } from "@tabler/icons-react";
+
+const DYNAMIC_REFRESH_VALUE = "__dynamic__";
+
+function formatRefreshRate(refreshRate: number) {
+  return `${refreshRate.toFixed(1)}Hz`;
+}
+
+function refreshSelectValue(display: DisplayInfo) {
+  return display.refreshPolicy === "dynamic"
+    ? DYNAMIC_REFRESH_VALUE
+    : display.currentMode.modeId;
+}
+
+function modesForResolution(display: DisplayInfo, width: number, height: number) {
+  return display.availableModes.filter(
+    (mode) => mode.width === width && mode.height === height
+  );
+}
 
 export default function DisplayLayout() {
   const [layout, setLayout] = useState<LayoutType>({ displays: [] });
@@ -73,6 +91,30 @@ export default function DisplayLayout() {
     }
   };
 
+  const handleRefreshModeChange = (connector: string, value: string) => {
+    setLayout((current) => ({
+      displays: current.displays.map((display) => {
+        if (display.connector !== connector) return display;
+
+        if (value === DYNAMIC_REFRESH_VALUE) {
+          return { ...display, refreshPolicy: "dynamic" };
+        }
+
+        const mode = display.availableModes.find((candidate) => candidate.modeId === value);
+        if (!mode) return display;
+
+        return {
+          ...display,
+          width: mode.width,
+          height: mode.height,
+          refreshRate: mode.refreshRate,
+          currentMode: mode,
+          refreshPolicy: "fixed",
+        };
+      }),
+    }));
+  };
+
   return (
     <div>
       <div className="mb-6 flex items-start justify-between">
@@ -125,8 +167,13 @@ export default function DisplayLayout() {
               </div>
               <div className="flex items-center gap-4">
                 <span className="font-mono text-[12px] text-muted-foreground">
-                  {d.width}x{d.height} @ {d.refreshRate.toFixed(1)}Hz | {d.scale}x | ({d.x}, {d.y})
+                  {d.width}x{d.height} @ {formatRefreshRate(d.refreshRate)} | {d.scale}x | ({d.x}, {d.y})
                 </span>
+                {d.refreshPolicy === "dynamic" && (
+                  <span className="rounded bg-emerald-500/12 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
+                    Dynamic
+                  </span>
+                )}
                 {(() => {
                   const ts = touchscreens.find((t) => t.connector === d.connector);
                   if (!ts) return null;
@@ -150,31 +197,55 @@ export default function DisplayLayout() {
 
       <div className="glass-card mt-4 rounded-xl p-5 animate-stagger-in stagger-3">
         <h3 className="mb-4 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-          Per-Display Scale
+          Per-Display Settings
         </h3>
         <div className="space-y-4">
           {layout.displays.map((d, i) => (
             <div key={d.connector} className="flex items-center justify-between gap-4">
               <Label className="font-mono text-[13px]">{d.connector}</Label>
-              <Select
-                value={String(d.scale)}
-                onValueChange={(v) => {
-                  const displays = [...layout.displays];
-                  displays[i] = { ...displays[i], scale: parseFloat(v) };
-                  setLayout({ displays });
-                }}
-              >
-                <SelectTrigger className="w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="1">1.0x</SelectItem>
-                  <SelectItem value="1.25">1.25x</SelectItem>
-                  <SelectItem value="1.5">1.5x</SelectItem>
-                  <SelectItem value="1.66">1.66x</SelectItem>
-                  <SelectItem value="2">2.0x</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex items-center gap-3">
+                <Select
+                  value={String(d.scale)}
+                  onValueChange={(v) => {
+                    const displays = [...layout.displays];
+                    displays[i] = { ...displays[i], scale: parseFloat(v) };
+                    setLayout({ displays });
+                  }}
+                >
+                  <SelectTrigger className="w-40">
+                    <SelectValue placeholder="Scale" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">1.0x</SelectItem>
+                    <SelectItem value="1.25">1.25x</SelectItem>
+                    <SelectItem value="1.5">1.5x</SelectItem>
+                    <SelectItem value="1.75">1.75x</SelectItem>
+                    <SelectItem value="1.66">1.66x</SelectItem>
+                    <SelectItem value="2">2.0x</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Select
+                  value={refreshSelectValue(d)}
+                  onValueChange={(value) => handleRefreshModeChange(d.connector, value)}
+                >
+                  <SelectTrigger className="w-44">
+                    <SelectValue placeholder="Refresh rate" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {d.supportsDynamicRefresh && (
+                      <SelectItem value={DYNAMIC_REFRESH_VALUE}>
+                        Dynamic
+                      </SelectItem>
+                    )}
+                    {modesForResolution(d, d.currentMode.width, d.currentMode.height).map((mode) => (
+                      <SelectItem key={mode.modeId} value={mode.modeId}>
+                        {formatRefreshRate(mode.refreshRate)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           ))}
         </div>

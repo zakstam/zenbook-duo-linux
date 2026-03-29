@@ -6,7 +6,9 @@ use crate::runtime::client;
 #[tauri::command]
 pub fn get_display_layout() -> Result<DisplayLayout, String> {
     match client::request(DaemonRequest::GetDisplayLayout) {
-        Ok(DaemonResponse::DisplayLayout { layout }) => Ok(layout),
+        Ok(DaemonResponse::DisplayLayout { layout }) => {
+            Ok(display_config::normalize_display_layout(layout))
+        }
         Ok(DaemonResponse::Error { .. }) => display_config::get_display_layout(),
         Ok(_) => display_config::get_display_layout(),
         Err(_) => display_config::get_display_layout(),
@@ -15,13 +17,15 @@ pub fn get_display_layout() -> Result<DisplayLayout, String> {
 
 #[tauri::command]
 pub fn apply_display_layout(layout: DisplayLayout) -> Result<(), String> {
+    let normalized = display_config::normalize_display_layout(layout);
+
     match client::request(DaemonRequest::ApplyDisplayLayout {
-        layout: layout.clone(),
+        layout: normalized.clone(),
     }) {
         Ok(DaemonResponse::Ack) => Ok(()),
-        Ok(DaemonResponse::Error { .. }) => display_config::apply_display_layout(&layout),
-        Ok(_) => display_config::apply_display_layout(&layout),
-        Err(_) => display_config::apply_display_layout(&layout),
+        Ok(DaemonResponse::Error { .. }) => display_config::apply_display_layout(&normalized),
+        Ok(_) => display_config::apply_display_layout(&normalized),
+        Err(_) => display_config::apply_display_layout(&normalized),
     }
 }
 

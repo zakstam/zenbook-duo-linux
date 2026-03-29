@@ -1,5 +1,6 @@
 export type ConnectionType = "usb" | "bluetooth" | "none";
 export type Orientation = "normal" | "left" | "right" | "inverted";
+export type RefreshPolicy = "fixed" | "dynamic";
 export type EventCategory = "USB" | "DISPLAY" | "KEYBOARD" | "NETWORK" | "ROTATION" | "BLUETOOTH" | "SERVICE";
 export type EventSeverity = "info" | "warning" | "error";
 export type ThemePreference = "system" | "light" | "dark";
@@ -27,10 +28,21 @@ export interface DisplayInfo {
   y: number;
   transform: number;
   primary: boolean;
+  currentMode: DisplayMode;
+  availableModes: DisplayMode[];
+  refreshPolicy: RefreshPolicy;
+  supportsDynamicRefresh: boolean;
 }
 
 export interface DisplayLayout {
   displays: DisplayInfo[];
+}
+
+export interface DisplayMode {
+  modeId: string;
+  width: number;
+  height: number;
+  refreshRate: number;
 }
 
 export interface DuoSettings {

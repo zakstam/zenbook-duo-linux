@@ -21,6 +21,7 @@ type DisplayNodeData = {
   connector: string;
   width: number;
   height: number;
+  logicalHeight: number;
   refreshRate: number;
   primary: boolean;
   scale: number;
@@ -28,42 +29,64 @@ type DisplayNodeData = {
 
 const PX_SCALE = 0.12; // graph px per real display pixel
 const MIN_NODE_W = 220;
-const MIN_NODE_H = 140;
+const MIN_NODE_H = 120;
+const TOP_DISPLAY_CONNECTOR = "eDP-1";
+const BOTTOM_DISPLAY_CONNECTOR = "eDP-2";
 
-function snapVerticalPosition(layout: DisplayLayout, id: string, pos: { x: number; y: number }) {
+function isDuoDisplay(connector: string) {
+  return connector === TOP_DISPLAY_CONNECTOR || connector === BOTTOM_DISPLAY_CONNECTOR;
+}
+
+function snapDisplayPosition(layout: DisplayLayout, id: string, pos: { x: number; y: number }) {
   const displays = layout.displays;
   const d = displays.find((x) => x.connector === id);
   if (!d) return { x: Math.round(pos.x / PX_SCALE), y: Math.round(pos.y / PX_SCALE) };
 
-  const primary = displays.find((x) => x.primary) ?? displays[0];
-  const targetX = primary?.x ?? 0;
+  const x = Math.round(pos.x / PX_SCALE);
+  const y = Math.round(pos.y / PX_SCALE);
+  return { x, y };
+}
 
-  const currentY = Math.round(pos.y / PX_SCALE);
+function displayLogicalSize(display: DisplayLayout["displays"][number]) {
+  const rotated = display.transform === 90 || display.transform === 270;
+  const physicalWidth = rotated ? display.height : display.width;
+  const physicalHeight = rotated ? display.width : display.height;
+  const scale = Math.max(display.scale, 0.1);
 
-  const candidates: number[] = [];
-  for (const o of displays) {
-    if (o.connector === id) continue;
-    const above = o.y - d.height;
-    if (above >= 0) candidates.push(above);
-    candidates.push(o.y + o.height); // below
+  return {
+    width: physicalWidth / scale,
+    height: physicalHeight / scale,
+  };
+}
+
+function stackedLogicalHeight(display: DisplayLayout["displays"][number]) {
+  const rotated = display.transform === 90 || display.transform === 270;
+  const physicalHeight = rotated ? display.width : display.height;
+  const scale = Math.max(display.scale, 0.1);
+  return Math.ceil(physicalHeight / scale);
+}
+
+function normalizeDuoDisplays(layout: DisplayLayout) {
+  const topDisplay = layout.displays.find((display) => display.connector === TOP_DISPLAY_CONNECTOR);
+  if (!topDisplay) {
+    return layout;
   }
 
-  if (candidates.length === 0) {
-    return { x: targetX, y: currentY };
-  }
+  const topLogicalHeight = stackedLogicalHeight(topDisplay);
 
-  let bestY = candidates[0];
-  let bestDist = Math.abs(currentY - bestY);
-  for (let i = 1; i < candidates.length; i++) {
-    const y = candidates[i];
-    const dist = Math.abs(currentY - y);
-    if (dist < bestDist) {
-      bestDist = dist;
-      bestY = y;
-    }
-  }
+  return {
+    displays: layout.displays.map((display) => {
+      if (display.connector === TOP_DISPLAY_CONNECTOR) {
+        return { ...display, x: 0, y: 0 };
+      }
 
-  return { x: targetX, y: Math.max(0, bestY) };
+      if (display.connector === BOTTOM_DISPLAY_CONNECTOR) {
+        return { ...display, x: 0, y: topLogicalHeight };
+      }
+
+      return display;
+    }),
+  };
 }
 
 function DisplayNode({ data, selected }: NodeProps<Node<DisplayNodeData>>) {
@@ -113,36 +136,46 @@ function DisplayNode({ data, selected }: NodeProps<Node<DisplayNodeData>>) {
 const nodeTypes = { displayNode: DisplayNode };
 
 function layoutToNodes(layout: DisplayLayout): Node<DisplayNodeData>[] {
+  const normalizedLayout = normalizeDuoDisplays(layout);
+
   // If multiple displays share (x,y), stagger them for usability.
-  const primary = layout.displays.find((d) => d.primary) ?? layout.displays[0];
+  const primary =
+    normalizedLayout.displays.find((d) => d.primary) ?? normalizedLayout.displays[0];
   const baseX = primary?.x ?? 0;
   const baseY = primary?.y ?? 0;
+  const primaryLogical = primary ? displayLogicalSize(primary) : null;
 
   const seen = new Map<string, number>();
 
-  return layout.displays.map((d) => {
+  return normalizedLayout.displays.map((d) => {
+    const logical = displayLogicalSize(d);
     const key = `${d.x},${d.y}`;
     const count = seen.get(key) ?? 0;
     seen.set(key, count + 1);
 
-    // If this (x,y) collides, stagger below the primary using real pixel sizes.
-    const staggerY = count === 0 ? 0 : (primary?.height ?? d.height) * count;
+    // If this (x,y) collides, stagger below the primary using logical display sizes.
+    const staggerY = count === 0 ? 0 : Math.floor((primaryLogical?.height ?? logical.height) * count);
     const effectiveX = count === 0 ? d.x : baseX;
     const effectiveY = count === 0 ? d.y : baseY + staggerY;
 
-    const w = Math.max(MIN_NODE_W, Math.round(d.width * PX_SCALE));
-    const h = Math.max(MIN_NODE_H, Math.round(d.height * PX_SCALE));
+    const scaledWidth = Math.round(logical.width * PX_SCALE);
+    const scaledHeight = Math.round(logical.height * PX_SCALE);
+    const w = Math.max(MIN_NODE_W, scaledWidth);
+    const h = isDuoDisplay(d.connector)
+      ? scaledHeight
+      : Math.max(MIN_NODE_H, scaledHeight);
 
     return {
       id: d.connector,
       type: "displayNode",
       position: { x: effectiveX * PX_SCALE, y: effectiveY * PX_SCALE },
-      draggable: true,
+      draggable: !isDuoDisplay(d.connector),
       selectable: true,
       data: {
         connector: d.connector,
         width: d.width,
         height: d.height,
+        logicalHeight: logical.height,
         refreshRate: d.refreshRate,
         primary: d.primary,
         scale: d.scale,
@@ -156,22 +189,24 @@ function layoutToNodes(layout: DisplayLayout): Node<DisplayNodeData>[] {
 }
 
 function updateDisplayPosition(layout: DisplayLayout, id: string, pos: { x: number; y: number }) {
-  const snapped = snapVerticalPosition(layout, id, pos);
+  if (isDuoDisplay(id)) {
+    return normalizeDuoDisplays(layout);
+  }
+
+  const snapped = snapDisplayPosition(layout, id, pos);
   const displays = layout.displays.map((d) => {
-    if (d.connector !== id) return d;
-    return { ...d, x: snapped.x, y: snapped.y };
+    if (d.connector === id) {
+      return { ...d, x: snapped.x, y: snapped.y };
+    }
+
+    return d;
   });
-  return { displays };
+  return normalizeDuoDisplays({ displays });
 }
 
 export default function DisplayCanvas({ layout, onLayoutChange }: DisplayCanvasProps) {
   const rfRef = useRef<ReactFlowInstance<Node<DisplayNodeData>> | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-
-  const fixedX = useMemo(() => {
-    const primary = layout.displays.find((d) => d.primary) ?? layout.displays[0];
-    return (primary?.x ?? 0) * PX_SCALE;
-  }, [layout.displays]);
 
   const derivedNodes = useMemo(() => layoutToNodes(layout), [layout]);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<DisplayNodeData>>([]);
@@ -215,24 +250,23 @@ export default function DisplayCanvas({ layout, onLayoutChange }: DisplayCanvasP
         fitView
         snapToGrid
         snapGrid={[10, 10]}
-        onNodeDragStart={() => setIsDragging(true)}
+        onNodeDragStart={(_, node) => {
+          if (isDuoDisplay(node.id)) return;
+          setIsDragging(true);
+        }}
         onNodeDrag={(_, node: Node<DisplayNodeData>) => {
-          // Physical Duo panels are stacked; keep X locked so nodes only move up/down.
+          if (isDuoDisplay(node.id)) return;
           setNodes((nds) =>
-            nds.map((n) =>
-              n.id === node.id
-                ? {
-                    ...n,
-                    position: { x: fixedX, y: node.position.y },
-                  }
-                : n
-            )
+            nds.map((n) => (n.id === node.id ? { ...n, position: node.position } : n))
           );
         }}
         onNodeDragStop={(_, node: Node<DisplayNodeData>) => {
+          if (isDuoDisplay(node.id)) {
+            setIsDragging(false);
+            return;
+          }
           setIsDragging(false);
-          const constrained = { x: fixedX, y: node.position.y };
-          const next = updateDisplayPosition(layout, node.id, constrained);
+          const next = updateDisplayPosition(layout, node.id, node.position);
           onLayoutChange(next);
         }}
         onPaneClick={() => {

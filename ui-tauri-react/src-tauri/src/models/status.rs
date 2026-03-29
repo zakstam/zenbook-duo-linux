@@ -45,6 +45,23 @@ impl Orientation {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum RefreshPolicy {
+    #[default]
+    Fixed,
+    Dynamic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayMode {
+    pub mode_id: String,
+    pub width: u32,
+    pub height: u32,
+    pub refresh_rate: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayInfo {
@@ -57,6 +74,10 @@ pub struct DisplayInfo {
     pub y: i32,
     pub transform: u32,
     pub primary: bool,
+    pub current_mode: DisplayMode,
+    pub available_modes: Vec<DisplayMode>,
+    pub refresh_policy: RefreshPolicy,
+    pub supports_dynamic_refresh: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
