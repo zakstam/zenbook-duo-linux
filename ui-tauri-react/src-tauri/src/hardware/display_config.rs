@@ -1,6 +1,8 @@
 use crate::models::{DisplayInfo, DisplayLayout, DisplayMode, Orientation, RefreshPolicy};
 use std::collections::HashSet;
 use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -93,8 +95,7 @@ fn niri_outputs_from_value(value: &serde_json::Value) -> Result<Vec<serde_json::
 }
 
 fn niri_output_names() -> Result<Vec<String>, String> {
-    let output = Command::new("niri")
-        .args(["msg", "--json", "outputs"])
+    let output = build_niri_command(&["msg", "--json", "outputs"])?
         .output()
         .map_err(|e| format!("Failed to run niri msg: {e}"))?;
     if !output.status.success() {
@@ -731,8 +732,7 @@ fn apply_kde_display_layout(layout: &DisplayLayout) -> Result<(), String> {
 }
 
 fn get_niri_display_layout() -> Result<DisplayLayout, String> {
-    let output = Command::new("niri")
-        .args(["msg", "--json", "outputs"])
+    let output = build_niri_command(&["msg", "--json", "outputs"])?
         .output()
         .map_err(|e| format!("Failed to run niri msg: {e}"))?;
     if !output.status.success() {
@@ -843,11 +843,11 @@ fn apply_niri_display_layout(layout: &DisplayLayout) -> Result<(), String> {
 
     let available_outputs = niri_output_names()?;
     for connector in omitted_output_names(layout, &available_outputs) {
-        run_command("niri", &["msg", "output", &connector, "off"])?;
+        run_niri_command(&["msg", "output", &connector, "off"])?;
     }
 
     for display in &layout.displays {
-        run_command("niri", &["msg", "output", &display.connector, "on"])?;
+        run_niri_command(&["msg", "output", &display.connector, "on"])?;
         match display.refresh_policy {
             RefreshPolicy::Dynamic => {
                 return Err(format!(
@@ -856,44 +856,35 @@ fn apply_niri_display_layout(layout: &DisplayLayout) -> Result<(), String> {
                 ));
             }
             RefreshPolicy::Fixed => {
-                run_command("niri", &["msg", "output", &display.connector, "vrr", "off"])?;
+                run_niri_command(&["msg", "output", &display.connector, "vrr", "off"])?;
             }
         }
-        run_command(
-            "niri",
-            &[
-                "msg",
-                "output",
-                &display.connector,
-                "mode",
-                &display.current_mode.mode_id,
-            ],
-        )?;
-        run_command(
-            "niri",
-            &[
-                "msg",
-                "output",
-                &display.connector,
-                "transform",
-                match display.transform {
-                    90 => "90",
-                    180 => "180",
-                    270 => "270",
-                    _ => "normal",
-                },
-            ],
-        )?;
-        run_command(
-            "niri",
-            &[
-                "msg",
-                "output",
-                &display.connector,
-                "scale",
-                &format!("{:.6}", display.scale.max(0.1)),
-            ],
-        )?;
+        run_niri_command(&[
+            "msg",
+            "output",
+            &display.connector,
+            "mode",
+            &display.current_mode.mode_id,
+        ])?;
+        run_niri_command(&[
+            "msg",
+            "output",
+            &display.connector,
+            "transform",
+            match display.transform {
+                90 => "90",
+                180 => "180",
+                270 => "270",
+                _ => "normal",
+            },
+        ])?;
+        run_niri_command(&[
+            "msg",
+            "output",
+            &display.connector,
+            "scale",
+            &format!("{:.6}", display.scale.max(0.1)),
+        ])?;
         run_niri_position_command(&display.connector, display.x, display.y)?;
     }
 
@@ -915,15 +906,60 @@ fn detect_backend() -> DisplayBackend {
         .unwrap_or_default()
         .to_lowercase();
 
+    detect_backend_from(&current, resolve_niri_socket().is_some())
+}
+
+fn detect_backend_from(current: &str, has_niri_socket: bool) -> DisplayBackend {
     if current.contains("gnome") {
         DisplayBackend::Gnome
     } else if current.contains("plasma") || current.contains("kde") {
         DisplayBackend::Kde
-    } else if current.contains("niri") {
+    } else if current.contains("niri") || has_niri_socket {
         DisplayBackend::Niri
     } else {
         DisplayBackend::Unknown
     }
+}
+
+fn niri_runtime_dir() -> Option<PathBuf> {
+    env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)
+}
+
+fn resolve_niri_socket() -> Option<PathBuf> {
+    let env_socket = env::var_os("NIRI_SOCKET").map(PathBuf::from);
+    resolve_niri_socket_from(env_socket.as_deref(), niri_runtime_dir().as_deref())
+}
+
+fn resolve_niri_socket_from(env_socket: Option<&Path>, runtime_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(env_socket) = env_socket {
+        if env_socket.exists() {
+            return Some(env_socket.to_path_buf());
+        }
+    }
+
+    let runtime_dir = runtime_dir?;
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+
+    for entry in fs::read_dir(runtime_dir).ok()? {
+        let entry = entry.ok()?;
+        let path = entry.path();
+        let name = path.file_name()?.to_str()?;
+        if !name.starts_with("niri.") || !name.ends_with(".sock") {
+            continue;
+        }
+
+        let modified = entry
+            .metadata()
+            .ok()?
+            .modified()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        match &newest {
+            Some((current_modified, _)) if *current_modified >= modified => {}
+            _ => newest = Some((modified, path)),
+        }
+    }
+
+    newest.map(|(_, path)| path)
 }
 
 fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<(), String> {
@@ -939,15 +975,33 @@ fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<(), String> {
     }
 }
 
+fn build_niri_command(args: &[&str]) -> Result<Command, String> {
+    let mut command = Command::new("niri");
+    command.args(args);
+    if let Some(socket) = resolve_niri_socket() {
+        command.env("NIRI_SOCKET", socket);
+    }
+    Ok(command)
+}
+
+fn run_niri_command(args: &[&str]) -> Result<(), String> {
+    let output = build_niri_command(args)?
+        .output()
+        .map_err(|e| format!("Failed to run niri msg: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
 fn run_niri_position_command(connector: &str, x: i32, y: i32) -> Result<(), String> {
     let x_arg = x.to_string();
     let y_arg = y.to_string();
-    run_command(
-        "niri",
-        &[
-            "msg", "output", connector, "position", "set", "--", &x_arg, &y_arg,
-        ],
-    )
+    run_niri_command(&[
+        "msg", "output", connector, "position", "set", "--", &x_arg, &y_arg,
+    ])
 }
 
 fn gnome_scale() -> Result<f64, String> {
@@ -1139,8 +1193,7 @@ fn set_kde_orientation(orientation: &Orientation) -> Result<(), String> {
 }
 
 fn niri_output_logical_size(name: &str) -> Result<(i64, i64), String> {
-    let output = Command::new("niri")
-        .args(["msg", "--json", "outputs"])
+    let output = build_niri_command(&["msg", "--json", "outputs"])?
         .output()
         .map_err(|e| format!("Failed to run niri msg: {e}"))?;
     if !output.status.success() {
@@ -1167,8 +1220,7 @@ fn niri_output_logical_size(name: &str) -> Result<(i64, i64), String> {
 }
 
 fn niri_enabled_output_count() -> Result<usize, String> {
-    let output = Command::new("niri")
-        .args(["msg", "--json", "outputs"])
+    let output = build_niri_command(&["msg", "--json", "outputs"])?
         .output()
         .map_err(|e| format!("Failed to run niri msg: {e}"))?;
     if !output.status.success() {
@@ -1200,14 +1252,14 @@ fn niri_transform_token(orientation: &Orientation) -> &'static str {
 
 fn set_niri_orientation(orientation: &Orientation) -> Result<(), String> {
     let token = niri_transform_token(orientation);
-    run_command("niri", &["msg", "output", "eDP-1", "transform", token])?;
+    run_niri_command(&["msg", "output", "eDP-1", "transform", token])?;
     run_niri_position_command("eDP-1", 0, 0)?;
 
     if niri_enabled_output_count().unwrap_or(1) <= 1 {
         return Ok(());
     }
 
-    run_command("niri", &["msg", "output", "eDP-2", "transform", token])?;
+    run_niri_command(&["msg", "output", "eDP-2", "transform", token])?;
     thread::sleep(Duration::from_millis(300));
 
     let (width, height) = niri_output_logical_size("eDP-1").unwrap_or((0, 0));
@@ -1236,6 +1288,41 @@ pub fn set_orientation(orientation: &Orientation) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "zenbook-duo-display-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn detects_niri_from_socket_when_desktop_env_is_missing() {
+        assert_eq!(detect_backend_from("", true), DisplayBackend::Niri);
+    }
+
+    #[test]
+    fn resolves_newest_niri_socket_from_runtime_dir() {
+        let runtime_dir = unique_temp_dir("niri-socket");
+        let older = runtime_dir.join("niri.older.sock");
+        let newer = runtime_dir.join("niri.newer.sock");
+        fs::write(&older, "").expect("write older socket marker");
+        std::thread::sleep(Duration::from_millis(10));
+        fs::write(&newer, "").expect("write newer socket marker");
+
+        let resolved = resolve_niri_socket_from(None, Some(runtime_dir.as_path()))
+            .expect("socket should resolve");
+
+        assert_eq!(resolved, newer);
+        fs::remove_dir_all(runtime_dir).expect("remove temp dir");
+    }
 
     fn test_display(connector: &str) -> DisplayInfo {
         let mode = make_display_mode(2880, 1800, 120.0);
