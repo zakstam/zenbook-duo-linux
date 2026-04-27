@@ -16,7 +16,7 @@ export default function BacklightSlider() {
   const dispatch = useDispatch();
   const [pending, setPending] = useState(false);
   const [localLevel, setLocalLevel] = useState<number | null>(null);
-  const clearTimer = useRef<ReturnType<typeof setTimeout>>(null);
+  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const displayLevel = localLevel ?? store.status.backlightLevel;
 

@@ -89,12 +89,12 @@ export default function Status() {
             <StatusRow label="Backlight">
               <div className="flex items-center gap-2">
                 <div className="flex gap-[3px]">
-                  {[0, 1, 2, 3].map((level) => (
+                  {[0, 1, 2].map((level) => (
                     <div
                       key={level}
                       className={cn(
                         "h-2.5 w-[14px] rounded-[3px] transition-all duration-300",
-                        level <= store.status.backlightLevel
+                        level < store.status.backlightLevel
                           ? "bg-teal-500 shadow-sm shadow-teal-500/30"
                           : "bg-muted"
                       )}
