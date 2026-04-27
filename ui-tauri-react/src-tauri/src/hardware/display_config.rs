@@ -41,6 +41,79 @@ fn dedupe_modes(modes: Vec<DisplayMode>) -> Vec<DisplayMode> {
     deduped
 }
 
+fn omitted_output_names(layout: &DisplayLayout, available_outputs: &[String]) -> Vec<String> {
+    let desired = layout
+        .displays
+        .iter()
+        .map(|display| display.connector.as_str())
+        .collect::<HashSet<_>>();
+
+    available_outputs
+        .iter()
+        .filter(|name| !desired.contains(name.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn kde_output_names() -> Result<Vec<String>, String> {
+    let output = Command::new("kscreen-doctor")
+        .arg("-j")
+        .output()
+        .map_err(|e| format!("Failed to run kscreen-doctor: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid kscreen JSON: {e}"))?;
+    kde_output_names_from_value(&value)
+}
+
+fn kde_output_names_from_value(value: &serde_json::Value) -> Result<Vec<String>, String> {
+    let outputs = value
+        .get("outputs")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "Missing KDE outputs array".to_string())?;
+
+    Ok(outputs
+        .iter()
+        .filter_map(|output| output.get("name").and_then(|v| v.as_str()))
+        .map(ToString::to_string)
+        .collect())
+}
+
+fn niri_outputs_from_value(value: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+    if let Some(arr) = value.as_array() {
+        Ok(arr.clone())
+    } else if let Some(obj) = value.as_object() {
+        Ok(obj.values().cloned().collect())
+    } else {
+        Err("Unexpected niri outputs shape".into())
+    }
+}
+
+fn niri_output_names() -> Result<Vec<String>, String> {
+    let output = Command::new("niri")
+        .args(["msg", "--json", "outputs"])
+        .output()
+        .map_err(|e| format!("Failed to run niri msg: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid niri JSON: {e}"))?;
+    niri_output_names_from_value(&value)
+}
+
+fn niri_output_names_from_value(value: &serde_json::Value) -> Result<Vec<String>, String> {
+    Ok(niri_outputs_from_value(value)?
+        .iter()
+        .filter_map(|output| output.get("name").and_then(|v| v.as_str()))
+        .map(ToString::to_string)
+        .collect())
+}
+
 fn stacked_logical_height(display: &DisplayInfo) -> i32 {
     let rotated = display.transform == 90 || display.transform == 270;
     let physical_height = if rotated {
@@ -612,6 +685,11 @@ fn apply_kde_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     }
 
     let mut args: Vec<String> = Vec::new();
+    let available_outputs = kde_output_names()?;
+    for connector in omitted_output_names(layout, &available_outputs) {
+        args.push(format!("output.{connector}.disable"));
+    }
+
     for display in &layout.displays {
         if display.refresh_policy == RefreshPolicy::Dynamic {
             return Err(format!(
@@ -663,13 +741,7 @@ fn get_niri_display_layout() -> Result<DisplayLayout, String> {
 
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid niri JSON: {e}"))?;
-    let outputs: Vec<serde_json::Value> = if let Some(arr) = value.as_array() {
-        arr.clone()
-    } else if let Some(obj) = value.as_object() {
-        obj.values().cloned().collect()
-    } else {
-        return Err("Unexpected niri outputs shape".into());
-    };
+    let outputs = niri_outputs_from_value(&value)?;
 
     fn parse_niri_mode(value: &serde_json::Value) -> Option<DisplayMode> {
         Some(make_display_mode(
@@ -767,6 +839,11 @@ fn parse_niri_transform(output: &serde_json::Value) -> u32 {
 fn apply_niri_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     if layout.displays.is_empty() {
         return Err("No displays in layout".into());
+    }
+
+    let available_outputs = niri_output_names()?;
+    for connector in omitted_output_names(layout, &available_outputs) {
+        run_command("niri", &["msg", "output", &connector, "off"])?;
     }
 
     for display in &layout.displays {
@@ -1072,13 +1149,7 @@ fn niri_output_logical_size(name: &str) -> Result<(i64, i64), String> {
 
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid niri JSON: {e}"))?;
-    let outputs = if let Some(arr) = value.as_array() {
-        arr.clone()
-    } else if let Some(obj) = value.as_object() {
-        obj.values().cloned().collect()
-    } else {
-        return Err("Unexpected niri outputs shape".into());
-    };
+    let outputs = niri_outputs_from_value(&value)?;
 
     for output in outputs {
         if output.get("name").and_then(|v| v.as_str()) == Some(name) {
@@ -1106,13 +1177,7 @@ fn niri_enabled_output_count() -> Result<usize, String> {
 
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid niri JSON: {e}"))?;
-    let outputs: Vec<serde_json::Value> = if let Some(arr) = value.as_array() {
-        arr.clone()
-    } else if let Some(obj) = value.as_object() {
-        obj.values().cloned().collect()
-    } else {
-        return Err("Unexpected niri outputs shape".into());
-    };
+    let outputs = niri_outputs_from_value(&value)?;
 
     Ok(outputs
         .iter()
@@ -1171,6 +1236,63 @@ pub fn set_orientation(orientation: &Orientation) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_display(connector: &str) -> DisplayInfo {
+        let mode = make_display_mode(2880, 1800, 120.0);
+        DisplayInfo {
+            connector: connector.to_string(),
+            width: mode.width,
+            height: mode.height,
+            refresh_rate: mode.refresh_rate,
+            scale: 1.66,
+            x: 0,
+            y: 0,
+            transform: 0,
+            primary: connector == "eDP-1",
+            current_mode: mode.clone(),
+            available_modes: vec![mode],
+            refresh_policy: RefreshPolicy::Fixed,
+            supports_dynamic_refresh: false,
+        }
+    }
+
+    #[test]
+    fn finds_outputs_omitted_from_saved_layout() {
+        let layout = DisplayLayout {
+            displays: vec![test_display("eDP-1")],
+        };
+        let available = vec!["eDP-1".to_string(), "eDP-2".to_string()];
+
+        assert_eq!(omitted_output_names(&layout, &available), vec!["eDP-2"]);
+    }
+
+    #[test]
+    fn parses_kde_output_names_for_disable_replay() {
+        let value = serde_json::json!({
+            "outputs": [
+                { "name": "eDP-1", "enabled": true },
+                { "name": "eDP-2", "enabled": true }
+            ]
+        });
+
+        assert_eq!(
+            kde_output_names_from_value(&value).expect("names should parse"),
+            vec!["eDP-1".to_string(), "eDP-2".to_string()]
+        );
+    }
+
+    #[test]
+    fn parses_niri_output_names_for_disable_replay() {
+        let value = serde_json::json!({
+            "eDP-1": { "name": "eDP-1" },
+            "eDP-2": { "name": "eDP-2" }
+        });
+
+        assert_eq!(
+            niri_output_names_from_value(&value).expect("names should parse"),
+            vec!["eDP-1".to_string(), "eDP-2".to_string()]
+        );
+    }
 
     #[test]
     fn formats_mode_ids_without_trailing_zeroes() {
