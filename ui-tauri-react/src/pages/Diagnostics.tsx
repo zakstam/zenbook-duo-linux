@@ -77,8 +77,9 @@ export default function Diagnostics() {
       const devices = await api.diagListEvdev();
       setEvdev(devices);
       setEvdevError(null);
-      if (!devices.some((d) => d.eventPath === selectedEvdev) && devices.length > 0) {
-        setSelectedEvdev(devices[0].eventPath);
+      const firstDevice = devices[0];
+      if (!devices.some((d) => d.eventPath === selectedEvdev) && firstDevice) {
+        setSelectedEvdev(firstDevice.eventPath);
       }
     } catch (e) {
       setEvdevError(String(e));
@@ -92,13 +93,15 @@ export default function Diagnostics() {
     try {
       const devices = await api.diagListHid(vid, pid);
       setHid(devices);
-      if (!devices.some((d) => d.id === selectedHidId)) setSelectedHidId(devices[0]?.id ?? "");
+      const firstDevice = devices[0];
+      if (!devices.some((d) => d.id === selectedHidId)) setSelectedHidId(firstDevice?.id ?? "");
 
       const nextHidraw = Array.from(
         new Set(devices.flatMap((d) => d.hidrawNodes))
       ).sort();
-      if (nextHidraw.length > 0 && !nextHidraw.includes(selectedHidraw)) {
-        setSelectedHidraw(nextHidraw[0]);
+      const firstHidraw = nextHidraw[0];
+      if (firstHidraw && !nextHidraw.includes(selectedHidraw)) {
+        setSelectedHidraw(firstHidraw);
       }
       setDescriptor(null);
       setDescriptorError(null);

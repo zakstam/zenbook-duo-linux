@@ -22,7 +22,7 @@ export default function BacklightSlider() {
 
   const handleChange = async (value: number[]) => {
     const level = value[0];
-    if (level === displayLevel) return;
+    if (level === undefined || level === displayLevel) return;
 
     if (clearTimer.current) clearTimeout(clearTimer.current);
 

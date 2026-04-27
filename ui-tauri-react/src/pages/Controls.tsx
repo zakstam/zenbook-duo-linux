@@ -14,6 +14,7 @@ import {
   IconServer,
   IconCheck,
   IconHandFinger,
+  IconAlertTriangle,
 } from "@tabler/icons-react";
 
 export default function Controls() {
@@ -21,6 +22,7 @@ export default function Controls() {
   const store = useStore();
   const [restarting, setRestarting] = useState(false);
   const [restarted, setRestarted] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
   const [touchscreens, setTouchscreens] = useState<TouchscreenDevice[]>([]);
 
   useEffect(() => {
@@ -47,6 +49,7 @@ export default function Controls() {
   const handleRestart = async () => {
     setRestarting(true);
     setRestarted(false);
+    setRestartError(null);
     try {
       await restartService();
       setTimeout(async () => {
@@ -57,6 +60,13 @@ export default function Controls() {
       }, 2000);
     } catch (err) {
       console.error("Failed to restart service:", err);
+      const message =
+        typeof err === "string"
+          ? err
+          : err && typeof err === "object" && "message" in err
+            ? String((err as { message?: unknown }).message)
+            : "Failed to restart service";
+      setRestartError(message);
       setRestarting(false);
     }
   };
@@ -147,6 +157,12 @@ export default function Controls() {
               {restarting ? "Restarting..." : restarted ? "Restarted" : "Restart"}
             </Button>
           </div>
+          {restartError && (
+            <div className="mt-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
+              <IconAlertTriangle className="size-3.5 shrink-0" stroke={1.5} />
+              <span>{restartError}</span>
+            </div>
+          )}
         </div>
 
         {touchscreens.length > 0 && (

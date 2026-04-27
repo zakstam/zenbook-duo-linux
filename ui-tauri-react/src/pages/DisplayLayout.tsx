@@ -204,16 +204,21 @@ export default function DisplayLayout() {
           Per-Display Settings
         </h3>
         <div className="space-y-4">
-          {layout.displays.map((d, i) => (
+          {layout.displays.map((d) => (
             <div key={d.connector} className="flex items-center justify-between gap-4">
               <Label className="font-mono text-[13px]">{d.connector}</Label>
               <div className="flex items-center gap-3">
                 <Select
                   value={String(d.scale)}
                   onValueChange={(v) => {
-                    const displays = [...layout.displays];
-                    displays[i] = { ...displays[i], scale: parseFloat(v) };
-                    setLayout({ displays });
+                    const scale = parseFloat(v);
+                    setLayout((current) => ({
+                      displays: current.displays.map((display) =>
+                        display.connector === d.connector
+                          ? { ...display, scale }
+                          : display
+                      ),
+                    }));
                   }}
                 >
                   <SelectTrigger className="w-40">

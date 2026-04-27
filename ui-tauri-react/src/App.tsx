@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore, useStoreInit } from "@/lib/store";
 import Sidebar from "@/components/Sidebar";
 import Status from "@/pages/Status";
@@ -10,6 +10,7 @@ import Profiles from "@/pages/Profiles";
 import EventMonitor from "@/pages/EventMonitor";
 import Diagnostics from "@/pages/Diagnostics";
 import Setup from "@/pages/Setup";
+import { useTheme } from "next-themes";
 
 export type Page =
   | "status"
@@ -37,6 +38,12 @@ export default function App() {
 
   useStoreInit();
   const store = useStore();
+  const { setTheme } = useTheme();
+
+  useEffect(() => {
+    if (store.loading) return;
+    setTheme(store.settings.theme);
+  }, [setTheme, store.loading, store.settings.theme]);
 
   if (!store.loading && !store.settings.setupCompleted) {
     return <Setup />;

@@ -31,11 +31,11 @@ pub fn restart_service() -> Result<(), String> {
         errors.push(message);
     }
 
-    if errors.len() == 2 {
-        return Err(errors.join("; "));
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
     }
-
-    Ok(())
 }
 
 fn restart_user_unit(unit: &str) -> Result<(), String> {
@@ -61,13 +61,37 @@ fn restart_system_unit(unit: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to restart {unit}: {e}"))?;
 
     if output.status.success() || unit_not_found(&output) {
-        Ok(())
-    } else {
-        Err(format!(
-            "Failed to restart {unit}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
+        return Ok(());
     }
+
+    if command_exists("pkexec") {
+        let elevated = Command::new("pkexec")
+            .args(["systemctl", "restart", unit])
+            .output()
+            .map_err(|e| format!("Failed to restart {unit} with pkexec: {e}"))?;
+
+        if elevated.status.success() || unit_not_found(&elevated) {
+            return Ok(());
+        }
+
+        return Err(format!(
+            "Failed to restart {unit} with pkexec: {}",
+            String::from_utf8_lossy(&elevated.stderr).trim()
+        ));
+    }
+
+    Err(format!(
+        "Failed to restart {unit}: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
+fn command_exists(program: &str) -> bool {
+    Command::new("sh")
+        .args(["-c", &format!("command -v {program} >/dev/null 2>&1")])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn unit_not_found(output: &std::process::Output) -> bool {
