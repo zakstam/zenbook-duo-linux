@@ -21,7 +21,7 @@ pub async fn run() -> Result<(), String> {
     ensure_user_runtime_dir()?;
     let listener = bind_session_listener(paths::current_user_session_socket_path().as_path())?;
 
-    let backend = wait_for_ready_backend().await?;
+    let backend = wait_for_ready_backend().await;
     register_with_daemon(backend).await?;
     tokio::spawn(async {
         if let Err(err) = watch_rotation().await {
@@ -329,22 +329,44 @@ fn gui_session_env_ready() -> bool {
     has_runtime_dir && (has_wayland || has_x11)
 }
 
-async fn wait_for_ready_backend() -> Result<SessionBackend, String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    let mut hinted_backend = detect_backend();
+async fn wait_for_ready_backend() -> SessionBackend {
+    wait_for_ready_backend_with(
+        detect_backend,
+        backend_is_ready,
+        Duration::from_secs(15),
+        Duration::from_millis(500),
+    )
+    .await
+}
+
+async fn wait_for_ready_backend_with<D, R>(
+    mut detect_hint: D,
+    mut is_ready: R,
+    first_notice_after: Duration,
+    retry_delay: Duration,
+) -> SessionBackend
+where
+    D: FnMut() -> SessionBackend,
+    R: FnMut(SessionBackend) -> bool,
+{
+    let first_notice_at = tokio::time::Instant::now() + first_notice_after;
+    let mut warned_after_first_timeout = false;
 
     loop {
-        let backend = detect_ready_backend_from(hinted_backend.clone(), backend_is_ready);
+        let hinted_backend = detect_hint();
+        let backend = detect_ready_backend_from(hinted_backend, &mut is_ready);
         if backend != SessionBackend::Unknown {
-            return Ok(backend);
+            return backend;
         }
 
-        if tokio::time::Instant::now() >= deadline {
-            return Err("No supported session backend became ready before timeout".into());
+        if !warned_after_first_timeout && tokio::time::Instant::now() >= first_notice_at {
+            log::warn!(
+                "No supported session backend became ready before timeout; continuing to wait"
+            );
+            warned_after_first_timeout = true;
         }
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        hinted_backend = detect_backend();
+        tokio::time::sleep(retry_delay).await;
     }
 }
 
@@ -1034,6 +1056,24 @@ mod tests {
     fn detect_ready_backend_returns_unknown_when_nothing_is_ready() {
         let ready = detect_ready_backend_from(SessionBackend::Gnome, |_| false);
         assert_eq!(ready, SessionBackend::Unknown);
+    }
+
+    #[tokio::test]
+    async fn wait_for_ready_backend_keeps_retrying_after_initial_timeout() {
+        let mut attempts = 0;
+        let backend = wait_for_ready_backend_with(
+            || SessionBackend::Kde,
+            |backend| {
+                attempts += 1;
+                backend == SessionBackend::Kde && attempts >= 3
+            },
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        )
+        .await;
+
+        assert_eq!(backend, SessionBackend::Kde);
+        assert!(attempts >= 3);
     }
 
     fn unique_test_socket_path(label: &str) -> PathBuf {

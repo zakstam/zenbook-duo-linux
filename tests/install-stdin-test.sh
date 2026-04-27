@@ -67,6 +67,16 @@ if ! grep -q 'WantedBy=default.target' "${ROOT_DIR}/install-rust-runtime.sh"; th
   exit 1
 fi
 
+if grep -q 'Wants=graphical-session.target' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: user service should not pull in graphical-session.target" >&2
+  exit 1
+fi
+
+if ! grep -q 'After=graphical-session.target' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: user service should still order itself after graphical-session.target" >&2
+  exit 1
+fi
+
 if ! grep -q 'import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE' "${ROOT_DIR}/install-rust-runtime.sh"; then
   echo "FAIL: installer should import graphical session environment for the user manager" >&2
   exit 1

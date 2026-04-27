@@ -135,8 +135,8 @@ Notes:
   - Check the services are running: `systemctl status zenbook-duo-rust-daemon.service` and `systemctl --user status zenbook-duo-session-agent.service`
   - Watch daemon logs: `journalctl -u zenbook-duo-rust-daemon.service -f`
 - Reboot/login comes up in the wrong layout:
-  - After login, the session agent should auto-sync the current attached/detached state without a manual restart
-  - Check `systemctl --user status zenbook-duo-session-agent.service`
+  - After login, the session agent waits for your desktop display backend, then auto-syncs the current attached/detached state without a manual restart
+  - Check `systemctl --user status zenbook-duo-session-agent.service`; an early `No supported session backend became ready before timeout; continuing to wait` warning is OK if the service remains active
   - Confirm your user manager has the desktop-session environment: `systemctl --user show-environment | grep -E 'DISPLAY|WAYLAND_DISPLAY|NIRI_SOCKET|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|DESKTOP_SESSION|XDG_SESSION_TYPE'`
   - If those variables are missing after reinstalling, rerun `./install.sh` from an active desktop session, then log out and back in once
 - `Failed to read events: No such device (os error 19)` when reattaching the keyboard:

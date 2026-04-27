@@ -143,7 +143,6 @@ cat <<EOF | sudo tee "/etc/systemd/user/${USER_SERVICE_NAME}" >/dev/null
 [Unit]
 Description=Zenbook Duo Session Agent
 ConditionUser=!gdm
-Wants=graphical-session.target
 After=graphical-session.target
 
 [Service]
