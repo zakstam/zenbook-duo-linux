@@ -220,18 +220,6 @@ fn handle_event(
             }
             return Ok(());
         }
-        Key::KEY_F5 => {
-            if value == 1 {
-                step_brightness("down")?;
-            }
-            return Ok(());
-        }
-        Key::KEY_F6 => {
-            if value == 1 {
-                step_brightness("up")?;
-            }
-            return Ok(());
-        }
         Key::KEY_F11 => {
             if value == 1 {
                 open_emoji_picker(args.user.as_deref());
@@ -239,6 +227,10 @@ fn handle_event(
             return Ok(());
         }
         _ => {}
+    }
+
+    if let Some((mapped, direction)) = brightness_key_mapping(key) {
+        return handle_brightness_key(uinput, mapped, value, direction);
     }
 
     let mapped = match key {
@@ -249,6 +241,51 @@ fn handle_event(
     };
 
     emit_key(uinput, mapped, value)
+}
+
+fn brightness_key_mapping(key: Key) -> Option<(Key, &'static str)> {
+    match key {
+        Key::KEY_F5 => Some((Key::KEY_BRIGHTNESSDOWN, "down")),
+        Key::KEY_F6 => Some((Key::KEY_BRIGHTNESSUP, "up")),
+        _ => None,
+    }
+}
+
+fn handle_brightness_key(
+    uinput: &mut evdev::uinput::VirtualDevice,
+    key: Key,
+    value: i32,
+    direction: &str,
+) -> Result<(), String> {
+    let before = if value == 1 {
+        read_primary_brightness().ok()
+    } else {
+        None
+    };
+
+    emit_key(uinput, key, value)?;
+
+    if value == 1 {
+        maybe_step_brightness_after_native_event(direction, before)?;
+    }
+
+    Ok(())
+}
+
+fn maybe_step_brightness_after_native_event(
+    direction: &str,
+    before: Option<i32>,
+) -> Result<(), String> {
+    std::thread::sleep(Duration::from_millis(200));
+    let after = read_primary_brightness().ok();
+    if brightness_fallback_needed(before, after) {
+        step_brightness(direction)?;
+    }
+    Ok(())
+}
+
+fn brightness_fallback_needed(before: Option<i32>, after: Option<i32>) -> bool {
+    matches!((before, after), (Some(before), Some(after)) if before == after)
 }
 
 fn emit_key(uinput: &mut evdev::uinput::VirtualDevice, key: Key, value: i32) -> Result<(), String> {
@@ -439,6 +476,10 @@ fn current_time_ms() -> u128 {
         .as_millis()
 }
 
+fn read_primary_brightness() -> Result<i32, String> {
+    read_backlight_value(&Path::new("/sys/class/backlight/intel_backlight").join("brightness"))
+}
+
 fn step_brightness(direction: &str) -> Result<(), String> {
     let primary = Path::new("/sys/class/backlight/intel_backlight");
     if !primary.exists() {
@@ -520,5 +561,26 @@ mod tests {
         assert_eq!(next_brightness_value(200, 400, "down"), 180);
         assert_eq!(next_brightness_value(395, 400, "up"), 400);
         assert_eq!(next_brightness_value(5, 400, "down"), 0);
+    }
+
+    #[test]
+    fn brightness_keys_map_to_native_desktop_events() {
+        assert_eq!(
+            brightness_key_mapping(Key::KEY_F5),
+            Some((Key::KEY_BRIGHTNESSDOWN, "down"))
+        );
+        assert_eq!(
+            brightness_key_mapping(Key::KEY_F6),
+            Some((Key::KEY_BRIGHTNESSUP, "up"))
+        );
+        assert_eq!(brightness_key_mapping(Key::KEY_F4), None);
+    }
+
+    #[test]
+    fn brightness_fallback_only_runs_when_native_event_did_not_change_level() {
+        assert!(brightness_fallback_needed(Some(100), Some(100)));
+        assert!(!brightness_fallback_needed(Some(100), Some(110)));
+        assert!(!brightness_fallback_needed(None, Some(100)));
+        assert!(!brightness_fallback_needed(Some(100), None));
     }
 }
