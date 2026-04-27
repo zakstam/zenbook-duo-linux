@@ -74,8 +74,12 @@ export default function DisplayLayout() {
     setError("");
     try {
       await applyDisplayLayout(layout);
+
+      const settings = await loadSettings();
+      settings.savedDisplayLayout = layout;
+      await saveSettings(settings);
     } catch (err) {
-      setError(`Failed to apply layout: ${err}`);
+      setError(`Failed to apply or save layout: ${err}`);
     } finally {
       setApplying(false);
     }

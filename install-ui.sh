@@ -6,16 +6,18 @@ BRANCH_DEFAULT=""
 
 SCRIPT_PATH="${BASH_SOURCE[0]:-${0}}"
 RUNNING_FROM_STDIN=false
+SCRIPT_PATH_ABS=""
 if [ -z "${SCRIPT_PATH}" ] || [ "${SCRIPT_PATH}" = "bash" ] || [ "${SCRIPT_PATH}" = "-" ]; then
   RUNNING_FROM_STDIN=true
   SCRIPT_DIR="$(pwd)"
 else
   SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+  SCRIPT_PATH_ABS="${SCRIPT_DIR}/$(basename "${SCRIPT_PATH}")"
 fi
-SCRIPT_VERSION="2026-01-30"
+SCRIPT_VERSION="2026-04-26"
 
 usage() {
-  cat <<'EOF'
+  cat <<'EOF_USAGE'
 install-ui.sh - clone, build, and install the Zenbook Duo Control UI (Tauri)
 
 Usage:
@@ -28,12 +30,17 @@ Examples:
 
 Notes:
   - The Control Panel can be launched from your app menu after install.
-EOF
+  - Privileged steps use a graphical auth prompt when available, with a terminal fallback.
+EOF_USAGE
 }
 
 die() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+running_as_root() {
+  [ "${EUID:-$(id -u)}" -eq 0 ]
 }
 
 stop_running_app() {
@@ -48,7 +55,6 @@ stop_running_app() {
   fi
 
   echo "Stopping running zenbook-duo-control (pids: $pids)..."
-  # Try graceful first.
   kill $pids 2>/dev/null || true
 
   local i=0
@@ -76,22 +82,175 @@ start_app_background() {
   fi
 
   echo "Relaunching zenbook-duo-control..."
-  # Detach from this script completely.
   nohup zenbook-duo-control >/dev/null 2>&1 &
 }
 
 ensure_shortcut() {
-  # The RPM/DEB already installs a system .desktop file (and icons). Creating another entry in
-  # ~/.local/share/applications results in duplicate app launchers in GNOME.
-  #
-  # Keep this as a no-op for now. If we want a desktop icon in the future, we should create it
-  # conditionally and only when there isn't already a system-installed desktop entry.
   return 0
 }
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
+
+root_install_prereqs_dnf() {
+  echo "Installing build prerequisites (dnf)..."
+  dnf install -y \
+    git \
+    curl \
+    nodejs \
+    npm \
+    gcc \
+    gcc-c++ \
+    make \
+    pkgconf-pkg-config \
+    openssl-devel \
+    webkit2gtk4.1-devel \
+    gtk3-devel \
+    librsvg2-devel \
+    rpm-build
+
+  echo "Installing AppIndicator dev package (best-effort)..."
+  dnf install -y libappindicator-gtk3-devel \
+    || dnf install -y libappindicator3-devel \
+    || dnf install -y ayatana-appindicator3-devel \
+    || echo "WARN: Could not install an AppIndicator *-devel package. Tray integration may not build on some desktops." >&2
+}
+
+root_install_prereqs_apt() {
+  echo "Installing build prerequisites (apt)..."
+  apt update
+  apt install -y \
+    git \
+    curl \
+    nodejs \
+    npm \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    libgtk-3-dev \
+    libwebkit2gtk-4.1-dev \
+    librsvg2-dev \
+    dpkg-dev \
+    fakeroot
+
+  echo "Installing AppIndicator dev package (best-effort)..."
+  apt install -y libayatana-appindicator3-dev \
+    || apt install -y libappindicator3-dev \
+    || echo "WARN: Could not install an AppIndicator *-dev package. Tray integration may not build on some desktops." >&2
+}
+
+root_install_prereqs_pacman() {
+  echo "Installing build prerequisites (pacman)..."
+  pacman -S --needed --noconfirm \
+    git \
+    curl \
+    nodejs \
+    npm \
+    base-devel \
+    pkgconf \
+    openssl \
+    gtk3 \
+    webkit2gtk-4.1 \
+    librsvg \
+    desktop-file-utils
+
+  echo "Installing AppIndicator package (best-effort)..."
+  pacman -S --needed --noconfirm libayatana-appindicator \
+    || echo "WARN: Could not install libayatana-appindicator. Tray integration may not build on some desktops." >&2
+}
+
+root_install_package_dnf() {
+  local pkg="${1:-}"
+  local built_vr="${2:-}"
+  local installed_vr="${3:-}"
+  [ -n "${pkg}" ] || die "--root-install-package dnf requires a package path"
+
+  if [ -n "$built_vr" ] && [ -n "$installed_vr" ] && [ "$built_vr" = "$installed_vr" ]; then
+    dnf reinstall -y "$pkg"
+  else
+    dnf install -y "$pkg"
+  fi
+}
+
+root_install_package_apt() {
+  local pkg="${1:-}"
+  [ -n "${pkg}" ] || die "--root-install-package apt requires a package path"
+
+  apt install -y --reinstall "$pkg" || dpkg -i "$pkg"
+}
+
+root_install_ui_direct() {
+  local built_binary="${1:-}"
+  local desktop_src="${2:-}"
+  local icon_src="${3:-}"
+
+  [ -f "${built_binary}" ] || die "No built UI binary found at ${built_binary}"
+  [ -f "${desktop_src}" ] || die "Desktop entry template missing at ${desktop_src}"
+  [ -f "${icon_src}" ] || die "Icon missing at ${icon_src}"
+
+  echo "Installing UI binary and desktop assets..."
+  install -Dm755 "${built_binary}" /usr/local/bin/zenbook-duo-control
+  install -Dm644 "${desktop_src}" /usr/share/applications/zenbook-duo-control.desktop
+  install -Dm644 "${icon_src}" /usr/share/pixmaps/zenbook-duo-control.png
+
+  update-desktop-database /usr/share/applications 2>/dev/null || true
+  gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
+}
+
+dispatch_root_helper() {
+  local action="${1:-}"
+  shift || true
+
+  running_as_root || die "Privileged helper requires root"
+
+  case "$action" in
+    --root-install-prereqs)
+      case "${1:-}" in
+        dnf)
+          root_install_prereqs_dnf
+          ;;
+        apt)
+          root_install_prereqs_apt
+          ;;
+        pacman)
+          root_install_prereqs_pacman
+          ;;
+        *)
+          die "Unsupported package manager for --root-install-prereqs: ${1:-<empty>}"
+          ;;
+      esac
+      ;;
+    --root-install-package)
+      local pkg_mgr="${1:-}"
+      local pkg="${2:-}"
+      local built_vr="${3:-}"
+      local installed_vr="${4:-}"
+      case "$pkg_mgr" in
+        dnf)
+          root_install_package_dnf "$pkg" "$built_vr" "$installed_vr"
+          ;;
+        apt)
+          root_install_package_apt "$pkg"
+          ;;
+        *)
+          die "Unsupported package manager for --root-install-package: ${pkg_mgr:-<empty>}"
+          ;;
+      esac
+      ;;
+    --root-install-direct)
+      root_install_ui_direct "${1:-}" "${2:-}" "${3:-}"
+      ;;
+    *)
+      die "Unknown privileged helper action: ${action:-<empty>}"
+      ;;
+  esac
+}
+
+if [[ "${1:-}" == --root-install-* ]]; then
+  dispatch_root_helper "$@"
+  exit 0
+fi
 
 REPO_URL="$REPO_URL_DEFAULT"
 BRANCH="$BRANCH_DEFAULT"
@@ -151,83 +310,73 @@ elif command -v pacman >/dev/null 2>&1; then
 fi
 
 SUDO_KEEPALIVE_PID=""
-if command -v sudo >/dev/null 2>&1; then
-  # Ask for sudo once up-front so the script doesn't pause mid-run.
-  echo "Requesting sudo..."
-  sudo -v
-  # Keep sudo alive while we run (best-effort).
-  ( while true; do sleep 50; sudo -n true || exit 0; done ) >/dev/null 2>&1 &
-  SUDO_KEEPALIVE_PID="$!"
-fi
+PRIVILEGE_MODE=""
 
-install_prereqs_dnf() {
-  echo "Installing build prerequisites (dnf)..."
-  sudo dnf install -y \
-    git \
-    curl \
-    nodejs \
-    npm \
-    gcc \
-    gcc-c++ \
-    make \
-    pkgconf-pkg-config \
-    openssl-devel \
-    webkit2gtk4.1-devel \
-    gtk3-devel \
-    librsvg2-devel \
-    rpm-build
-
-  # AppIndicator dev package naming varies across Fedora variants.
-  # Avoid `dnf list ... >/dev/null` checks (can be slow and look like a hang with no output).
-  echo "Installing AppIndicator dev package (best-effort)..."
-  sudo dnf install -y libappindicator-gtk3-devel \
-    || sudo dnf install -y libappindicator3-devel \
-    || sudo dnf install -y ayatana-appindicator3-devel \
-    || echo "WARN: Could not install an AppIndicator *-devel package. Tray integration may not build on some desktops." >&2
+has_graphical_session() {
+  [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${XDG_SESSION_TYPE:-}" ]
 }
 
-install_prereqs_apt() {
-  echo "Installing build prerequisites (apt)..."
-  sudo apt update
-  sudo apt install -y \
-    git \
-    curl \
-    nodejs \
-    npm \
-    build-essential \
-    pkg-config \
-    libssl-dev \
-    libgtk-3-dev \
-    libwebkit2gtk-4.1-dev \
-    librsvg2-dev \
-    dpkg-dev \
-    fakeroot
+prepare_privilege_helper() {
+  if running_as_root; then
+    PRIVILEGE_MODE="root"
+    return 0
+  fi
 
-  # AppIndicator dev package naming varies across Debian/Ubuntu.
-  echo "Installing AppIndicator dev package (best-effort)..."
-  sudo apt install -y libayatana-appindicator3-dev \
-    || sudo apt install -y libappindicator3-dev \
-    || echo "WARN: Could not install an AppIndicator *-dev package. Tray integration may not build on some desktops." >&2
+  if [ -z "${SCRIPT_PATH_ABS}" ]; then
+    echo "WARN: install-ui.sh is running from stdin; graphical elevation is unavailable in this mode." >&2
+  fi
+
+  if [ -n "${SCRIPT_PATH_ABS}" ] && command -v pkexec >/dev/null 2>&1 && has_graphical_session; then
+    PRIVILEGE_MODE="pkexec"
+    echo "Using graphical privilege prompt via pkexec for system install steps."
+    return 0
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    PRIVILEGE_MODE="sudo"
+    echo "Using terminal sudo fallback for system install steps."
+    sudo -v
+    (
+      while true; do
+        sleep 50
+        sudo -n true || exit 0
+      done
+    ) >/dev/null 2>&1 &
+    SUDO_KEEPALIVE_PID="$!"
+    return 0
+  fi
+
+  die "Need either pkexec (graphical) or sudo (terminal) to perform system install steps"
 }
 
-install_prereqs_pacman() {
-  echo "Installing build prerequisites (pacman)..."
-  sudo pacman -S --needed --noconfirm \
-    git \
-    curl \
-    nodejs \
-    npm \
-    base-devel \
-    pkgconf \
-    openssl \
-    gtk3 \
-    webkit2gtk-4.1 \
-    librsvg \
-    desktop-file-utils
+run_root_helper() {
+  local action="$1"
+  shift || true
 
-  echo "Installing AppIndicator package (best-effort)..."
-  sudo pacman -S --needed --noconfirm libayatana-appindicator \
-    || echo "WARN: Could not install libayatana-appindicator. Tray integration may not build on some desktops." >&2
+  case "$PRIVILEGE_MODE" in
+    root)
+      dispatch_root_helper "$action" "$@"
+      ;;
+    pkexec)
+      [ -n "$SCRIPT_PATH_ABS" ] || die "Graphical elevation requires running install-ui.sh from a file"
+      pkexec "$SCRIPT_PATH_ABS" "$action" "$@"
+      ;;
+    sudo)
+      [ -n "$SCRIPT_PATH_ABS" ] || die "Terminal elevation requires running install-ui.sh from a file"
+      sudo -E "$SCRIPT_PATH_ABS" "$action" "$@"
+      ;;
+    *)
+      die "Privilege helper is not initialized"
+      ;;
+  esac
+}
+
+install_prereqs() {
+  if [ "$PKG_MGR" = "dnf" ] || [ "$PKG_MGR" = "apt" ] || [ "$PKG_MGR" = "pacman" ]; then
+    run_root_helper --root-install-prereqs "$PKG_MGR"
+  else
+    echo "WARN: Could not detect dnf/apt/pacman; skipping prereq installation." >&2
+  fi
 }
 
 ensure_rust() {
@@ -241,31 +390,10 @@ ensure_rust() {
   source "$HOME/.cargo/env"
 }
 
-if [ "$PKG_MGR" = "dnf" ]; then
-  install_prereqs_dnf
-elif [ "$PKG_MGR" = "apt" ]; then
-  install_prereqs_apt
-elif [ "$PKG_MGR" = "pacman" ]; then
-  install_prereqs_pacman
-else
-  echo "WARN: Could not detect dnf/apt/pacman; skipping prereq installation." >&2
-fi
-
-echo "Prerequisites step complete."
-
-ensure_rust
-
-# Re-check tools after installing prereqs.
-need_cmd git
-need_cmd npm
-need_cmd cargo
-
-echo "Toolchain looks good. Starting clone/build/install..."
-
 install_ui_direct() {
-  local built_binary="src-tauri/target/release/zenbook-duo-control"
-  local desktop_src="src-tauri/linux/zenbook-duo-control.desktop"
-  local icon_src="src-tauri/icons/128x128.png"
+  local built_binary="$PWD/src-tauri/target/release/zenbook-duo-control"
+  local desktop_src="$PWD/src-tauri/linux/zenbook-duo-control.desktop"
+  local icon_src="$PWD/src-tauri/icons/128x128.png"
 
   echo "Building UI binary directly for pacman-based systems..."
   npx tauri build --no-bundle
@@ -280,23 +408,30 @@ install_ui_direct() {
     stop_running_app || true
   fi
 
-  echo "Installing UI binary and desktop assets..."
-  sudo install -Dm755 "${built_binary}" /usr/local/bin/zenbook-duo-control
-  sudo install -Dm644 "${desktop_src}" /usr/share/applications/zenbook-duo-control.desktop
-  sudo install -Dm644 "${icon_src}" /usr/share/pixmaps/zenbook-duo-control.png
+  run_root_helper --root-install-direct "${built_binary}" "${desktop_src}" "${icon_src}"
 
   if [ "${was_running}" = true ]; then
     start_app_background || true
   fi
 
   rm -f "$HOME/.local/share/applications/zenbook-duo-control.desktop" 2>/dev/null || true
-  update-desktop-database /usr/share/applications 2>/dev/null || true
-  gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
+  update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 }
 
+prepare_privilege_helper
+install_prereqs
+
+echo "Prerequisites step complete."
+
+ensure_rust
+
+need_cmd git
+need_cmd npm
+need_cmd cargo
+
+echo "Toolchain looks good. Starting clone/build/install..."
+
 if [ -z "$TARGET_DIR" ]; then
-  # If the script is running from inside the repo, build in-place by default
-  # (this makes development iterations faster and ensures local fixes are used).
   if [ "$RUNNING_FROM_STDIN" = false ] && [ "$FORCE_CLONE" = false ] && [ -d "$SCRIPT_DIR/ui-tauri-react" ] && [ -e "$SCRIPT_DIR/.git" ]; then
     TARGET_DIR="$SCRIPT_DIR"
     KEEP_DIR=true
@@ -325,7 +460,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [ "$TARGET_DIR" = "$SCRIPT_DIR" ] && [ "$FORCE_CLONE" = false ]; then
-  : # using local repo, do not clone/pull
+  :
 elif [ ! -e "$TARGET_DIR/.git" ]; then
   if [ -n "$BRANCH" ]; then
     git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$TARGET_DIR"
@@ -333,7 +468,6 @@ elif [ ! -e "$TARGET_DIR/.git" ]; then
     git clone --depth 1 "$REPO_URL" "$TARGET_DIR"
   fi
 else
-  # Non-destructive update attempt (fails if local changes / detached head).
   (cd "$TARGET_DIR" && git pull --ff-only) || true
 fi
 
@@ -347,7 +481,7 @@ if [ -f package-lock.json ]; then
 else
   npm install
 fi
-# Avoid building AppImage by selecting bundles explicitly.
+
 if [ "$PKG_MGR" = "dnf" ]; then
   npm run build -- --bundles rpm
 elif [ "$PKG_MGR" = "apt" ]; then
@@ -377,19 +511,12 @@ if [ "$PKG_MGR" = "dnf" ]; then
     WAS_RUNNING=true
     stop_running_app || true
   fi
-  # Use `dnf install` so upgrades work (dnf reinstall of a newer NEVRA can result in "available,
-  # but not installed"). Only use reinstall when the exact NEVRA is already installed.
   BUILT_VR="$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$PKG" 2>/dev/null || true)"
   INSTALLED_VR="$(rpm -q --qf '%{VERSION}-%{RELEASE}' zenbook-duo-control 2>/dev/null || true)"
-  if [ -n "$BUILT_VR" ] && [ -n "$INSTALLED_VR" ] && [ "$BUILT_VR" = "$INSTALLED_VR" ]; then
-    sudo dnf reinstall -y "$PKG"
-  else
-    sudo dnf install -y "$PKG"
-  fi
+  run_root_helper --root-install-package dnf "$PWD/$PKG" "$BUILT_VR" "$INSTALLED_VR"
   if [ "$WAS_RUNNING" = true ]; then
     start_app_background || true
   fi
-  # Cleanup: older versions of this script created a duplicate launcher in ~/.local.
   rm -f "$HOME/.local/share/applications/zenbook-duo-control.desktop" 2>/dev/null || true
   update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 elif [ "$PKG_MGR" = "apt" ]; then
@@ -401,8 +528,7 @@ elif [ "$PKG_MGR" = "apt" ]; then
     WAS_RUNNING=true
     stop_running_app || true
   fi
-  # Prefer apt reinstall (keeps deps tidy), fallback to dpkg.
-  sudo apt install -y --reinstall "$PWD/$PKG" || sudo dpkg -i "$PWD/$PKG"
+  run_root_helper --root-install-package apt "$PWD/$PKG"
   if [ "$WAS_RUNNING" = true ]; then
     start_app_background || true
   fi

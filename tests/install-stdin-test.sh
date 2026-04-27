@@ -44,7 +44,7 @@ chmod +x "${fake_bin}/git"
 checkout_output="$(bash --noprofile --norc -c '
   set -euo pipefail
   export PATH="'"${fake_bin}"':/usr/bin:/bin"
-  source <(sed -n "1,126p" "'"${ROOT_DIR}"'/install.sh")
+  source <(sed -n "1,128p" "'"${ROOT_DIR}"'/install.sh")
   SCRIPT_DIR="'"${temp_root}"'/missing-checkout"
   ensure_repo_checkout
 ' 2>/dev/null)" || {
@@ -86,6 +86,26 @@ fi
 
 if ! grep -q 'install_ui_direct' "${ROOT_DIR}/install-ui.sh"; then
   echo "FAIL: install-ui.sh should have a direct-install path for pacman systems" >&2
+  exit 1
+fi
+
+if ! grep -q 'command -v pkexec' "${ROOT_DIR}/install-ui.sh"; then
+  echo "FAIL: install-ui.sh should prefer pkexec when a graphical auth prompt is available" >&2
+  exit 1
+fi
+
+if ! grep -q -- '--root-install-prereqs' "${ROOT_DIR}/install-ui.sh"; then
+  echo "FAIL: install-ui.sh should expose a root-only prereq helper entrypoint" >&2
+  exit 1
+fi
+
+if ! grep -q -- '--root-install-package' "${ROOT_DIR}/install-ui.sh"; then
+  echo "FAIL: install-ui.sh should expose a root-only package install helper entrypoint" >&2
+  exit 1
+fi
+
+if ! grep -q -- '--root-install-direct' "${ROOT_DIR}/install-ui.sh"; then
+  echo "FAIL: install-ui.sh should expose a root-only direct install helper entrypoint" >&2
   exit 1
 fi
 

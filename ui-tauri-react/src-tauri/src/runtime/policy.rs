@@ -8,7 +8,7 @@ pub enum PolicyAction {
     SetWifi(bool),
     SetBluetooth(bool),
     SetBacklight(u8),
-    SetDockMode { attached: bool, scale: f64 },
+    ApplyDisplayMode { attached: bool, scale: f64 },
 }
 
 pub fn apply_transition_policy(
@@ -56,13 +56,13 @@ pub fn apply_transition_policy(
         }
 
         actions.push(PolicyAction::SetBacklight(state.settings.default_backlight));
-        actions.push(PolicyAction::SetDockMode {
+        actions.push(PolicyAction::ApplyDisplayMode {
             attached: true,
             scale: state.settings.default_scale,
         });
     } else {
         actions.push(PolicyAction::SetBluetooth(true));
-        actions.push(PolicyAction::SetDockMode {
+        actions.push(PolicyAction::ApplyDisplayMode {
             attached: false,
             scale: state.settings.default_scale,
         });

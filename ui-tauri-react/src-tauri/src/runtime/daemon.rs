@@ -371,7 +371,7 @@ async fn handle_lifecycle(
                 }
             }
 
-            match replay_current_dock_mode(state, attached, scale).await {
+            match replay_current_display_mode(state, attached, scale).await {
                 Ok(()) => Ok(()),
                 Err(err) => {
                     notify_runtime_error(
@@ -416,7 +416,7 @@ async fn handle_session_registration(
 
     let state = Arc::clone(state);
     tokio::spawn(async move {
-        if let Err(err) = replay_current_dock_mode(&state, attached, scale).await {
+        if let Err(err) = replay_current_display_mode(&state, attached, scale).await {
             log::warn!("session registration dock replay failed: {err}");
             notify_runtime_error(
                 &state,
@@ -432,6 +432,44 @@ async fn handle_session_registration(
     });
 
     Ok(())
+}
+
+pub(crate) async fn replay_current_display_mode(
+    state: &Arc<RwLock<RuntimeState>>,
+    attached: bool,
+    scale: f64,
+) -> Result<(), String> {
+    if let Some(layout) = saved_layout_for_display_mode(state, attached).await {
+        return forward_session_command(state, SessionCommand::ApplyDisplayLayout { layout }).await;
+    }
+
+    replay_current_dock_mode(state, attached, scale).await
+}
+
+async fn saved_layout_for_display_mode(
+    state: &Arc<RwLock<RuntimeState>>,
+    attached: bool,
+) -> Option<DisplayLayout> {
+    let guard = state.read().await;
+    guard
+        .settings
+        .saved_display_layout
+        .clone()
+        .filter(|layout| saved_layout_matches_display_mode(layout, attached))
+}
+
+fn saved_layout_matches_display_mode(layout: &DisplayLayout, attached: bool) -> bool {
+    let display_count = layout.displays.len();
+
+    if display_count == 0 {
+        return false;
+    }
+
+    if attached {
+        display_count == 1
+    } else {
+        display_count > 1
+    }
 }
 
 async fn replay_current_dock_mode(
@@ -755,6 +793,7 @@ fn send_runtime_notification_direct(title: &str, message: &str) -> Result<(), St
 mod tests {
     use super::*;
     use crate::ipc::protocol::SessionBackend;
+    use crate::models::{DisplayInfo, DisplayLayout, DisplayMode, RefreshPolicy};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -862,6 +901,59 @@ mod tests {
             Some("test-session")
         );
         drop(guard);
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn session_registration_replays_saved_display_layout_when_detached() {
+        let socket_path = unique_test_socket_path("register-saved-layout");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+        let saved_layout = dual_display_layout();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read test request")
+                .expect("session request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode session request");
+            match envelope.payload {
+                SessionCommand::ApplyDisplayLayout { layout } => {
+                    assert_eq!(layout.displays.len(), 2);
+                    assert_eq!(layout.displays[0].connector, "eDP-1");
+                    assert_eq!(layout.displays[1].connector, "eDP-2");
+                    assert_eq!(layout.displays[1].y, 1200);
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.status.keyboard_attached = false;
+            guard.settings.default_scale = 1.66;
+            guard.settings.saved_display_layout = Some(saved_layout);
+        }
+
+        handle_session_registration(
+            &state,
+            "test-session".into(),
+            SessionBackend::Gnome,
+            socket_path.to_string_lossy().into_owned(),
+        )
+        .await
+        .expect("registration should succeed");
 
         server.await.expect("join session server");
         let _ = fs::remove_file(&socket_path);
@@ -1151,8 +1243,59 @@ mod tests {
     fn real_runtime_errors_remain_notifiable() {
         assert!(should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
-            "Dock-mode policy action failed: Timed out waiting for session response",
+            "Display-mode policy action failed: Timed out waiting for session response",
         ));
+    }
+
+    #[test]
+    fn saved_layout_matching_respects_attached_display_count() {
+        let single = single_display_layout();
+        let dual = dual_display_layout();
+
+        assert!(saved_layout_matches_display_mode(&single, true));
+        assert!(!saved_layout_matches_display_mode(&single, false));
+        assert!(!saved_layout_matches_display_mode(&dual, true));
+        assert!(saved_layout_matches_display_mode(&dual, false));
+    }
+
+    fn single_display_layout() -> DisplayLayout {
+        DisplayLayout {
+            displays: vec![display("eDP-1", 0, 0, true)],
+        }
+    }
+
+    fn dual_display_layout() -> DisplayLayout {
+        DisplayLayout {
+            displays: vec![
+                display("eDP-1", 0, 0, true),
+                display("eDP-2", 0, 1200, false),
+            ],
+        }
+    }
+
+    fn display(connector: &str, x: i32, y: i32, primary: bool) -> DisplayInfo {
+        let mode = DisplayMode {
+            mode_id: format!("{connector}-mode"),
+            width: 1920,
+            height: 1200,
+            refresh_rate: 60.0,
+        };
+
+        DisplayInfo {
+            connector: connector.to_string(),
+            width: mode.width,
+            height: mode.height,
+            refresh_rate: mode.refresh_rate,
+            scale: 1.0,
+            x,
+            y,
+            transform: 0,
+            primary,
+            current_mode: mode.clone(),
+            available_modes: vec![mode],
+            refresh_policy: RefreshPolicy::Fixed,
+            supports_dynamic_refresh: false,
+        }
     }
 
     fn unique_test_socket_path(label: &str) -> PathBuf {

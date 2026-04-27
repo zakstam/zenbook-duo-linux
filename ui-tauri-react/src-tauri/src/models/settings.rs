@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::DisplayLayout;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuoSettings {
@@ -19,6 +21,8 @@ pub struct DuoSettings {
     pub setup_completed: bool,
     #[serde(default)]
     pub touchscreen_disabled: Vec<String>,
+    #[serde(default)]
+    pub saved_display_layout: Option<DisplayLayout>,
 }
 
 impl Default for DuoSettings {
@@ -32,6 +36,7 @@ impl Default for DuoSettings {
             usb_media_remap_enabled: default_usb_media_remap_enabled(),
             setup_completed: false,
             touchscreen_disabled: Vec::new(),
+            saved_display_layout: None,
         }
     }
 }

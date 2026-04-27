@@ -54,6 +54,7 @@ export interface DuoSettings {
   usbMediaRemapEnabled: boolean;
   setupCompleted: boolean;
   touchscreenDisabled: string[];
+  savedDisplayLayout: DisplayLayout | null;
 }
 
 export interface TouchscreenDevice {

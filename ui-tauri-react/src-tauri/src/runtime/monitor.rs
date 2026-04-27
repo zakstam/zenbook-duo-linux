@@ -4,7 +4,6 @@ use std::time::Duration;
 use chrono::Utc;
 use tokio::sync::RwLock;
 
-use crate::ipc::protocol::SessionCommand;
 use crate::models::{ConnectionType, EventCategory, HardwareEvent};
 use crate::runtime::logger;
 use crate::runtime::policy::PolicyAction;
@@ -244,27 +243,25 @@ async fn apply_policy_actions(state: Arc<RwLock<RuntimeState>>, actions: Vec<Pol
                     ));
                 }
             }
-            PolicyAction::SetDockMode { attached, scale } => {
-                if let Err(err) = crate::runtime::daemon::forward_session_command(
-                    &state,
-                    SessionCommand::SetDockMode { attached, scale },
-                )
-                .await
+            PolicyAction::ApplyDisplayMode { attached, scale } => {
+                if let Err(err) =
+                    crate::runtime::daemon::replay_current_display_mode(&state, attached, scale)
+                        .await
                 {
-                    log::warn!("failed to apply dock-mode policy action: {err}");
+                    log::warn!("failed to apply display-mode policy action: {err}");
                     crate::runtime::daemon::notify_runtime_error(
                         &state,
                         "Zenbook Duo Runtime Error",
-                        &format!("Dock-mode policy action failed: {err}"),
+                        &format!("Display-mode policy action failed: {err}"),
                     )
                     .await;
                     let _ = logger::append_line(format!(
-                        "rust-daemon: dock-mode policy action failed (attached={}, scale={}): {}",
+                        "rust-daemon: display-mode policy action failed (attached={}, scale={}): {}",
                         attached, scale, err
                     ));
                 } else {
                     let _ = logger::append_line(format!(
-                        "rust-daemon: applied dock-mode policy action (attached={}, scale={})",
+                        "rust-daemon: applied display-mode policy action (attached={}, scale={})",
                         attached, scale
                     ));
                 }

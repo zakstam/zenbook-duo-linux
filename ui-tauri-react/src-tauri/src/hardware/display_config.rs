@@ -1,6 +1,6 @@
 use crate::models::{DisplayInfo, DisplayLayout, DisplayMode, Orientation, RefreshPolicy};
-use std::env;
 use std::collections::HashSet;
+use std::env;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -43,7 +43,11 @@ fn dedupe_modes(modes: Vec<DisplayMode>) -> Vec<DisplayMode> {
 
 fn stacked_logical_height(display: &DisplayInfo) -> i32 {
     let rotated = display.transform == 90 || display.transform == 270;
-    let physical_height = if rotated { display.width } else { display.height };
+    let physical_height = if rotated {
+        display.width
+    } else {
+        display.height
+    };
     let scale = display.scale.max(0.1);
     (physical_height as f64 / scale).ceil() as i32
 }
@@ -330,7 +334,12 @@ fn parse_gdctl_output(output: &str) -> Result<DisplayLayout, String> {
         let current_mode = monitor_current_mode
             .get(&connector)
             .cloned()
-            .or_else(|| monitor_modes.get(&connector).and_then(|modes| modes.first()).cloned())
+            .or_else(|| {
+                monitor_modes
+                    .get(&connector)
+                    .and_then(|modes| modes.first())
+                    .cloned()
+            })
             .unwrap_or_else(|| make_display_mode(0, 0, 60.0));
         let available_modes = dedupe_modes(
             monitor_modes
@@ -666,7 +675,8 @@ fn get_niri_display_layout() -> Result<DisplayLayout, String> {
         Some(make_display_mode(
             value.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
             value.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            value.get("refresh_rate")
+            value
+                .get("refresh_rate")
                 .and_then(|v| v.as_f64())
                 .map(|rate| rate / 1000.0)?,
         ))
@@ -769,10 +779,7 @@ fn apply_niri_display_layout(layout: &DisplayLayout) -> Result<(), String> {
                 ));
             }
             RefreshPolicy::Fixed => {
-                run_command(
-                    "niri",
-                    &["msg", "output", &display.connector, "vrr", "off"],
-                )?;
+                run_command("niri", &["msg", "output", &display.connector, "vrr", "off"])?;
             }
         }
         run_command(

@@ -54,8 +54,12 @@ where
             e
         )
     })?;
-    configure_nonblocking(&device)
-        .map_err(|e| format!("Failed to configure {} as non-blocking: {e}", device_path.display()))?;
+    configure_nonblocking(&device).map_err(|e| {
+        format!(
+            "Failed to configure {} as non-blocking: {e}",
+            device_path.display()
+        )
+    })?;
     log_info(&format!(
         "Grabbed keyboard device {} successfully",
         device_path.display()

@@ -51,6 +51,8 @@ If you only want to build/update the desktop app:
 ./install-ui.sh
 ```
 
+On desktop sessions, the installer now prefers a graphical admin-password prompt for the system steps and falls back to terminal `sudo` when needed.
+
 ### Uninstall
 
 To remove the background service and system changes:

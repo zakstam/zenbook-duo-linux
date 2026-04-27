@@ -74,16 +74,16 @@ pub fn start_remap() -> Result<(), String> {
     let user = current_username().map_err(log_error)?;
 
     let (mut cmd, launcher_name) = if running_as_root() {
-        (Command::new(&helper_path), helper_path.display().to_string())
+        (
+            Command::new(&helper_path),
+            helper_path.display().to_string(),
+        )
     } else {
         let mut cmd = Command::new("pkexec");
         cmd.arg(&helper_path);
         (cmd, "pkexec".to_string())
     };
-    cmd.arg("--pid-file")
-        .arg(&pid_path)
-        .arg("--user")
-        .arg(user);
+    cmd.arg("--pid-file").arg(&pid_path).arg("--user").arg(user);
 
     start_remap_spawn_and_wait(cmd, Duration::from_secs(START_TIMEOUT_SECS), &launcher_name)
 }
@@ -104,7 +104,10 @@ pub fn stop_remap() -> Result<(), String> {
         ensure_duo_dir_for_pid(&pid_path)?;
 
         let (mut cmd, launcher_name) = if running_as_root() {
-            (Command::new(&helper_path), helper_path.display().to_string())
+            (
+                Command::new(&helper_path),
+                helper_path.display().to_string(),
+            )
         } else {
             let mut cmd = Command::new("pkexec");
             cmd.arg(&helper_path);
