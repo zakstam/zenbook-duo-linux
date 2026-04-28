@@ -134,14 +134,14 @@ Notes:
 - Nothing happens when docking/undocking:
   - Check the services are running: `systemctl status zenbook-duo-rust-daemon.service` and `systemctl --user status zenbook-duo-session-agent.service`
   - Watch daemon logs: `journalctl -u zenbook-duo-rust-daemon.service -f`
-- Reboot/login comes up in the wrong layout:
-  - After login, the session agent waits for your desktop display backend, then auto-syncs the current attached/detached state without a manual restart
+- Reboot/login or resume comes up in the wrong layout:
+  - After login or resume, the lifecycle handler and session agent re-sync the current attached/detached state without a manual restart
   - Check `systemctl --user status zenbook-duo-session-agent.service`; an early `No supported session backend became ready before timeout; continuing to wait` warning is OK if the service remains active
   - Confirm your user manager has the desktop-session environment: `systemctl --user show-environment | grep -E 'DISPLAY|WAYLAND_DISPLAY|NIRI_SOCKET|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|DESKTOP_SESSION|XDG_SESSION_TYPE'`
   - If those variables are missing after reinstalling, rerun `./install.sh` from an active desktop session, then log out and back in once
-- `Failed to read events: No such device (os error 19)` when reattaching the keyboard:
-  - This comes from the optional USB media remap helper when the event node disappears during hotplug.
-  - Make sure you are on the latest version, then restart the session agent once: `systemctl --user restart zenbook-duo-session-agent.service`
+- Keyboard media/Fn keys stop working after suspend or reattaching the keyboard:
+  - The optional USB media remap helper is stopped before sleep and retried automatically after resume, so a manual service restart should not be needed.
+  - If recovery still fails, check `journalctl -u zenbook-duo-rust-daemon.service -f` for `USB media remap auto-start failed` or repeated `No such device` messages.
   - You do not need a separate `/etc/udev/rules.d/*uinput*` rule for this project.
 - `KBLIGHT - Device lost, re-scanning` in a loop:
   - You likely need to log out and back in so your session gets the `input` group membership

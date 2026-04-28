@@ -312,6 +312,19 @@ async fn handle_lifecycle(
     match phase {
         LifecyclePhase::Pre | LifecyclePhase::Hibernate | LifecyclePhase::Shutdown => {
             logger::append_line(format!("rust-daemon: lifecycle -> {:?}", phase)).ok();
+            if lifecycle_should_stop_usb_media_remap(&phase) {
+                if let Err(err) = commands::usb_media_remap::stop_remap() {
+                    log::warn!(
+                        "failed to stop usb media remap for lifecycle {:?}: {err}",
+                        phase
+                    );
+                    logger::append_line(format!(
+                        "rust-daemon: lifecycle usb media remap stop skipped: {}",
+                        err
+                    ))
+                    .ok();
+                }
+            }
             hardware::hid::set_backlight(0)?;
 
             let mut guard = state.write().await;
@@ -326,6 +339,9 @@ async fn handle_lifecycle(
         }
         LifecyclePhase::Post | LifecyclePhase::Thaw | LifecyclePhase::Boot => {
             logger::append_line(format!("rust-daemon: lifecycle -> {:?}", phase)).ok();
+            if lifecycle_should_queue_usb_media_remap_retry(&phase) {
+                crate::runtime::monitor::queue_usb_media_remap_resume_retry(state.clone());
+            }
 
             let (restore_level, scale) = {
                 let guard = state.read().await;
@@ -390,6 +406,17 @@ async fn handle_lifecycle(
             }
         }
     }
+}
+
+fn lifecycle_should_stop_usb_media_remap(phase: &LifecyclePhase) -> bool {
+    matches!(
+        phase,
+        LifecyclePhase::Pre | LifecyclePhase::Hibernate | LifecyclePhase::Shutdown
+    )
+}
+
+fn lifecycle_should_queue_usb_media_remap_retry(phase: &LifecyclePhase) -> bool {
+    matches!(phase, LifecyclePhase::Post | LifecyclePhase::Thaw)
 }
 
 async fn handle_session_registration(
@@ -1244,6 +1271,48 @@ mod tests {
         assert!(should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             "Display-mode policy action failed: Timed out waiting for session response",
+        ));
+    }
+
+    #[test]
+    fn lifecycle_sleep_phases_stop_usb_media_remap_before_suspend() {
+        assert!(lifecycle_should_stop_usb_media_remap(&LifecyclePhase::Pre));
+        assert!(lifecycle_should_stop_usb_media_remap(
+            &LifecyclePhase::Hibernate
+        ));
+        assert!(lifecycle_should_stop_usb_media_remap(
+            &LifecyclePhase::Shutdown
+        ));
+        assert!(!lifecycle_should_stop_usb_media_remap(
+            &LifecyclePhase::Post
+        ));
+        assert!(!lifecycle_should_stop_usb_media_remap(
+            &LifecyclePhase::Thaw
+        ));
+        assert!(!lifecycle_should_stop_usb_media_remap(
+            &LifecyclePhase::Boot
+        ));
+    }
+
+    #[test]
+    fn lifecycle_resume_phases_queue_usb_media_remap_retry() {
+        assert!(lifecycle_should_queue_usb_media_remap_retry(
+            &LifecyclePhase::Post
+        ));
+        assert!(lifecycle_should_queue_usb_media_remap_retry(
+            &LifecyclePhase::Thaw
+        ));
+        assert!(!lifecycle_should_queue_usb_media_remap_retry(
+            &LifecyclePhase::Pre
+        ));
+        assert!(!lifecycle_should_queue_usb_media_remap_retry(
+            &LifecyclePhase::Hibernate
+        ));
+        assert!(!lifecycle_should_queue_usb_media_remap_retry(
+            &LifecyclePhase::Boot
+        ));
+        assert!(!lifecycle_should_queue_usb_media_remap_retry(
+            &LifecyclePhase::Shutdown
         ));
     }
 

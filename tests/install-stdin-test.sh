@@ -82,6 +82,21 @@ if ! grep -q 'import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT
   exit 1
 fi
 
+if ! grep -q 'SYSTEM_SLEEP_HOOK_PATH="/usr/lib/systemd/system-sleep/zenbook-duo-rust-lifecycle"' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: installer should install the Rust lifecycle sleep hook" >&2
+  exit 1
+fi
+
+if ! grep -q 'ln -sfn "${RUNTIME_INSTALL_DIR}/zenbook-duo-lifecycle" "${SYSTEM_SLEEP_HOOK_PATH}"' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: lifecycle binary should be the single system-sleep entrypoint" >&2
+  exit 1
+fi
+
+if grep -q 'ExecStart=.*\(pre\|post\|thaw\|hibernate\)' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: lifecycle service should not duplicate suspend/resume handling" >&2
+  exit 1
+fi
+
 for setup_script in setup-gnome.sh setup-kde.sh setup-niri.sh; do
   if ! grep -q 'command -v pacman' "${ROOT_DIR}/${setup_script}"; then
     echo "FAIL: ${setup_script} should support pacman-based systems" >&2

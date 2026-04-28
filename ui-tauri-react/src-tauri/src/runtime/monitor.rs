@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use tokio::sync::RwLock;
+use tokio::time::sleep;
 
 use crate::models::{ConnectionType, EventCategory, HardwareEvent};
 use crate::runtime::logger;
@@ -61,24 +62,40 @@ pub fn start(state: Arc<RwLock<RuntimeState>>) {
     });
 }
 
-async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) {
+pub(crate) fn queue_usb_media_remap_resume_retry(state: Arc<RwLock<RuntimeState>>) {
+    tokio::spawn(async move {
+        reset_usb_media_remap_retry_cooldown(&state).await;
+        for attempt in 0..10 {
+            if attempt > 0 {
+                sleep(Duration::from_secs(2)).await;
+            }
+            reconcile_usb_media_remap(state.clone()).await;
+        }
+    });
+}
+
+pub(crate) async fn reset_usb_media_remap_retry_cooldown(state: &Arc<RwLock<RuntimeState>>) {
+    let mut guard = state.write().await;
+    clear_usb_media_remap_retry_cooldown(&mut guard);
+    guard.touch();
+    if let Err(err) = guard.save() {
+        log::warn!("failed to save usb media remap retry reset: {err}");
+    }
+}
+
+pub(crate) async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) {
     const AUTO_START_RETRY_COOLDOWN_SECS: i64 = 15;
 
     let (should_run, is_running) = {
         let guard = state.read().await;
-        let should_run = guard.status.keyboard_attached
-            && matches!(guard.status.connection_type, ConnectionType::Usb)
-            && guard.settings.usb_media_remap_enabled;
+        let should_run = usb_media_remap_should_run(&guard);
         let is_running = crate::commands::usb_media_remap::get_status().running;
         (should_run, is_running)
     };
 
     if should_run == is_running {
-        if should_run {
-            let mut guard = state.write().await;
-            guard.usb_media_remap_reconcile.last_started_at = None;
-            guard.usb_media_remap_reconcile.last_backoff_log_at = None;
-        }
+        let mut guard = state.write().await;
+        clear_usb_media_remap_retry_cooldown(&mut guard);
         return;
     }
 
@@ -115,6 +132,7 @@ async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) {
                 let mut should_log = false;
                 {
                     let mut guard = state.write().await;
+                    clear_usb_media_remap_retry_cooldown(&mut guard);
                     if guard
                         .usb_media_remap_reconcile
                         .last_start_log_at
@@ -160,11 +178,21 @@ async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) {
         ));
     } else {
         let mut guard = state.write().await;
-        guard.usb_media_remap_reconcile.last_started_at = None;
-        guard.usb_media_remap_reconcile.last_backoff_log_at = None;
+        clear_usb_media_remap_retry_cooldown(&mut guard);
         drop(guard);
         let _ = logger::append_line("rust-daemon: reconciled usb media remap -> stopped");
     }
+}
+
+fn usb_media_remap_should_run(state: &RuntimeState) -> bool {
+    state.status.keyboard_attached
+        && matches!(state.status.connection_type, ConnectionType::Usb)
+        && state.settings.usb_media_remap_enabled
+}
+
+fn clear_usb_media_remap_retry_cooldown(state: &mut RuntimeState) {
+    state.usb_media_remap_reconcile.last_started_at = None;
+    state.usb_media_remap_reconcile.last_backoff_log_at = None;
 }
 
 async fn apply_policy_actions(state: Arc<RwLock<RuntimeState>>, actions: Vec<PolicyAction>) {
@@ -369,5 +397,48 @@ fn orientation_label(orientation: &crate::models::Orientation) -> &'static str {
         crate::models::Orientation::Left => "left",
         crate::models::Orientation::Right => "right",
         crate::models::Orientation::Inverted => "inverted",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usb_media_remap_only_runs_for_enabled_usb_keyboard() {
+        let mut state = RuntimeState::default();
+        state.settings.usb_media_remap_enabled = true;
+        state.status.keyboard_attached = true;
+        state.status.connection_type = ConnectionType::Usb;
+        assert!(usb_media_remap_should_run(&state));
+
+        state.status.connection_type = ConnectionType::Bluetooth;
+        assert!(!usb_media_remap_should_run(&state));
+
+        state.status.connection_type = ConnectionType::Usb;
+        state.status.keyboard_attached = false;
+        assert!(!usb_media_remap_should_run(&state));
+
+        state.status.keyboard_attached = true;
+        state.settings.usb_media_remap_enabled = false;
+        assert!(!usb_media_remap_should_run(&state));
+    }
+
+    #[test]
+    fn clearing_retry_cooldown_preserves_last_start_log() {
+        let mut state = RuntimeState::default();
+        let now = Utc::now();
+        state.usb_media_remap_reconcile.last_started_at = Some(now);
+        state.usb_media_remap_reconcile.last_backoff_log_at = Some(now);
+        state.usb_media_remap_reconcile.last_start_log_at = Some(now);
+
+        clear_usb_media_remap_retry_cooldown(&mut state);
+
+        assert!(state.usb_media_remap_reconcile.last_started_at.is_none());
+        assert!(state
+            .usb_media_remap_reconcile
+            .last_backoff_log_at
+            .is_none());
+        assert_eq!(state.usb_media_remap_reconcile.last_start_log_at, Some(now));
     }
 }

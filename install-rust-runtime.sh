@@ -9,6 +9,7 @@ SYSTEM_SERVICE_NAME="zenbook-duo-rust-daemon.service"
 LIFECYCLE_SERVICE_NAME="zenbook-duo-rust-lifecycle.service"
 USER_SERVICE_NAME="zenbook-duo-session-agent.service"
 SYSTEM_SLEEP_HOOK_PATH="/usr/lib/systemd/system-sleep/zenbook-duo-rust-lifecycle"
+SYSTEM_SLEEP_HOOK_DIR="$(dirname "${SYSTEM_SLEEP_HOOK_PATH}")"
 
 TARGET_USER="${USER:-}"
 if [ "${EUID}" = "0" ]; then
@@ -157,8 +158,9 @@ Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 WantedBy=default.target
 EOF
 
+sudo mkdir -p "${SYSTEM_SLEEP_HOOK_DIR}"
 sudo rm -f "${SYSTEM_SLEEP_HOOK_PATH}"
-sudo ln -s "${RUNTIME_INSTALL_DIR}/zenbook-duo-lifecycle" "${SYSTEM_SLEEP_HOOK_PATH}"
+sudo ln -sfn "${RUNTIME_INSTALL_DIR}/zenbook-duo-lifecycle" "${SYSTEM_SLEEP_HOOK_PATH}"
 
 sudo systemctl disable zenbook-duo.service 2>/dev/null || true
 sudo systemctl stop zenbook-duo.service 2>/dev/null || true
