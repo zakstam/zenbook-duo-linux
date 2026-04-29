@@ -1,16 +1,73 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::models::{ConnectionType, DuoStatus, Orientation};
 use crate::runtime::{paths, state::RuntimeState};
 
-const INTEL_BACKLIGHT_BRIGHTNESS: &str = "/sys/class/backlight/intel_backlight/brightness";
-const INTEL_BACKLIGHT_MAX: &str = "/sys/class/backlight/intel_backlight/max_brightness";
+const BACKLIGHT_ROOT: &str = "/sys/class/backlight";
 
 fn load_runtime_state() -> Option<RuntimeState> {
     let path = paths::state_file_path();
     let contents = fs::read_to_string(path).ok()?;
     serde_json::from_str(&contents).ok()
+}
+
+fn backlight_dirs_from(root: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = fs::read_dir(root)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.flatten())
+        .map(|entry| entry.path())
+        .filter(|path| path.join("brightness").exists())
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+fn backlight_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn is_secondary_backlight_name(name: &str) -> bool {
+    name.contains("edp-2") || name.contains("edp2")
+}
+
+fn primary_backlight_dir_from(root: &Path) -> Option<PathBuf> {
+    let dirs = backlight_dirs_from(root);
+    dirs.iter()
+        .find(|path| backlight_name(path) == "intel_backlight")
+        .or_else(|| {
+            dirs.iter()
+                .find(|path| backlight_name(path).contains("edp-1"))
+        })
+        .or_else(|| {
+            dirs.iter()
+                .find(|path| !is_secondary_backlight_name(&backlight_name(path)))
+        })
+        .cloned()
+}
+
+fn secondary_backlight_dir_from(root: &Path) -> Option<PathBuf> {
+    backlight_dirs_from(root)
+        .into_iter()
+        .find(|path| is_secondary_backlight_name(&backlight_name(path)))
+}
+
+pub fn primary_backlight_dir() -> Option<PathBuf> {
+    primary_backlight_dir_from(Path::new(BACKLIGHT_ROOT))
+}
+
+pub fn secondary_backlight_dir() -> Option<PathBuf> {
+    secondary_backlight_dir_from(Path::new(BACKLIGHT_ROOT))
+}
+
+fn read_backlight_value(path: &Path) -> Option<u32> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
 }
 
 pub fn read_backlight_level() -> u8 {
@@ -20,16 +77,14 @@ pub fn read_backlight_level() -> u8 {
 }
 
 pub fn read_display_brightness() -> u32 {
-    fs::read_to_string(INTEL_BACKLIGHT_BRIGHTNESS)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
+    primary_backlight_dir()
+        .and_then(|dir| read_backlight_value(&dir.join("brightness")))
         .unwrap_or(0)
 }
 
 pub fn read_max_brightness() -> u32 {
-    fs::read_to_string(INTEL_BACKLIGHT_MAX)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
+    primary_backlight_dir()
+        .and_then(|dir| read_backlight_value(&dir.join("max_brightness")))
         .unwrap_or(1)
 }
 
@@ -162,5 +217,45 @@ mod tests {
     #[test]
     fn returns_none_when_no_transport_is_visible() {
         assert_eq!(classify_connection_type(false, false), ConnectionType::None);
+    }
+
+    #[test]
+    fn discovers_primary_and_secondary_backlight_devices() {
+        let root = unique_temp_dir("backlight");
+        create_backlight(&root, "card1-eDP-2-backlight");
+        create_backlight(&root, "intel_backlight");
+
+        assert_eq!(
+            primary_backlight_dir_from(&root)
+                .and_then(|path| path.file_name().map(|name| name.to_owned())),
+            Some(std::ffi::OsString::from("intel_backlight"))
+        );
+        assert_eq!(
+            secondary_backlight_dir_from(&root)
+                .and_then(|path| path.file_name().map(|name| name.to_owned())),
+            Some(std::ffi::OsString::from("card1-eDP-2-backlight"))
+        );
+
+        fs::remove_dir_all(root).expect("remove temp dir");
+    }
+
+    fn create_backlight(root: &Path, name: &str) {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).expect("create backlight dir");
+        fs::write(dir.join("brightness"), "100").expect("write brightness");
+        fs::write(dir.join("max_brightness"), "400").expect("write max brightness");
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "zenbook-duo-sysfs-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
     }
 }

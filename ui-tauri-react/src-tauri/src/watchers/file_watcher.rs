@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Emitter};
 
@@ -24,10 +22,11 @@ pub fn start(app: AppHandle, buffer: EventBuffer) {
             let _ = watcher.watch(runtime_dir.as_path(), RecursiveMode::NonRecursive);
         }
 
-        // Watch sysfs backlight
-        let backlight_path = Path::new("/sys/class/backlight/intel_backlight/brightness");
-        if backlight_path.exists() {
-            let _ = watcher.watch(backlight_path, RecursiveMode::NonRecursive);
+        // Watch the primary sysfs backlight when one is available.
+        if let Some(backlight_path) =
+            crate::hardware::sysfs::primary_backlight_dir().map(|dir| dir.join("brightness"))
+        {
+            let _ = watcher.watch(backlight_path.as_path(), RecursiveMode::NonRecursive);
         }
 
         for event in rx {

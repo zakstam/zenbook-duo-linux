@@ -94,12 +94,14 @@ mod tests {
                     primary: true,
                     current_mode: crate::models::DisplayMode {
                         mode_id: "2880x1800@120".into(),
+                        backend_mode_id: None,
                         width: 2880,
                         height: 1800,
                         refresh_rate: 120.0,
                     },
                     available_modes: vec![crate::models::DisplayMode {
                         mode_id: "2880x1800@120".into(),
+                        backend_mode_id: None,
                         width: 2880,
                         height: 1800,
                         refresh_rate: 120.0,
@@ -119,12 +121,14 @@ mod tests {
                     primary: false,
                     current_mode: crate::models::DisplayMode {
                         mode_id: "2880x1800@120".into(),
+                        backend_mode_id: None,
                         width: 2880,
                         height: 1800,
                         refresh_rate: 120.0,
                     },
                     available_modes: vec![crate::models::DisplayMode {
                         mode_id: "2880x1800@120".into(),
+                        backend_mode_id: None,
                         width: 2880,
                         height: 1800,
                         refresh_rate: 120.0,

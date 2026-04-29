@@ -477,14 +477,14 @@ fn current_time_ms() -> u128 {
 }
 
 fn read_primary_brightness() -> Result<i32, String> {
-    read_backlight_value(&Path::new("/sys/class/backlight/intel_backlight").join("brightness"))
+    let primary = crate::hardware::sysfs::primary_backlight_dir()
+        .ok_or_else(|| "no primary backlight device found".to_string())?;
+    read_backlight_value(&primary.join("brightness"))
 }
 
 fn step_brightness(direction: &str) -> Result<(), String> {
-    let primary = Path::new("/sys/class/backlight/intel_backlight");
-    if !primary.exists() {
-        return Err("no intel_backlight device found".into());
-    }
+    let primary = crate::hardware::sysfs::primary_backlight_dir()
+        .ok_or_else(|| "no primary backlight device found".to_string())?;
 
     let primary_max = read_backlight_value(&primary.join("max_brightness"))?;
     let current = read_backlight_value(&primary.join("brightness"))?;
@@ -493,8 +493,7 @@ fn step_brightness(direction: &str) -> Result<(), String> {
     fs::write(primary.join("brightness"), next.to_string())
         .map_err(|e| format!("Failed to write primary brightness: {e}"))?;
 
-    let secondary = Path::new("/sys/class/backlight/card1-eDP-2-backlight");
-    if secondary.exists() {
+    if let Some(secondary) = crate::hardware::sysfs::secondary_backlight_dir() {
         let secondary_max = read_backlight_value(&secondary.join("max_brightness"))?;
         let mirrored = next.min(secondary_max);
         fs::write(secondary.join("brightness"), mirrored.to_string())

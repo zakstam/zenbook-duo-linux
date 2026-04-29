@@ -57,6 +57,8 @@ pub enum RefreshPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct DisplayMode {
     pub mode_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_mode_id: Option<String>,
     pub width: u32,
     pub height: u32,
     pub refresh_rate: f64,

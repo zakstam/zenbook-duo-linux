@@ -40,6 +40,7 @@ export interface DisplayLayout {
 
 export interface DisplayMode {
   modeId: string;
+  backendModeId?: string | null;
   width: number;
   height: number;
   refreshRate: number;

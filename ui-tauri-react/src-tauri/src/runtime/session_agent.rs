@@ -644,18 +644,18 @@ fn keyboard_attached_from_runtime() -> bool {
 }
 
 fn sync_secondary_brightness(level: u32) -> Result<(), String> {
-    const SECONDARY_PATH: &str = "/sys/class/backlight/card1-eDP-2-backlight/brightness";
+    let Some(secondary) = crate::hardware::sysfs::secondary_backlight_dir() else {
+        return Ok(());
+    };
+    let secondary_path = secondary.join("brightness");
 
-    if !Path::new(SECONDARY_PATH).exists() {
+    if fs::write(&secondary_path, level.to_string()).is_ok() {
         return Ok(());
     }
 
-    if fs::write(SECONDARY_PATH, level.to_string()).is_ok() {
-        return Ok(());
-    }
-
+    let secondary_path_string = secondary_path.to_string_lossy().into_owned();
     let mut child = Command::new("sudo")
-        .args(["/usr/bin/tee", SECONDARY_PATH])
+        .args(["/usr/bin/tee", secondary_path_string.as_str()])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -827,10 +827,8 @@ fn step_brightness(direction: &str) -> Result<(), String> {
         }
     }
 
-    let bl = Path::new("/sys/class/backlight/intel_backlight");
-    if !bl.exists() {
-        return Err("no intel_backlight device found".into());
-    }
+    let bl = crate::hardware::sysfs::primary_backlight_dir()
+        .ok_or_else(|| "no primary backlight device found".to_string())?;
 
     let max = fs::read_to_string(bl.join("max_brightness"))
         .ok()
@@ -851,11 +849,10 @@ fn step_brightness(direction: &str) -> Result<(), String> {
         return Ok(());
     }
 
+    let brightness_path = bl.join("brightness");
+    let brightness_path_string = brightness_path.to_string_lossy().into_owned();
     let output = Command::new("sudo")
-        .args([
-            "/usr/bin/tee",
-            "/sys/class/backlight/intel_backlight/brightness",
-        ])
+        .args(["/usr/bin/tee", brightness_path_string.as_str()])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())

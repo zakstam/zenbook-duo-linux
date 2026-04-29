@@ -132,7 +132,7 @@ fi
 # Helper: add a sudoers entry if it doesn't already exist.
 # Allows passwordless sudo for specific commands needed by the duo script.
 function addSudoers() {
-    RESULT=$(sudo grep "${1}" /etc/sudoers)
+    RESULT=$(sudo grep -F "${1}" /etc/sudoers)
     if [ -z "${RESULT}" ]; then
         echo "${1}" | sudo tee -a /etc/sudoers
     fi
@@ -140,8 +140,7 @@ function addSudoers() {
 
 # Configure passwordless sudo for sysfs brightness writes used by the Rust session agent.
 if [ -n "${TARGET_USER}" ]; then
-    addSudoers "${TARGET_USER} ALL=NOPASSWD:/usr/bin/tee /sys/class/backlight/card1-eDP-2-backlight/brightness"
-    addSudoers "${TARGET_USER} ALL=NOPASSWD:/usr/bin/tee /sys/class/backlight/intel_backlight/brightness"
+    addSudoers "${TARGET_USER} ALL=NOPASSWD:/usr/bin/tee /sys/class/backlight/*/brightness"
 fi
 
 # ============================================================================

@@ -124,6 +124,9 @@ sudo udevadm trigger
 # ============================================================================
 
 # Remove sudoers lines added by the setup scripts.
+if sudo grep -q "/sys/class/backlight/.*/brightness" /etc/sudoers; then
+    sudo sed -i '\|/sys/class/backlight/.*/brightness|d' /etc/sudoers
+fi
 if sudo grep -q "card1-eDP-2-backlight/brightness" /etc/sudoers; then
     sudo sed -i '\|card1-eDP-2-backlight/brightness|d' /etc/sudoers
 fi

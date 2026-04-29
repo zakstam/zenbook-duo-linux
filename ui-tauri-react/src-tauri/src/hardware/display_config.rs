@@ -24,8 +24,18 @@ fn mode_id(width: u32, height: u32, refresh_rate: f64) -> String {
 }
 
 fn make_display_mode(width: u32, height: u32, refresh_rate: f64) -> DisplayMode {
+    make_display_mode_with_backend_id(width, height, refresh_rate, None)
+}
+
+fn make_display_mode_with_backend_id(
+    width: u32,
+    height: u32,
+    refresh_rate: f64,
+    backend_mode_id: Option<String>,
+) -> DisplayMode {
     DisplayMode {
         mode_id: mode_id(width, height, refresh_rate),
+        backend_mode_id,
         width,
         height,
         refresh_rate,
@@ -52,6 +62,7 @@ fn omitted_output_names(layout: &DisplayLayout, available_outputs: &[String]) ->
 
     available_outputs
         .iter()
+        .filter(|name| matches!(name.as_str(), "eDP-1" | "eDP-2"))
         .filter(|name| !desired.contains(name.as_str()))
         .cloned()
         .collect()
@@ -230,7 +241,7 @@ fn parse_gdctl_output(output: &str) -> Result<DisplayLayout, String> {
         }
     }
 
-    fn extract_mode_from_line(line: &str) -> Option<(u32, u32, f64)> {
+    fn extract_mode_from_line(line: &str) -> Option<DisplayMode> {
         // Finds the first token like "2880x1800@120.000" (optionally suffixed with "Hz").
         let token = line
             .split_whitespace()
@@ -238,19 +249,25 @@ fn parse_gdctl_output(output: &str) -> Result<DisplayLayout, String> {
 
         // Tokens in gdctl output often have tree prefixes (e.g. "└──2880x1800@120.000").
         let token = token.trim_start_matches(|c: char| !c.is_ascii_digit());
+        let backend_mode_id = token
+            .trim_end_matches("Hz")
+            .trim_end_matches(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .trim()
+            .to_string();
 
-        let (res, rate) = token.split_once('@')?;
+        let (res, rate) = backend_mode_id.split_once('@')?;
         let (w, h) = res.split_once('x')?;
 
         let width: u32 = w.trim().parse().ok()?;
         let height: u32 = h.trim().parse().ok()?;
+        let refresh_rate: f64 = rate.trim().parse().ok()?;
 
-        let rate = rate
-            .trim_end_matches("Hz")
-            .trim_end_matches(|c: char| !(c.is_ascii_digit() || c == '.'))
-            .trim();
-        let refresh_rate: f64 = rate.parse().ok()?;
-        Some((width, height, refresh_rate))
+        Some(make_display_mode_with_backend_id(
+            width,
+            height,
+            refresh_rate,
+            Some(backend_mode_id),
+        ))
     }
 
     fn extract_i32_pair(line: &str) -> Option<(i32, i32)> {
@@ -327,8 +344,7 @@ fn parse_gdctl_output(output: &str) -> Result<DisplayLayout, String> {
             }
 
             if let Some(ref connector) = current_monitor {
-                if let Some((w, h, rr)) = extract_mode_from_line(line) {
-                    let mode = make_display_mode(w, h, rr);
+                if let Some(mode) = extract_mode_from_line(line) {
                     monitor_modes
                         .entry(connector.clone())
                         .or_default()
@@ -486,10 +502,49 @@ pub fn apply_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     }
 }
 
+fn gnome_mode_arg(display: &DisplayInfo, current_layout: Option<&DisplayLayout>) -> String {
+    if let Some(mode) = display.current_mode.backend_mode_id.as_ref() {
+        return mode.clone();
+    }
+
+    if let Some(mode) = display
+        .available_modes
+        .iter()
+        .find(|mode| mode.mode_id == display.current_mode.mode_id)
+        .and_then(|mode| mode.backend_mode_id.as_ref())
+    {
+        return mode.clone();
+    }
+
+    if let Some(mode) = current_layout
+        .and_then(|layout| {
+            layout
+                .displays
+                .iter()
+                .find(|d| d.connector == display.connector)
+        })
+        .and_then(|current| {
+            current.available_modes.iter().find(|mode| {
+                mode.mode_id == display.current_mode.mode_id
+                    || (mode.width == display.current_mode.width
+                        && mode.height == display.current_mode.height
+                        && (mode.refresh_rate - display.current_mode.refresh_rate).abs() < 0.001)
+            })
+        })
+        .and_then(|mode| mode.backend_mode_id.as_ref())
+    {
+        return mode.clone();
+    }
+
+    display.current_mode.mode_id.clone()
+}
+
 fn apply_gnome_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     if layout.displays.is_empty() {
         return Err("No displays in layout".into());
     }
+
+    let current_layout = get_gnome_display_layout().ok();
 
     // gdctl rejects negative logical monitor positions.
     // Normalize the layout so the smallest x/y becomes 0.
@@ -536,7 +591,7 @@ fn apply_gnome_display_layout(layout: &DisplayLayout) -> Result<(), String> {
         args.push("--monitor".into());
         args.push(display.connector.clone());
         args.push("--mode".into());
-        args.push(display.current_mode.mode_id.clone());
+        args.push(gnome_mode_arg(display, current_layout.as_ref()));
         args.push("--x".into());
         args.push((display.x + shift_x).to_string());
         args.push("--y".into());
@@ -930,7 +985,10 @@ fn resolve_niri_socket() -> Option<PathBuf> {
     resolve_niri_socket_from(env_socket.as_deref(), niri_runtime_dir().as_deref())
 }
 
-fn resolve_niri_socket_from(env_socket: Option<&Path>, runtime_dir: Option<&Path>) -> Option<PathBuf> {
+fn resolve_niri_socket_from(
+    env_socket: Option<&Path>,
+    runtime_dir: Option<&Path>,
+) -> Option<PathBuf> {
     if let Some(env_socket) = env_socket {
         if env_socket.exists() {
             return Some(env_socket.to_path_buf());
@@ -1289,7 +1347,6 @@ pub fn set_orientation(orientation: &Orientation) -> Result<(), String> {
 mod tests {
     use super::*;
 
-
     fn unique_temp_dir(label: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1348,7 +1405,11 @@ mod tests {
         let layout = DisplayLayout {
             displays: vec![test_display("eDP-1")],
         };
-        let available = vec!["eDP-1".to_string(), "eDP-2".to_string()];
+        let available = vec![
+            "eDP-1".to_string(),
+            "eDP-2".to_string(),
+            "HDMI-A-1".to_string(),
+        ];
 
         assert_eq!(omitted_output_names(&layout, &available), vec!["eDP-2"]);
     }
@@ -1409,9 +1470,49 @@ Logical monitors:
         let display = layout.displays.first().expect("display should exist");
 
         assert_eq!(display.current_mode.mode_id, "2880x1800@120");
+        assert_eq!(
+            display.current_mode.backend_mode_id.as_deref(),
+            Some("2880x1800@120.000")
+        );
         assert_eq!(display.available_modes.len(), 2);
         assert_eq!(display.available_modes[1].mode_id, "2880x1800@60");
+        assert_eq!(
+            display.available_modes[1].backend_mode_id.as_deref(),
+            Some("2880x1800@60.000")
+        );
         assert_eq!(display.refresh_policy, RefreshPolicy::Fixed);
+    }
+
+    #[test]
+    fn gnome_mode_arg_prefers_backend_token_and_falls_back_to_current_modes() {
+        let mut display = test_display("eDP-1");
+        display.current_mode.backend_mode_id = Some("2880x1800@120.000".into());
+        assert_eq!(gnome_mode_arg(&display, None), "2880x1800@120.000");
+
+        display.current_mode.backend_mode_id = None;
+        display.available_modes[0].backend_mode_id = None;
+        let current_layout = DisplayLayout {
+            displays: vec![DisplayInfo {
+                current_mode: make_display_mode_with_backend_id(
+                    2880,
+                    1800,
+                    120.0,
+                    Some("2880x1800@120.000".into()),
+                ),
+                available_modes: vec![make_display_mode_with_backend_id(
+                    2880,
+                    1800,
+                    120.0,
+                    Some("2880x1800@120.000".into()),
+                )],
+                ..test_display("eDP-1")
+            }],
+        };
+
+        assert_eq!(
+            gnome_mode_arg(&display, Some(&current_layout)),
+            "2880x1800@120.000"
+        );
     }
 
     #[test]

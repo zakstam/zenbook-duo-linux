@@ -466,7 +466,21 @@ pub(crate) async fn replay_current_display_mode(
     attached: bool,
     scale: f64,
 ) -> Result<(), String> {
-    if let Some(layout) = saved_layout_for_display_mode(state, attached).await {
+    let saved_layout = saved_layout_for_display_mode(state, attached).await;
+
+    if active_external_display_connected(state, attached).await
+        && saved_layout
+            .as_ref()
+            .map(layout_manages_only_internal_displays)
+            .unwrap_or(true)
+    {
+        let _ = logger::append_line(
+            "rust-daemon: skipped internal display replay while an external display is active",
+        );
+        return Ok(());
+    }
+
+    if let Some(layout) = saved_layout {
         return forward_session_command(state, SessionCommand::ApplyDisplayLayout { layout }).await;
     }
 
@@ -497,6 +511,39 @@ fn saved_layout_matches_display_mode(layout: &DisplayLayout, attached: bool) -> 
     } else {
         display_count > 1
     }
+}
+
+fn is_duo_internal_connector(connector: &str) -> bool {
+    matches!(connector, "eDP-1" | "eDP-2")
+}
+
+fn layout_manages_only_internal_displays(layout: &DisplayLayout) -> bool {
+    layout
+        .displays
+        .iter()
+        .all(|display| is_duo_internal_connector(&display.connector))
+}
+
+fn layout_has_external_display(layout: &DisplayLayout) -> bool {
+    layout
+        .displays
+        .iter()
+        .any(|display| !is_duo_internal_connector(&display.connector))
+}
+
+async fn active_external_display_connected(
+    state: &Arc<RwLock<RuntimeState>>,
+    attached: bool,
+) -> bool {
+    let expected_internal_count = if attached { 1 } else { 2 };
+    if state.read().await.status.monitor_count <= expected_internal_count {
+        return false;
+    }
+
+    session_display_layout(state.clone())
+        .await
+        .as_ref()
+        .is_some_and(layout_has_external_display)
 }
 
 async fn replay_current_dock_mode(
@@ -735,7 +782,11 @@ fn should_notify_runtime_error(title: &str, message: &str) -> bool {
         return true;
     }
 
-    message != "Lifecycle dock refresh skipped: No session agent registered"
+    !matches!(
+        message,
+        "Lifecycle dock refresh skipped: No session agent registered"
+            | "Display-mode policy action failed: No session agent registered"
+    )
 }
 
 async fn should_emit_runtime_notification(
@@ -981,6 +1032,56 @@ mod tests {
         )
         .await
         .expect("registration should succeed");
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn replay_skips_internal_saved_layout_when_external_display_is_active() {
+        let socket_path = unique_test_socket_path("replay-external-skip");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read test request")
+                .expect("session request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode session request");
+            assert!(matches!(envelope.payload, SessionCommand::GetDisplayLayout));
+            let reply = serde_json::to_string(&Envelope::new(SessionResponse::DisplayLayout {
+                layout: external_display_layout(),
+            }))
+            .expect("encode layout response");
+            writer
+                .write_all(reply.as_bytes())
+                .await
+                .expect("write layout");
+            writer.write_all(b"\n").await.expect("terminate layout");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.keyboard_attached = false;
+            guard.status.monitor_count = 3;
+            guard.settings.saved_display_layout = Some(dual_display_layout());
+        }
+
+        timeout(
+            Duration::from_secs(1),
+            replay_current_display_mode(&state, false, 1.66),
+        )
+        .await
+        .expect("display replay should not hang")
+        .expect("external display should cause a safe no-op");
 
         server.await.expect("join session server");
         let _ = fs::remove_file(&socket_path);
@@ -1264,6 +1365,10 @@ mod tests {
             "Zenbook Duo Runtime Error",
             "Lifecycle dock refresh skipped: No session agent registered",
         ));
+        assert!(!should_notify_runtime_error(
+            "Zenbook Duo Runtime Error",
+            "Display-mode policy action failed: No session agent registered",
+        ));
     }
 
     #[test]
@@ -1327,6 +1432,17 @@ mod tests {
         assert!(saved_layout_matches_display_mode(&dual, false));
     }
 
+    #[test]
+    fn display_replay_helpers_detect_external_outputs() {
+        let internal = dual_display_layout();
+        let external = external_display_layout();
+
+        assert!(layout_manages_only_internal_displays(&internal));
+        assert!(!layout_has_external_display(&internal));
+        assert!(!layout_manages_only_internal_displays(&external));
+        assert!(layout_has_external_display(&external));
+    }
+
     fn single_display_layout() -> DisplayLayout {
         DisplayLayout {
             displays: vec![display("eDP-1", 0, 0, true)],
@@ -1342,9 +1458,20 @@ mod tests {
         }
     }
 
+    fn external_display_layout() -> DisplayLayout {
+        DisplayLayout {
+            displays: vec![
+                display("eDP-1", 0, 0, true),
+                display("eDP-2", 0, 1200, false),
+                display("HDMI-A-1", 1920, 0, false),
+            ],
+        }
+    }
+
     fn display(connector: &str, x: i32, y: i32, primary: bool) -> DisplayInfo {
         let mode = DisplayMode {
             mode_id: format!("{connector}-mode"),
+            backend_mode_id: None,
             width: 1920,
             height: 1200,
             refresh_rate: 60.0,
