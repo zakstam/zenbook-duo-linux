@@ -1,8 +1,11 @@
+use crate::hardware::duo::{
+    is_internal_connector, is_primary_internal_connector, PRIMARY_INTERNAL_CONNECTOR,
+    SECONDARY_INTERNAL_CONNECTOR,
+};
+use crate::ipc::protocol::SessionBackend;
 use crate::models::{DisplayInfo, DisplayLayout, DisplayMode, Orientation, RefreshPolicy};
+use crate::runtime::session;
 use std::collections::HashSet;
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -62,7 +65,7 @@ fn omitted_output_names(layout: &DisplayLayout, available_outputs: &[String]) ->
 
     available_outputs
         .iter()
-        .filter(|name| matches!(name.as_str(), "eDP-1" | "eDP-2"))
+        .filter(|name| is_internal_connector(name.as_str()))
         .filter(|name| !desired.contains(name.as_str()))
         .cloned()
         .collect()
@@ -106,7 +109,7 @@ fn niri_outputs_from_value(value: &serde_json::Value) -> Result<Vec<serde_json::
 }
 
 fn niri_output_names() -> Result<Vec<String>, String> {
-    let output = build_niri_command(&["msg", "--json", "outputs"])?
+    let output = session::build_niri_command(&["msg", "--json", "outputs"])
         .output()
         .map_err(|e| format!("Failed to run niri msg: {e}"))?;
     if !output.status.success() {
@@ -141,7 +144,7 @@ pub fn normalize_display_layout(layout: DisplayLayout) -> DisplayLayout {
     let Some(top_display) = layout
         .displays
         .iter()
-        .find(|display| display.connector == "eDP-1")
+        .find(|display| is_primary_internal_connector(&display.connector))
         .cloned()
     else {
         return layout;
@@ -155,7 +158,7 @@ pub fn normalize_display_layout(layout: DisplayLayout) -> DisplayLayout {
         .displays
         .into_iter()
         .map(|display| {
-            if display.connector == "eDP-1" {
+            if is_primary_internal_connector(&display.connector) {
                 return DisplayInfo {
                     x: 0,
                     y: 0,
@@ -163,7 +166,7 @@ pub fn normalize_display_layout(layout: DisplayLayout) -> DisplayLayout {
                 };
             }
 
-            if display.connector == "eDP-2" {
+            if display.connector == SECONDARY_INTERNAL_CONNECTOR {
                 return DisplayInfo {
                     x: 0,
                     y: top_logical_height,
@@ -185,10 +188,10 @@ pub fn normalize_display_layout(layout: DisplayLayout) -> DisplayLayout {
 /// Get the current display layout by parsing gdctl output.
 pub fn get_display_layout() -> Result<DisplayLayout, String> {
     let layout = match detect_backend() {
-        DisplayBackend::Gnome => get_gnome_display_layout(),
-        DisplayBackend::Kde => get_kde_display_layout(),
-        DisplayBackend::Niri => get_niri_display_layout(),
-        DisplayBackend::Unknown => Err("Unsupported session backend for display layout".into()),
+        SessionBackend::Gnome => get_gnome_display_layout(),
+        SessionBackend::Kde => get_kde_display_layout(),
+        SessionBackend::Niri => get_niri_display_layout(),
+        SessionBackend::Unknown => Err("Unsupported session backend for display layout".into()),
     }?;
 
     Ok(normalize_display_layout(layout))
@@ -495,10 +498,10 @@ pub fn apply_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     let normalized = normalize_display_layout(layout.clone());
 
     match detect_backend() {
-        DisplayBackend::Gnome => apply_gnome_display_layout(&normalized),
-        DisplayBackend::Kde => apply_kde_display_layout(&normalized),
-        DisplayBackend::Niri => apply_niri_display_layout(&normalized),
-        DisplayBackend::Unknown => Err("Unsupported session backend for display layout".into()),
+        SessionBackend::Gnome => apply_gnome_display_layout(&normalized),
+        SessionBackend::Kde => apply_kde_display_layout(&normalized),
+        SessionBackend::Niri => apply_niri_display_layout(&normalized),
+        SessionBackend::Unknown => Err("Unsupported session backend for display layout".into()),
     }
 }
 
@@ -787,7 +790,7 @@ fn apply_kde_display_layout(layout: &DisplayLayout) -> Result<(), String> {
 }
 
 fn get_niri_display_layout() -> Result<DisplayLayout, String> {
-    let output = build_niri_command(&["msg", "--json", "outputs"])?
+    let output = session::build_niri_command(&["msg", "--json", "outputs"])
         .output()
         .map_err(|e| format!("Failed to run niri msg: {e}"))?;
     if !output.status.success() {
@@ -850,7 +853,7 @@ fn get_niri_display_layout() -> Result<DisplayLayout, String> {
             x: logical.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
             y: logical.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
             transform: parse_niri_transform(&output),
-            primary: connector == "eDP-1",
+            primary: is_primary_internal_connector(connector),
             current_mode,
             available_modes,
             refresh_policy,
@@ -946,78 +949,8 @@ fn apply_niri_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DisplayBackend {
-    Gnome,
-    Kde,
-    Niri,
-    Unknown,
-}
-
-fn detect_backend() -> DisplayBackend {
-    let current = env::var("XDG_CURRENT_DESKTOP")
-        .or_else(|_| env::var("XDG_SESSION_DESKTOP"))
-        .or_else(|_| env::var("DESKTOP_SESSION"))
-        .unwrap_or_default()
-        .to_lowercase();
-
-    detect_backend_from(&current, resolve_niri_socket().is_some())
-}
-
-fn detect_backend_from(current: &str, has_niri_socket: bool) -> DisplayBackend {
-    if current.contains("gnome") {
-        DisplayBackend::Gnome
-    } else if current.contains("plasma") || current.contains("kde") {
-        DisplayBackend::Kde
-    } else if current.contains("niri") || has_niri_socket {
-        DisplayBackend::Niri
-    } else {
-        DisplayBackend::Unknown
-    }
-}
-
-fn niri_runtime_dir() -> Option<PathBuf> {
-    env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)
-}
-
-fn resolve_niri_socket() -> Option<PathBuf> {
-    let env_socket = env::var_os("NIRI_SOCKET").map(PathBuf::from);
-    resolve_niri_socket_from(env_socket.as_deref(), niri_runtime_dir().as_deref())
-}
-
-fn resolve_niri_socket_from(
-    env_socket: Option<&Path>,
-    runtime_dir: Option<&Path>,
-) -> Option<PathBuf> {
-    if let Some(env_socket) = env_socket {
-        if env_socket.exists() {
-            return Some(env_socket.to_path_buf());
-        }
-    }
-
-    let runtime_dir = runtime_dir?;
-    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
-
-    for entry in fs::read_dir(runtime_dir).ok()? {
-        let entry = entry.ok()?;
-        let path = entry.path();
-        let name = path.file_name()?.to_str()?;
-        if !name.starts_with("niri.") || !name.ends_with(".sock") {
-            continue;
-        }
-
-        let modified = entry
-            .metadata()
-            .ok()?
-            .modified()
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        match &newest {
-            Some((current_modified, _)) if *current_modified >= modified => {}
-            _ => newest = Some((modified, path)),
-        }
-    }
-
-    newest.map(|(_, path)| path)
+fn detect_backend() -> SessionBackend {
+    session::detect_backend_from_env()
 }
 
 fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<(), String> {
@@ -1033,17 +966,8 @@ fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<(), String> {
     }
 }
 
-fn build_niri_command(args: &[&str]) -> Result<Command, String> {
-    let mut command = Command::new("niri");
-    command.args(args);
-    if let Some(socket) = resolve_niri_socket() {
-        command.env("NIRI_SOCKET", socket);
-    }
-    Ok(command)
-}
-
 fn run_niri_command(args: &[&str]) -> Result<(), String> {
-    let output = build_niri_command(args)?
+    let output = session::build_niri_command(args)
         .output()
         .map_err(|e| format!("Failed to run niri msg: {e}"))?;
 
@@ -1109,7 +1033,7 @@ fn set_gnome_orientation(orientation: &Orientation) -> Result<(), String> {
         "--scale".to_string(),
         scale.clone(),
         "--monitor".to_string(),
-        "eDP-1".to_string(),
+        PRIMARY_INTERNAL_CONNECTOR.to_string(),
     ];
 
     if let Some(transform) = transform {
@@ -1122,13 +1046,21 @@ fn set_gnome_orientation(orientation: &Orientation) -> Result<(), String> {
         args.push("--scale".to_string());
         args.push(scale);
         args.push("--monitor".to_string());
-        args.push("eDP-2".to_string());
+        args.push(SECONDARY_INTERNAL_CONNECTOR.to_string());
 
         match orientation {
-            Orientation::Left => args.extend(["--left-of", "eDP-1"].map(str::to_string)),
-            Orientation::Right => args.extend(["--right-of", "eDP-1"].map(str::to_string)),
-            Orientation::Inverted => args.extend(["--above", "eDP-1"].map(str::to_string)),
-            Orientation::Normal => args.extend(["--below", "eDP-1"].map(str::to_string)),
+            Orientation::Left => {
+                args.extend(["--left-of", PRIMARY_INTERNAL_CONNECTOR].map(str::to_string))
+            }
+            Orientation::Right => {
+                args.extend(["--right-of", PRIMARY_INTERNAL_CONNECTOR].map(str::to_string))
+            }
+            Orientation::Inverted => {
+                args.extend(["--above", PRIMARY_INTERNAL_CONNECTOR].map(str::to_string))
+            }
+            Orientation::Normal => {
+                args.extend(["--below", PRIMARY_INTERNAL_CONNECTOR].map(str::to_string))
+            }
         }
 
         if let Some(transform) = transform {
@@ -1215,17 +1147,15 @@ fn set_kde_orientation(orientation: &Orientation) -> Result<(), String> {
     let enabled_count = kde_enabled_output_count().unwrap_or(1);
 
     if enabled_count <= 1 {
-        return run_command(
-            "kscreen-doctor",
-            &[
-                "output.eDP-1.enable",
-                "output.eDP-1.position.0,0",
-                &format!("output.eDP-1.rotation.{token}"),
-            ],
-        );
+        let args = vec![
+            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
+            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.position.0,0"),
+            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.rotation.{token}"),
+        ];
+        return run_command("kscreen-doctor", &args);
     }
 
-    let (width, height) = kde_output_logical_size("eDP-1").unwrap_or((0, 0));
+    let (width, height) = kde_output_logical_size(PRIMARY_INTERNAL_CONNECTOR).unwrap_or((0, 0));
     let (rot_w, rot_h) = match orientation {
         Orientation::Left | Orientation::Right => (height, width),
         Orientation::Normal | Orientation::Inverted => (width, height),
@@ -1237,21 +1167,20 @@ fn set_kde_orientation(orientation: &Orientation) -> Result<(), String> {
         Orientation::Normal => (0, rot_h),
     };
 
-    run_command(
-        "kscreen-doctor",
-        &[
-            "output.eDP-1.enable",
-            "output.eDP-2.enable",
-            &format!("output.eDP-1.rotation.{token}"),
-            &format!("output.eDP-2.rotation.{token}"),
-            "output.eDP-1.position.0,0",
-            &format!("output.eDP-2.position.{pos_x},{pos_y}"),
-        ],
-    )
+    let args = vec![
+        format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
+        format!("output.{SECONDARY_INTERNAL_CONNECTOR}.enable"),
+        format!("output.{PRIMARY_INTERNAL_CONNECTOR}.rotation.{token}"),
+        format!("output.{SECONDARY_INTERNAL_CONNECTOR}.rotation.{token}"),
+        format!("output.{PRIMARY_INTERNAL_CONNECTOR}.position.0,0"),
+        format!("output.{SECONDARY_INTERNAL_CONNECTOR}.position.{pos_x},{pos_y}"),
+    ];
+
+    run_command("kscreen-doctor", &args)
 }
 
 fn niri_output_logical_size(name: &str) -> Result<(i64, i64), String> {
-    let output = build_niri_command(&["msg", "--json", "outputs"])?
+    let output = session::build_niri_command(&["msg", "--json", "outputs"])
         .output()
         .map_err(|e| format!("Failed to run niri msg: {e}"))?;
     if !output.status.success() {
@@ -1278,7 +1207,7 @@ fn niri_output_logical_size(name: &str) -> Result<(i64, i64), String> {
 }
 
 fn niri_enabled_output_count() -> Result<usize, String> {
-    let output = build_niri_command(&["msg", "--json", "outputs"])?
+    let output = session::build_niri_command(&["msg", "--json", "outputs"])
         .output()
         .map_err(|e| format!("Failed to run niri msg: {e}"))?;
     if !output.status.success() {
@@ -1310,17 +1239,29 @@ fn niri_transform_token(orientation: &Orientation) -> &'static str {
 
 fn set_niri_orientation(orientation: &Orientation) -> Result<(), String> {
     let token = niri_transform_token(orientation);
-    run_niri_command(&["msg", "output", "eDP-1", "transform", token])?;
-    run_niri_position_command("eDP-1", 0, 0)?;
+    run_niri_command(&[
+        "msg",
+        "output",
+        PRIMARY_INTERNAL_CONNECTOR,
+        "transform",
+        token,
+    ])?;
+    run_niri_position_command(PRIMARY_INTERNAL_CONNECTOR, 0, 0)?;
 
     if niri_enabled_output_count().unwrap_or(1) <= 1 {
         return Ok(());
     }
 
-    run_niri_command(&["msg", "output", "eDP-2", "transform", token])?;
+    run_niri_command(&[
+        "msg",
+        "output",
+        SECONDARY_INTERNAL_CONNECTOR,
+        "transform",
+        token,
+    ])?;
     thread::sleep(Duration::from_millis(300));
 
-    let (width, height) = niri_output_logical_size("eDP-1").unwrap_or((0, 0));
+    let (width, height) = niri_output_logical_size(PRIMARY_INTERNAL_CONNECTOR).unwrap_or((0, 0));
     let (pos_x, pos_y) = match orientation {
         Orientation::Left => (-width, 0),
         Orientation::Right => (width, 0),
@@ -1328,16 +1269,16 @@ fn set_niri_orientation(orientation: &Orientation) -> Result<(), String> {
         Orientation::Normal => (0, height),
     };
 
-    run_niri_position_command("eDP-2", pos_x as i32, pos_y as i32)
+    run_niri_position_command(SECONDARY_INTERNAL_CONNECTOR, pos_x as i32, pos_y as i32)
 }
 
 /// Set screen orientation using compositor-native commands.
 pub fn set_orientation(orientation: &Orientation) -> Result<(), String> {
     match detect_backend() {
-        DisplayBackend::Gnome => set_gnome_orientation(orientation),
-        DisplayBackend::Kde => set_kde_orientation(orientation),
-        DisplayBackend::Niri => set_niri_orientation(orientation),
-        DisplayBackend::Unknown => {
+        SessionBackend::Gnome => set_gnome_orientation(orientation),
+        SessionBackend::Kde => set_kde_orientation(orientation),
+        SessionBackend::Niri => set_niri_orientation(orientation),
+        SessionBackend::Unknown => {
             Err("Unsupported session backend for orientation control".into())
         }
     }
@@ -1346,40 +1287,6 @@ pub fn set_orientation(orientation: &Orientation) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn unique_temp_dir(label: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock before unix epoch")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "zenbook-duo-display-{label}-{}-{nanos}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
-
-    #[test]
-    fn detects_niri_from_socket_when_desktop_env_is_missing() {
-        assert_eq!(detect_backend_from("", true), DisplayBackend::Niri);
-    }
-
-    #[test]
-    fn resolves_newest_niri_socket_from_runtime_dir() {
-        let runtime_dir = unique_temp_dir("niri-socket");
-        let older = runtime_dir.join("niri.older.sock");
-        let newer = runtime_dir.join("niri.newer.sock");
-        fs::write(&older, "").expect("write older socket marker");
-        std::thread::sleep(Duration::from_millis(10));
-        fs::write(&newer, "").expect("write newer socket marker");
-
-        let resolved = resolve_niri_socket_from(None, Some(runtime_dir.as_path()))
-            .expect("socket should resolve");
-
-        assert_eq!(resolved, newer);
-        fs::remove_dir_all(runtime_dir).expect("remove temp dir");
-    }
 
     fn test_display(connector: &str) -> DisplayInfo {
         let mode = make_display_mode(2880, 1800, 120.0);
@@ -1392,7 +1299,7 @@ mod tests {
             x: 0,
             y: 0,
             transform: 0,
-            primary: connector == "eDP-1",
+            primary: is_primary_internal_connector(connector),
             current_mode: mode.clone(),
             available_modes: vec![mode],
             refresh_policy: RefreshPolicy::Fixed,
@@ -1403,15 +1310,18 @@ mod tests {
     #[test]
     fn finds_outputs_omitted_from_saved_layout() {
         let layout = DisplayLayout {
-            displays: vec![test_display("eDP-1")],
+            displays: vec![test_display(PRIMARY_INTERNAL_CONNECTOR)],
         };
         let available = vec![
-            "eDP-1".to_string(),
-            "eDP-2".to_string(),
+            PRIMARY_INTERNAL_CONNECTOR.to_string(),
+            SECONDARY_INTERNAL_CONNECTOR.to_string(),
             "HDMI-A-1".to_string(),
         ];
 
-        assert_eq!(omitted_output_names(&layout, &available), vec!["eDP-2"]);
+        assert_eq!(
+            omitted_output_names(&layout, &available),
+            vec![SECONDARY_INTERNAL_CONNECTOR]
+        );
     }
 
     #[test]
@@ -1485,7 +1395,7 @@ Logical monitors:
 
     #[test]
     fn gnome_mode_arg_prefers_backend_token_and_falls_back_to_current_modes() {
-        let mut display = test_display("eDP-1");
+        let mut display = test_display(PRIMARY_INTERNAL_CONNECTOR);
         display.current_mode.backend_mode_id = Some("2880x1800@120.000".into());
         assert_eq!(gnome_mode_arg(&display, None), "2880x1800@120.000");
 
@@ -1505,7 +1415,7 @@ Logical monitors:
                     120.0,
                     Some("2880x1800@120.000".into()),
                 )],
-                ..test_display("eDP-1")
+                ..test_display(PRIMARY_INTERNAL_CONNECTOR)
             }],
         };
 

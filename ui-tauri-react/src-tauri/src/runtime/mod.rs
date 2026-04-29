@@ -7,5 +7,6 @@ pub mod paths;
 pub mod policy;
 pub mod probe;
 pub mod runtime_dir;
+pub mod session;
 pub mod session_agent;
 pub mod state;

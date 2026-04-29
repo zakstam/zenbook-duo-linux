@@ -30,7 +30,7 @@ EOF
 }
 
 ensure_repo_checkout() {
-  if [ -f "${SCRIPT_DIR}/setup-gnome.sh" ] && [ -f "${SCRIPT_DIR}/install-ui.sh" ]; then
+  if [ -f "${SCRIPT_DIR}/setup-gnome.sh" ] && [ -f "${SCRIPT_DIR}/setup-common.sh" ] && [ -f "${SCRIPT_DIR}/install-ui.sh" ]; then
     printf '%s\n' "${SCRIPT_DIR}"
     return 0
   fi

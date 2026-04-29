@@ -1,3 +1,4 @@
+use crate::hardware::duo;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -13,13 +14,7 @@ pub struct TouchscreenDevice {
 
 /// Maps ELAN model number to display connector.
 fn elan_to_connector(name: &str) -> Option<&'static str> {
-    if name.contains("ELAN9008") {
-        Some("eDP-1")
-    } else if name.contains("ELAN9009") {
-        Some("eDP-2")
-    } else {
-        None
-    }
+    duo::connector_for_elan_name(name)
 }
 
 /// Reads the device name from sysfs for an i2c device.
@@ -76,4 +71,23 @@ pub fn set_touchscreen_enabled(i2c_id: &str, enabled: bool) -> Result<(), String
             e
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hardware::duo::{PRIMARY_INTERNAL_CONNECTOR, SECONDARY_INTERNAL_CONNECTOR};
+
+    #[test]
+    fn maps_known_elan_panels_to_duo_connectors() {
+        assert_eq!(
+            elan_to_connector("ELAN9008:00"),
+            Some(PRIMARY_INTERNAL_CONNECTOR)
+        );
+        assert_eq!(
+            elan_to_connector("ELAN9009:00"),
+            Some(SECONDARY_INTERNAL_CONNECTOR)
+        );
+        assert_eq!(elan_to_connector("ELAN1234:00"), None);
+    }
 }

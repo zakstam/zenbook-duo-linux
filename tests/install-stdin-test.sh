@@ -37,7 +37,7 @@ if [[ "${1:-}" != "clone" ]]; then
 fi
 target="${@: -1}"
 mkdir -p "${target}"
-touch "${target}/setup-gnome.sh" "${target}/setup-kde.sh" "${target}/setup-niri.sh" "${target}/install-ui.sh"
+touch "${target}/setup-common.sh" "${target}/setup-gnome.sh" "${target}/setup-kde.sh" "${target}/setup-niri.sh" "${target}/install-ui.sh"
 EOF
 chmod +x "${fake_bin}/git"
 
@@ -97,9 +97,26 @@ if grep -q 'ExecStart=.*\(pre\|post\|thaw\|hibernate\)' "${ROOT_DIR}/install-rus
   exit 1
 fi
 
+if ! grep -q 'command -v pacman' "${ROOT_DIR}/setup-common.sh"; then
+  echo "FAIL: shared setup helper should support pacman-based systems" >&2
+  exit 1
+fi
+
 for setup_script in setup-gnome.sh setup-kde.sh setup-niri.sh; do
-  if ! grep -q 'command -v pacman' "${ROOT_DIR}/${setup_script}"; then
-    echo "FAIL: ${setup_script} should support pacman-based systems" >&2
+  if ! grep -q 'source "${DUO_SETUP_DIR}/setup-common.sh"' "${ROOT_DIR}/${setup_script}"; then
+    echo "FAIL: ${setup_script} should delegate to setup-common.sh" >&2
+    exit 1
+  fi
+  if ! grep -q 'DNF_PACKAGES=' "${ROOT_DIR}/${setup_script}"; then
+    echo "FAIL: ${setup_script} should declare dnf dependencies" >&2
+    exit 1
+  fi
+  if ! grep -q 'APT_PACKAGES=' "${ROOT_DIR}/${setup_script}"; then
+    echo "FAIL: ${setup_script} should declare apt dependencies" >&2
+    exit 1
+  fi
+  if ! grep -q 'PACMAN_PACKAGES=' "${ROOT_DIR}/${setup_script}"; then
+    echo "FAIL: ${setup_script} should declare pacman dependencies" >&2
     exit 1
   fi
 done

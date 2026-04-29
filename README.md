@@ -107,10 +107,11 @@ Notes:
 ### Requirements
 
 - ASUS Zenbook Duo (USB vendor `0B05`, product `1B2C`)
-- Linux with GNOME on Wayland or KDE Plasma on Wayland (tested with Fedora)
+- Linux with GNOME on Wayland, KDE Plasma on Wayland, or Niri (tested with Fedora)
 - `systemd` for service management
 - GNOME: `gdctl` (part of `mutter`) for display configuration
 - KDE: `kscreen-doctor` (part of `kscreen`) for display configuration
+- Niri: `niri msg` for display configuration
 
 ### What `./setup-gnome.sh` / `./setup-kde.sh` / `./setup-niri.sh` change
 
@@ -128,6 +129,8 @@ Notes:
   - The session agent is enabled from the user manager's `default.target`, then syncs the current dock state when your graphical session comes up after reboot/login
 - Installs Rust runtime binaries to `/usr/local/libexec/zenbook-duo`
 - Adds sudoers rules for brightness writes used by the session agent
+
+Contributor note: the desktop setup scripts are thin wrappers around `setup-common.sh`. When adding or changing supported systems, update the shared helper for common behavior and keep only package names/manual dependency hints in the per-desktop wrapper.
 
 ### Troubleshooting
 

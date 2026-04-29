@@ -513,22 +513,18 @@ fn saved_layout_matches_display_mode(layout: &DisplayLayout, attached: bool) -> 
     }
 }
 
-fn is_duo_internal_connector(connector: &str) -> bool {
-    matches!(connector, "eDP-1" | "eDP-2")
-}
-
 fn layout_manages_only_internal_displays(layout: &DisplayLayout) -> bool {
     layout
         .displays
         .iter()
-        .all(|display| is_duo_internal_connector(&display.connector))
+        .all(|display| hardware::duo::is_internal_connector(&display.connector))
 }
 
 fn layout_has_external_display(layout: &DisplayLayout) -> bool {
     layout
         .displays
         .iter()
-        .any(|display| !is_duo_internal_connector(&display.connector))
+        .any(|display| !hardware::duo::is_internal_connector(&display.connector))
 }
 
 async fn active_external_display_connected(
@@ -870,6 +866,7 @@ fn send_runtime_notification_direct(title: &str, message: &str) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hardware::duo::{PRIMARY_INTERNAL_CONNECTOR, SECONDARY_INTERNAL_CONNECTOR};
     use crate::ipc::protocol::SessionBackend;
     use crate::models::{DisplayInfo, DisplayLayout, DisplayMode, RefreshPolicy};
     use std::path::PathBuf;
@@ -1004,8 +1001,8 @@ mod tests {
             match envelope.payload {
                 SessionCommand::ApplyDisplayLayout { layout } => {
                     assert_eq!(layout.displays.len(), 2);
-                    assert_eq!(layout.displays[0].connector, "eDP-1");
-                    assert_eq!(layout.displays[1].connector, "eDP-2");
+                    assert_eq!(layout.displays[0].connector, PRIMARY_INTERNAL_CONNECTOR);
+                    assert_eq!(layout.displays[1].connector, SECONDARY_INTERNAL_CONNECTOR);
                     assert_eq!(layout.displays[1].y, 1200);
                 }
                 other => panic!("unexpected session command: {other:?}"),
@@ -1445,15 +1442,15 @@ mod tests {
 
     fn single_display_layout() -> DisplayLayout {
         DisplayLayout {
-            displays: vec![display("eDP-1", 0, 0, true)],
+            displays: vec![display(PRIMARY_INTERNAL_CONNECTOR, 0, 0, true)],
         }
     }
 
     fn dual_display_layout() -> DisplayLayout {
         DisplayLayout {
             displays: vec![
-                display("eDP-1", 0, 0, true),
-                display("eDP-2", 0, 1200, false),
+                display(PRIMARY_INTERNAL_CONNECTOR, 0, 0, true),
+                display(SECONDARY_INTERNAL_CONNECTOR, 0, 1200, false),
             ],
         }
     }
@@ -1461,8 +1458,8 @@ mod tests {
     fn external_display_layout() -> DisplayLayout {
         DisplayLayout {
             displays: vec![
-                display("eDP-1", 0, 0, true),
-                display("eDP-2", 0, 1200, false),
+                display(PRIMARY_INTERNAL_CONNECTOR, 0, 0, true),
+                display(SECONDARY_INTERNAL_CONNECTOR, 0, 1200, false),
                 display("HDMI-A-1", 1920, 0, false),
             ],
         }
