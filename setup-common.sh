@@ -1,14 +1,37 @@
 #!/usr/bin/env bash
 # Shared setup flow for Zenbook Duo desktop backends.
-# Desktop-specific wrappers define package lists and then call run_duo_setup.
+# Desktop-specific wrappers declare only their backend dependency deltas and then
+# call run_duo_setup.
+
+DUO_COMMON_DNF_PACKAGES=(usbutils iio-sensor-proxy systemd)
+DUO_COMMON_APT_PACKAGES=(usbutils iio-sensor-proxy systemd)
+DUO_COMMON_PACMAN_PACKAGES=(usbutils iio-sensor-proxy systemd)
+DUO_COMMON_MANUAL_DEPENDENCIES_HINT="usbutils, iio-sensor-proxy, systemd"
+
+build_duo_setup_package_lists() {
+  DNF_DESKTOP_PACKAGES=("${DNF_DESKTOP_PACKAGES[@]:-}")
+  APT_DESKTOP_PACKAGES=("${APT_DESKTOP_PACKAGES[@]:-}")
+  PACMAN_DESKTOP_PACKAGES=("${PACMAN_DESKTOP_PACKAGES[@]:-}")
+
+  DNF_PACKAGES=("${DUO_COMMON_DNF_PACKAGES[@]}" "${DNF_DESKTOP_PACKAGES[@]}")
+  APT_PACKAGES=("${DUO_COMMON_APT_PACKAGES[@]}" "${APT_DESKTOP_PACKAGES[@]}")
+  PACMAN_PACKAGES=("${DUO_COMMON_PACMAN_PACKAGES[@]}" "${PACMAN_DESKTOP_PACKAGES[@]}")
+
+  if [ -n "${MANUAL_DESKTOP_DEPENDENCIES_HINT:-}" ]; then
+    MANUAL_DEPENDENCIES_HINT="${DUO_COMMON_MANUAL_DEPENDENCIES_HINT}, ${MANUAL_DESKTOP_DEPENDENCIES_HINT}"
+  else
+    MANUAL_DEPENDENCIES_HINT="${DUO_COMMON_MANUAL_DEPENDENCIES_HINT}"
+  fi
+}
 
 run_duo_setup() {
   : "${SETUP_SCRIPT_NAME:?SETUP_SCRIPT_NAME is required}"
-  : "${MANUAL_DEPENDENCIES_HINT:?MANUAL_DEPENDENCIES_HINT is required}"
 
   DEFAULT_BACKLIGHT="${DEFAULT_BACKLIGHT:-0}"
   DEFAULT_SCALE="${DEFAULT_SCALE:-1.66}"
   USB_MEDIA_REMAP_ENABLED="${USB_MEDIA_REMAP_ENABLED:-true}"
+
+  build_duo_setup_package_lists
 
   parse_duo_setup_args "$@"
   resolve_duo_target_user

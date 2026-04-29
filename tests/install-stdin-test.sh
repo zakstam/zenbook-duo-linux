@@ -62,6 +62,61 @@ if [[ ! -f "${checkout_output}/setup-niri.sh" ]]; then
   exit 1
 fi
 
+desktop_output="$(bash --noprofile --norc -c '
+  set -euo pipefail
+  source <(sed -n "1,128p" "'"${ROOT_DIR}"'/install.sh")
+  XDG_CURRENT_DESKTOP=GNOME DESKTOP_SESSION= XDG_SESSION_DESKTOP= pick_desktop
+  XDG_CURRENT_DESKTOP="KDE Plasma" DESKTOP_SESSION= XDG_SESSION_DESKTOP= pick_desktop
+  XDG_CURRENT_DESKTOP= DESKTOP_SESSION= XDG_SESSION_DESKTOP=niri pick_desktop
+' 2>/dev/null)" || {
+  echo "FAIL: pick_desktop should detect all supported desktops" >&2
+  exit 1
+}
+
+if [[ "${desktop_output}" != $'gnome\nkde\nniri' ]]; then
+  echo "FAIL: pick_desktop should map GNOME, KDE, and Niri consistently" >&2
+  exit 1
+fi
+
+assert_setup_packages() {
+  local label="$1"
+  local dnf_desktop="$2"
+  local apt_desktop="$3"
+  local pacman_desktop="$4"
+  local manual_hint="$5"
+  local output=""
+
+  output="$(bash --noprofile --norc -c '
+    set -euo pipefail
+    source "$1"
+    DNF_DESKTOP_PACKAGES=("$2")
+    APT_DESKTOP_PACKAGES=("$3")
+    PACMAN_DESKTOP_PACKAGES=("$4")
+    MANUAL_DESKTOP_DEPENDENCIES_HINT="$5"
+    build_duo_setup_package_lists
+    printf "dnf:%s\napt:%s\npacman:%s\nhint:%s\n" \
+      "${DNF_PACKAGES[*]}" \
+      "${APT_PACKAGES[*]}" \
+      "${PACMAN_PACKAGES[*]}" \
+      "${MANUAL_DEPENDENCIES_HINT}"
+  ' _ "${ROOT_DIR}/setup-common.sh" "${dnf_desktop}" "${apt_desktop}" "${pacman_desktop}" "${manual_hint}")" || {
+    echo "FAIL: setup package matrix should build for ${label}" >&2
+    exit 1
+  }
+
+  local expected=$'dnf:usbutils iio-sensor-proxy systemd '"${dnf_desktop}"$'\napt:usbutils iio-sensor-proxy systemd '"${apt_desktop}"$'\npacman:usbutils iio-sensor-proxy systemd '"${pacman_desktop}"$'\nhint:usbutils, iio-sensor-proxy, systemd, '"${manual_hint}"
+  if [[ "${output}" != "${expected}" ]]; then
+    echo "FAIL: setup package matrix mismatch for ${label}" >&2
+    echo "Got:" >&2
+    echo "${output}" >&2
+    exit 1
+  fi
+}
+
+assert_setup_packages gnome mutter mutter-common-bin mutter mutter/gdctl
+assert_setup_packages kde kscreen kscreen kscreen kscreen/kscreen-doctor
+assert_setup_packages niri niri niri niri niri
+
 if ! grep -q 'WantedBy=default.target' "${ROOT_DIR}/install-rust-runtime.sh"; then
   echo "FAIL: user service should be enabled from default.target" >&2
   exit 1
@@ -102,6 +157,11 @@ if ! grep -q 'command -v pacman' "${ROOT_DIR}/setup-common.sh"; then
   exit 1
 fi
 
+if ! grep -q 'DUO_COMMON_DNF_PACKAGES=(usbutils iio-sensor-proxy systemd)' "${ROOT_DIR}/setup-common.sh"; then
+  echo "FAIL: shared setup helper should centralize common dnf dependencies" >&2
+  exit 1
+fi
+
 remap_default_output="$(bash --noprofile --norc -c '
   set -euo pipefail
   source "'"${ROOT_DIR}"'/setup-common.sh"
@@ -134,16 +194,20 @@ for setup_script in setup-gnome.sh setup-kde.sh setup-niri.sh; do
     echo "FAIL: ${setup_script} should delegate to setup-common.sh" >&2
     exit 1
   fi
-  if ! grep -q 'DNF_PACKAGES=' "${ROOT_DIR}/${setup_script}"; then
-    echo "FAIL: ${setup_script} should declare dnf dependencies" >&2
+  if ! grep -q 'DNF_DESKTOP_PACKAGES=' "${ROOT_DIR}/${setup_script}"; then
+    echo "FAIL: ${setup_script} should declare only desktop-specific dnf dependencies" >&2
     exit 1
   fi
-  if ! grep -q 'APT_PACKAGES=' "${ROOT_DIR}/${setup_script}"; then
-    echo "FAIL: ${setup_script} should declare apt dependencies" >&2
+  if ! grep -q 'APT_DESKTOP_PACKAGES=' "${ROOT_DIR}/${setup_script}"; then
+    echo "FAIL: ${setup_script} should declare only desktop-specific apt dependencies" >&2
     exit 1
   fi
-  if ! grep -q 'PACMAN_PACKAGES=' "${ROOT_DIR}/${setup_script}"; then
-    echo "FAIL: ${setup_script} should declare pacman dependencies" >&2
+  if ! grep -q 'PACMAN_DESKTOP_PACKAGES=' "${ROOT_DIR}/${setup_script}"; then
+    echo "FAIL: ${setup_script} should declare only desktop-specific pacman dependencies" >&2
+    exit 1
+  fi
+  if grep -q '^DNF_PACKAGES=' "${ROOT_DIR}/${setup_script}" || grep -q '^APT_PACKAGES=' "${ROOT_DIR}/${setup_script}" || grep -q '^PACMAN_PACKAGES=' "${ROOT_DIR}/${setup_script}"; then
+    echo "FAIL: ${setup_script} should not duplicate common package arrays" >&2
     exit 1
   fi
 done

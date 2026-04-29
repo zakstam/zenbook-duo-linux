@@ -132,6 +132,38 @@ Notes:
 
 Contributor note: the desktop setup scripts are thin wrappers around `setup-common.sh`. When adding or changing supported systems, update the shared helper for common behavior and keep only package names/manual dependency hints in the per-desktop wrapper.
 
+### Contributor compatibility checks
+
+Use the root check script before changing installer, runtime, or UI behavior:
+
+```bash
+./check.sh installers   # shell syntax + installer smoke tests
+./check.sh rust         # Rust runtime unit tests
+./check.sh frontend     # React/TypeScript production build
+./check.sh all          # full compatibility pass
+```
+
+Supported matrix covered by the installer smoke tests:
+
+| Desktop backend | Setup wrapper | Display command |
+|-----------------|---------------|-----------------|
+| GNOME on Wayland | `setup-gnome.sh` | `gdctl` |
+| KDE Plasma on Wayland | `setup-kde.sh` | `kscreen-doctor` |
+| Niri | `setup-niri.sh` | `niri msg` |
+
+| Distro family | Package manager |
+|---------------|-----------------|
+| Fedora / RHEL-based | `dnf` |
+| Debian / Ubuntu-based | `apt` |
+| Arch / CachyOS | `pacman` |
+
+Compatibility checklist for maintainers:
+
+- Keep common setup behavior in `setup-common.sh`; keep desktop wrappers limited to backend-specific packages and manual dependency hints.
+- Preserve GNOME, KDE, and Niri command arguments when refactoring display code unless a backend-specific behavior change is intentional and tested.
+- Update `tests/install-stdin-test.sh` whenever supported desktops, package managers, service units, or installer entrypoints change.
+- Run the narrow `./check.sh` target for the area you touched; run `./check.sh all` before handing off broad cross-area changes.
+
 ### Troubleshooting
 
 - Nothing happens when docking/undocking:

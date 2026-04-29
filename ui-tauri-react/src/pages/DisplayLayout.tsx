@@ -1,6 +1,13 @@
 import { useState, useEffect } from "react";
 import DisplayCanvas from "@/components/DisplayCanvas";
-import { getDisplayLayout, applyDisplayLayout, listTouchscreens, setTouchscreenEnabled, loadSettings, saveSettings } from "@/lib/tauri";
+import {
+  getDisplayLayout,
+  applyDisplayLayout,
+  listTouchscreens,
+  setTouchscreenEnabled,
+  saveTouchscreenPreference,
+  saveDisplayLayoutPreference,
+} from "@/lib/tauri";
 import type { DisplayInfo, DisplayLayout as LayoutType, TouchscreenDevice } from "@/types/duo";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -52,12 +59,7 @@ export default function DisplayLayout() {
       setTouchscreens((prev) =>
         prev.map((ts) => (ts.connector === connector ? { ...ts, enabled } : ts))
       );
-      const settings = await loadSettings();
-      const disabled = settings.touchscreenDisabled ?? [];
-      settings.touchscreenDisabled = enabled
-        ? disabled.filter((c) => c !== connector)
-        : [...disabled.filter((c) => c !== connector), connector];
-      await saveSettings(settings);
+      await saveTouchscreenPreference(connector, enabled);
     } catch (e) {
       console.error("Failed to toggle touchscreen:", e);
     }
@@ -75,9 +77,7 @@ export default function DisplayLayout() {
     try {
       await applyDisplayLayout(layout);
 
-      const settings = await loadSettings();
-      settings.savedDisplayLayout = layout;
-      await saveSettings(settings);
+      await saveDisplayLayoutPreference(layout);
     } catch (err) {
       setError(`Failed to apply or save layout: ${err}`);
     } finally {

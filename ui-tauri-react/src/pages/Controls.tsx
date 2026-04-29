@@ -1,7 +1,12 @@
 import { useState, useEffect } from "react";
 import BacklightSlider from "@/components/BacklightSlider";
 import OrientationButtons from "@/components/OrientationButtons";
-import { restartService, listTouchscreens, setTouchscreenEnabled, loadSettings, saveSettings } from "@/lib/tauri";
+import {
+  restartService,
+  listTouchscreens,
+  setTouchscreenEnabled,
+  saveTouchscreenPreference,
+} from "@/lib/tauri";
 import type { TouchscreenDevice } from "@/types/duo";
 import { Switch } from "@/components/ui/switch";
 import { refreshStatus, useDispatch, useStore } from "@/lib/store";
@@ -35,12 +40,7 @@ export default function Controls() {
       setTouchscreens((prev) =>
         prev.map((ts) => (ts.connector === connector ? { ...ts, enabled } : ts))
       );
-      const settings = await loadSettings();
-      const disabled = settings.touchscreenDisabled ?? [];
-      settings.touchscreenDisabled = enabled
-        ? disabled.filter((c) => c !== connector)
-        : [...disabled.filter((c) => c !== connector), connector];
-      await saveSettings(settings);
+      await saveTouchscreenPreference(connector, enabled);
     } catch (e) {
       console.error("Failed to toggle touchscreen:", e);
     }

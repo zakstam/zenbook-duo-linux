@@ -6,13 +6,10 @@ set -euo pipefail
 
 DUO_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-${0}}")" && pwd)"
 SETUP_SCRIPT_NAME="setup-kde.sh"
-DEFAULT_BACKLIGHT=0
-DEFAULT_SCALE=1.66
-USB_MEDIA_REMAP_ENABLED=true
-DNF_PACKAGES=(usbutils kscreen iio-sensor-proxy systemd)
-APT_PACKAGES=(usbutils kscreen iio-sensor-proxy systemd)
-PACMAN_PACKAGES=(usbutils kscreen iio-sensor-proxy systemd)
-MANUAL_DEPENDENCIES_HINT="usbutils, kscreen/kscreen-doctor, iio-sensor-proxy, systemd"
+DNF_DESKTOP_PACKAGES=(kscreen)
+APT_DESKTOP_PACKAGES=(kscreen)
+PACMAN_DESKTOP_PACKAGES=(kscreen)
+MANUAL_DESKTOP_DEPENDENCIES_HINT="kscreen/kscreen-doctor"
 
 # shellcheck source=setup-common.sh
 source "${DUO_SETUP_DIR}/setup-common.sh"

@@ -41,6 +41,26 @@ export const restartService = () => invoke<void>("restart_service");
 export const loadSettings = () => invoke<DuoSettings>("load_settings");
 export const saveSettings = (settings: DuoSettings) =>
   invoke<void>("save_settings", { settings });
+export const updateSettings = async (
+  updater: (settings: DuoSettings) => DuoSettings | void | Promise<DuoSettings | void>,
+) => {
+  const current = await loadSettings();
+  const next = (await updater(current)) ?? current;
+  await saveSettings(next);
+  return next;
+};
+export const saveTouchscreenPreference = (connector: string, enabled: boolean) =>
+  updateSettings((settings) => {
+    const disabled = settings.touchscreenDisabled ?? [];
+    return {
+      ...settings,
+      touchscreenDisabled: enabled
+        ? disabled.filter((item) => item !== connector)
+        : [...disabled.filter((item) => item !== connector), connector],
+    };
+  });
+export const saveDisplayLayoutPreference = (layout: DisplayLayout) =>
+  updateSettings((settings) => ({ ...settings, savedDisplayLayout: layout }));
 
 // Logs
 export const readLog = (lines: number) =>

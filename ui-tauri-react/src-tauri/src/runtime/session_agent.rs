@@ -16,7 +16,7 @@ use crate::ipc::protocol::{
     DaemonRequest, DaemonResponse, Envelope, SessionBackend, SessionCommand, SessionResponse,
 };
 use crate::models::Orientation;
-use crate::runtime::{paths, session, state::RuntimeState};
+use crate::runtime::{compositor, paths, session, state::RuntimeState};
 
 pub async fn run() -> Result<(), String> {
     ensure_user_runtime_dir()?;
@@ -218,26 +218,15 @@ fn backend_is_ready(backend: SessionBackend) -> bool {
             if !gui_session_env_ready() {
                 return false;
             }
-            Command::new("gdctl")
-                .arg("show")
-                .output()
-                .map(|output| output.status.success())
-                .unwrap_or(false)
+            compositor::command_succeeds("gdctl", &["show"])
         }
         SessionBackend::Kde => {
             if !gui_session_env_ready() {
                 return false;
             }
-            Command::new("kscreen-doctor")
-                .arg("-j")
-                .output()
-                .map(|output| output.status.success())
-                .unwrap_or(false)
+            compositor::command_succeeds("kscreen-doctor", &["-j"])
         }
-        SessionBackend::Niri => session::build_niri_command(&["msg", "--json", "outputs"])
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false),
+        SessionBackend::Niri => compositor::niri_command_succeeds(&["msg", "--json", "outputs"]),
         SessionBackend::Unknown => false,
     }
 }
@@ -389,77 +378,15 @@ fn apply_niri_dock_mode(attached: bool) -> Result<(), String> {
 
 fn kde_output_logical_size(name: &str) -> Result<(i64, i64), String> {
     ensure_gui_session_env("KDE display query")?;
-    let output = Command::new("kscreen-doctor")
-        .arg("-j")
-        .output()
-        .map_err(|e| format!("Failed to run kscreen-doctor: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    let value: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid kscreen JSON: {e}"))?;
-    let outputs = value
-        .get("outputs")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "Missing KDE outputs array".to_string())?;
-    for output in outputs {
-        if output.get("name").and_then(|v| v.as_str()) == Some(name) {
-            let size = output
-                .get("size")
-                .and_then(|v| v.as_object())
-                .ok_or_else(|| "Missing KDE output size".to_string())?;
-            let scale = output.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
-            let width = size.get("width").and_then(|v| v.as_i64()).unwrap_or(0);
-            let height = size.get("height").and_then(|v| v.as_i64()).unwrap_or(0);
-            return Ok((
-                (width as f64 / scale).round() as i64,
-                (height as f64 / scale).round() as i64,
-            ));
-        }
-    }
-    Err(format!("KDE output {name} not found"))
+    compositor::kde_output_logical_size_from_value(&compositor::kscreen_json()?, name)
 }
 
 fn niri_output_logical_size(name: &str) -> Result<(i64, i64), String> {
-    let output = session::build_niri_command(&["msg", "--json", "outputs"])
-        .output()
-        .map_err(|e| format!("Failed to run niri msg: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    let value: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid niri JSON: {e}"))?;
-    let outputs = if let Some(arr) = value.as_array() {
-        arr.clone()
-    } else if let Some(obj) = value.as_object() {
-        obj.values().cloned().collect()
-    } else {
-        return Err("Unexpected niri outputs shape".into());
-    };
-    for output in outputs {
-        if output.get("name").and_then(|v| v.as_str()) == Some(name) {
-            let logical = output
-                .get("logical")
-                .and_then(|v| v.as_object())
-                .ok_or_else(|| "Missing niri logical size".to_string())?;
-            let width = logical.get("width").and_then(|v| v.as_i64()).unwrap_or(0);
-            let height = logical.get("height").and_then(|v| v.as_i64()).unwrap_or(0);
-            return Ok((width, height));
-        }
-    }
-    Err(format!("Niri output {name} not found"))
+    compositor::niri_output_logical_size_from_value(&compositor::niri_outputs_json()?, name)
 }
 
 fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<(), String> {
-    let output = Command::new(program)
-        .args(args.iter().map(|arg| arg.as_ref()))
-        .output()
-        .map_err(|e| format!("Failed to run {program}: {e}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
+    compositor::run_command(program, args)
 }
 
 fn ensure_gui_session_env(action: &str) -> Result<(), String> {
@@ -473,14 +400,7 @@ fn ensure_gui_session_env(action: &str) -> Result<(), String> {
 }
 
 fn run_niri_command(args: &[&str]) -> Result<(), String> {
-    let output = session::build_niri_command(args)
-        .output()
-        .map_err(|e| format!("Failed to run niri msg: {e}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
+    compositor::run_niri_command(args)
 }
 
 fn dock_mode_notification_message(attached: bool) -> &'static str {
