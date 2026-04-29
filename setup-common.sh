@@ -86,13 +86,17 @@ prompt_duo_defaults() {
   DEFAULT_SCALE="${input:-${DEFAULT_SCALE}}"
 
   local remap_answer=""
-  duo_prompt "Enable USB Media Remap by default? [Y/n] " remap_answer
+  local remap_prompt="Enable USB Media Remap by default? [Y/n] "
+  if [ "${USB_MEDIA_REMAP_ENABLED}" != true ]; then
+    remap_prompt="Enable USB Media Remap by default? [y/N] "
+  fi
+  duo_prompt "${remap_prompt}" remap_answer
   case "${remap_answer}" in
+    [yY]|[yY][eE][sS])
+      USB_MEDIA_REMAP_ENABLED=true
+      ;;
     [nN]|[nN][oO])
       USB_MEDIA_REMAP_ENABLED=false
-      ;;
-    *)
-      USB_MEDIA_REMAP_ENABLED=true
       ;;
   esac
 }

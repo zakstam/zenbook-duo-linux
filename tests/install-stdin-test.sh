@@ -102,6 +102,33 @@ if ! grep -q 'command -v pacman' "${ROOT_DIR}/setup-common.sh"; then
   exit 1
 fi
 
+remap_default_output="$(bash --noprofile --norc -c '
+  set -euo pipefail
+  source "'"${ROOT_DIR}"'/setup-common.sh"
+  duo_prompt() { printf -v "$2" ""; }
+
+  DEFAULT_BACKLIGHT=0
+  DEFAULT_SCALE=1.66
+  USB_MEDIA_REMAP_ENABLED=false
+  prompt_duo_defaults
+  printf "%s\n" "${USB_MEDIA_REMAP_ENABLED}"
+
+  DEFAULT_BACKLIGHT=0
+  DEFAULT_SCALE=1.66
+  USB_MEDIA_REMAP_ENABLED=true
+  prompt_duo_defaults
+  printf "%s\n" "${USB_MEDIA_REMAP_ENABLED}"
+' 2>&1)" || {
+  echo "FAIL: prompt_duo_defaults should be callable with mocked prompts" >&2
+  exit 1
+}
+
+if [[ "${remap_default_output}" != $'false\ntrue' ]]; then
+  echo "FAIL: empty USB remap prompt answer should preserve the current default" >&2
+  printf 'Got:\n%s\n' "${remap_default_output}" >&2
+  exit 1
+fi
+
 for setup_script in setup-gnome.sh setup-kde.sh setup-niri.sh; do
   if ! grep -q 'source "${DUO_SETUP_DIR}/setup-common.sh"' "${ROOT_DIR}/${setup_script}"; then
     echo "FAIL: ${setup_script} should delegate to setup-common.sh" >&2

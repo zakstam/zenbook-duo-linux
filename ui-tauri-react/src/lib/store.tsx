@@ -173,6 +173,7 @@ export function useStoreInit() {
         refreshSettings(dispatch),
         refreshProfiles(dispatch),
         refreshLogs(dispatch),
+        refreshEvents(dispatch),
       ]);
 
       dispatch({ type: "SET_LOADING", payload: false });

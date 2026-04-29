@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore, useDispatch, refreshSettings } from "@/lib/store";
 import { saveSettings } from "@/lib/tauri";
 import type { DuoSettings, ThemePreference } from "@/types/duo";
@@ -27,6 +27,7 @@ export default function Settings() {
   const [localSettings, setLocalSettings] = useState<DuoSettings>({
     ...store.settings,
   });
+  const [settingsDirty, setSettingsDirty] = useState(false);
   const {
     isUsb,
     remapBusy,
@@ -37,10 +38,20 @@ export default function Settings() {
     togglePause,
   } = useUsbMediaRemap({
     settings: localSettings,
-    onSettingsSaved: setLocalSettings,
+    onSettingsSaved: (settings) => {
+      setLocalSettings(settings);
+      setSettingsDirty(false);
+    },
   });
 
+  useEffect(() => {
+    if (!settingsDirty) {
+      setLocalSettings({ ...store.settings });
+    }
+  }, [settingsDirty, store.settings]);
+
   const updateLocal = (key: keyof DuoSettings, value: unknown) => {
+    setSettingsDirty(true);
     setLocalSettings((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -49,6 +60,7 @@ export default function Settings() {
     try {
       await saveSettings(localSettings);
       await refreshSettings(dispatch);
+      setSettingsDirty(false);
 
       const themeMap: Record<ThemePreference, string> = {
         system: "system",
