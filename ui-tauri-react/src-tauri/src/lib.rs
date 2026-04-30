@@ -21,7 +21,11 @@ pub fn run() {
     let event_buffer = create_event_buffer();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if argv.iter().any(|arg| arg == "--start-minimized") {
+                return;
+            }
+
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -31,12 +35,20 @@ pub fn run() {
         .manage(event_buffer.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
+            let start_minimized = std::env::args().any(|arg| arg == "--start-minimized");
 
             // Build tray menu
             build_tray(&handle)?;
 
             // Start background watchers
             watchers::start_all_watchers(&handle, event_buffer.clone());
+
+            if !start_minimized {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
 
             Ok(())
         })

@@ -53,6 +53,7 @@ export interface DuoSettings {
   syncBrightness: boolean;
   theme: ThemePreference;
   usbMediaRemapEnabled: boolean;
+  startOnBootMinimized: boolean;
   setupCompleted: boolean;
   touchscreenDisabled: string[];
   savedDisplayLayout: DisplayLayout | null;

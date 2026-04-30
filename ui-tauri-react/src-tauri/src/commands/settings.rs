@@ -6,15 +6,76 @@ use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::models::DuoSettings;
 use crate::runtime::client;
 
-fn settings_path() -> PathBuf {
-    let config_dir = if let Ok(home_override) = env::var("ZENBOOK_DUO_HOME") {
+const AUTOSTART_FILE_NAME: &str = "zenbook-duo-control.desktop";
+
+fn config_base_dir() -> PathBuf {
+    if let Ok(home_override) = env::var("ZENBOOK_DUO_HOME") {
         PathBuf::from(home_override).join(".config")
     } else {
         dirs::config_dir().unwrap_or_else(|| PathBuf::from("~/.config"))
     }
-    .join("zenbook-duo");
+}
+
+fn settings_path() -> PathBuf {
+    let config_dir = config_base_dir().join("zenbook-duo");
     let _ = fs::create_dir_all(&config_dir);
     config_dir.join("settings.json")
+}
+
+fn autostart_path() -> PathBuf {
+    config_base_dir()
+        .join("autostart")
+        .join(AUTOSTART_FILE_NAME)
+}
+
+fn autostart_enabled() -> bool {
+    autostart_path().is_file()
+}
+
+fn desktop_exec_path() -> String {
+    let executable = env::current_exe().unwrap_or_else(|_| PathBuf::from("zenbook-duo-control"));
+    let executable = executable.to_string_lossy();
+    let escaped = executable.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\" --start-minimized")
+}
+
+fn write_autostart_entry() -> Result<(), String> {
+    let path = autostart_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Create autostart dir error: {e}"))?;
+    }
+
+    let entry = format!(
+        "[Desktop Entry]\n\
+Type=Application\n\
+Name=Zenbook Duo Control\n\
+Comment=Start Zenbook Duo Control hidden in the system tray\n\
+Exec={}\n\
+Icon=zenbook-duo-control\n\
+Terminal=false\n\
+Categories=Utility;Settings;\n\
+NoDisplay=true\n\
+X-GNOME-Autostart-enabled=true\n",
+        desktop_exec_path()
+    );
+
+    fs::write(&path, entry).map_err(|e| format!("Write autostart entry error: {e}"))
+}
+
+fn remove_autostart_entry() -> Result<(), String> {
+    match fs::remove_file(autostart_path()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Remove autostart entry error: {e}")),
+    }
+}
+
+fn sync_autostart_entry(settings: &DuoSettings) -> Result<(), String> {
+    if settings.start_on_boot_minimized {
+        write_autostart_entry()
+    } else {
+        remove_autostart_entry()
+    }
 }
 
 pub fn load_settings_local() -> DuoSettings {
@@ -47,11 +108,14 @@ pub fn save_settings_local(settings: DuoSettings) -> Result<(), String> {
 
 #[tauri::command]
 pub fn load_settings() -> DuoSettings {
-    load_settings_local()
+    let mut settings = load_settings_local();
+    settings.start_on_boot_minimized = autostart_enabled();
+    settings
 }
 
 #[tauri::command]
 pub fn save_settings(settings: DuoSettings) -> Result<(), String> {
+    sync_autostart_entry(&settings)?;
     save_settings_local(settings.clone())?;
 
     match client::request(DaemonRequest::SaveSettings { settings }) {

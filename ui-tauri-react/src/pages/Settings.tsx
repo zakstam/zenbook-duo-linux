@@ -158,6 +158,18 @@ export default function Settings() {
               </SelectContent>
             </Select>
           </SettingRow>
+
+          <div className="h-px bg-border/50" />
+
+          <SettingRow
+            label="Start on boot"
+            description="Open at login hidden in the system tray"
+          >
+            <Switch
+              checked={localSettings.startOnBootMinimized}
+              onCheckedChange={(checked) => updateLocal("startOnBootMinimized", checked)}
+            />
+          </SettingRow>
         </div>
       </div>
 

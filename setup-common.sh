@@ -13,6 +13,7 @@ DUO_COMMON_MANUAL_DEPENDENCIES_HINT="usbutils, iio-sensor-proxy, systemd"
 DUO_DEFAULT_BACKLIGHT=0
 DUO_DEFAULT_SCALE=1.66
 DUO_DEFAULT_USB_MEDIA_REMAP_ENABLED=true
+DUO_DEFAULT_START_ON_BOOT_MINIMIZED=false
 DUO_INSTALLER_MARKS_SETUP_COMPLETED=true
 
 build_duo_setup_package_lists() {
@@ -37,6 +38,7 @@ run_duo_setup() {
   DEFAULT_BACKLIGHT="${DEFAULT_BACKLIGHT:-${DUO_DEFAULT_BACKLIGHT}}"
   DEFAULT_SCALE="${DEFAULT_SCALE:-${DUO_DEFAULT_SCALE}}"
   USB_MEDIA_REMAP_ENABLED="${USB_MEDIA_REMAP_ENABLED:-${DUO_DEFAULT_USB_MEDIA_REMAP_ENABLED}}"
+  START_ON_BOOT_MINIMIZED="${START_ON_BOOT_MINIMIZED:-${DUO_DEFAULT_START_ON_BOOT_MINIMIZED}}"
 
   build_duo_setup_package_lists
 
@@ -180,6 +182,7 @@ write_duo_settings_defaults() {
 
   local config_dir="${TARGET_HOME}/.config/zenbook-duo"
   local settings_file="${config_dir}/settings.json"
+  local start_on_boot_minimized="${START_ON_BOOT_MINIMIZED:-${DUO_DEFAULT_START_ON_BOOT_MINIMIZED}}"
 
   local python_cmd=("${python3}")
   if [ "${TARGET_USER}" != "${USER:-}" ] || [ "${EUID}" = "0" ]; then
@@ -189,7 +192,7 @@ write_duo_settings_defaults() {
     mkdir -p "${config_dir}" 2>/dev/null || true
   fi
 
-  "${python_cmd[@]}" - "${settings_file}" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}" "${DUO_INSTALLER_MARKS_SETUP_COMPLETED}" <<'PY'
+  "${python_cmd[@]}" - "${settings_file}" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}" "${start_on_boot_minimized}" "${DUO_INSTALLER_MARKS_SETUP_COMPLETED}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -198,7 +201,8 @@ settings_file = Path(sys.argv[1])
 default_backlight = int(sys.argv[2])
 default_scale = float(sys.argv[3])
 usb_media_remap_enabled = sys.argv[4].strip().lower() in ("1", "true", "yes", "y", "on")
-setup_completed = sys.argv[5].strip().lower() in ("1", "true", "yes", "y", "on")
+start_on_boot_minimized = sys.argv[5].strip().lower() in ("1", "true", "yes", "y", "on")
+setup_completed = sys.argv[6].strip().lower() in ("1", "true", "yes", "y", "on")
 
 settings_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -218,6 +222,7 @@ data.setdefault("theme", "system")
 data["defaultBacklight"] = default_backlight
 data["defaultScale"] = default_scale
 data["usbMediaRemapEnabled"] = usb_media_remap_enabled
+data["startOnBootMinimized"] = start_on_boot_minimized
 data["setupCompleted"] = setup_completed
 
 settings_file.write_text(json.dumps(data, indent=2) + "\n")

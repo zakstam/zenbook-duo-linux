@@ -31,7 +31,7 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
-  const [version, setVersion] = useState<string>("v0.2.0");
+  const [version, setVersion] = useState<string>("v0.3.0");
 
   useEffect(() => {
     let cancelled = false;

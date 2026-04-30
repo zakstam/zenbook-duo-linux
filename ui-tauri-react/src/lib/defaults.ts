@@ -20,6 +20,7 @@ export const DEFAULT_DUO_SETTINGS: DuoSettings = {
   syncBrightness: true,
   theme: "system",
   usbMediaRemapEnabled: true,
+  startOnBootMinimized: false,
   setupCompleted: false,
   touchscreenDisabled: [],
   savedDisplayLayout: null,

@@ -240,6 +240,7 @@ expected = {
     "defaultBacklight": 0,
     "defaultScale": 1.66,
     "usbMediaRemapEnabled": True,
+    "startOnBootMinimized": False,
     "setupCompleted": True,
     "autoDualScreen": True,
     "syncBrightness": True,
@@ -263,6 +264,11 @@ fi
 
 if ! grep -q 'defaultBacklight: 0,' "${ROOT_DIR}/ui-tauri-react/src/lib/defaults.ts"; then
   echo "FAIL: frontend settings default backlight should match installer defaults" >&2
+  exit 1
+fi
+
+if ! grep -q 'startOnBootMinimized: false,' "${ROOT_DIR}/ui-tauri-react/src/lib/defaults.ts"; then
+  echo "FAIL: frontend settings default startup preference should match installer defaults" >&2
   exit 1
 fi
 

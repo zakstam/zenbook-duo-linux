@@ -5,6 +5,7 @@ use super::DisplayLayout;
 pub const DEFAULT_BACKLIGHT_LEVEL: u8 = 0;
 pub const DEFAULT_SCALE_FACTOR: f64 = 1.66;
 pub const DEFAULT_USB_MEDIA_REMAP_ENABLED: bool = true;
+pub const DEFAULT_START_ON_BOOT_MINIMIZED: bool = false;
 pub const DEFAULT_SETUP_COMPLETED: bool = false;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +23,8 @@ pub struct DuoSettings {
     pub theme: ThemePreference,
     #[serde(default = "default_usb_media_remap_enabled")]
     pub usb_media_remap_enabled: bool,
+    #[serde(default = "default_start_on_boot_minimized")]
+    pub start_on_boot_minimized: bool,
     #[serde(default)]
     pub setup_completed: bool,
     #[serde(default)]
@@ -39,6 +42,7 @@ impl Default for DuoSettings {
             sync_brightness: true,
             theme: ThemePreference::System,
             usb_media_remap_enabled: default_usb_media_remap_enabled(),
+            start_on_boot_minimized: default_start_on_boot_minimized(),
             setup_completed: DEFAULT_SETUP_COMPLETED,
             touchscreen_disabled: Vec::new(),
             saved_display_layout: None,
@@ -67,6 +71,10 @@ fn default_usb_media_remap_enabled() -> bool {
     DEFAULT_USB_MEDIA_REMAP_ENABLED
 }
 
+fn default_start_on_boot_minimized() -> bool {
+    DEFAULT_START_ON_BOOT_MINIMIZED
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,6 +88,10 @@ mod tests {
         assert_eq!(
             settings.usb_media_remap_enabled,
             DEFAULT_USB_MEDIA_REMAP_ENABLED
+        );
+        assert_eq!(
+            settings.start_on_boot_minimized,
+            DEFAULT_START_ON_BOOT_MINIMIZED
         );
         assert_eq!(settings.setup_completed, DEFAULT_SETUP_COMPLETED);
         assert!(settings.auto_dual_screen);
