@@ -54,6 +54,7 @@ export interface DuoSettings {
   theme: ThemePreference;
   usbMediaRemapEnabled: boolean;
   startOnBootMinimized: boolean;
+  invertSensorRotation: boolean;
   setupCompleted: boolean;
   touchscreenDisabled: string[];
   savedDisplayLayout: DisplayLayout | null;

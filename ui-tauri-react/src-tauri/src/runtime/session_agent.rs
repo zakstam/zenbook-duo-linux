@@ -823,19 +823,21 @@ async fn watch_rotation() -> Result<(), String> {
         .map_err(|e| format!("Failed reading monitor-sensor output: {e}"))?
     {
         if let Some(sensor_orientation) = sensor_orientation_value(&line) {
-            match display_orientation_from_sensor_value(sensor_orientation) {
+            let invert_sensor_rotation =
+                crate::commands::settings::load_settings_local().invert_sensor_rotation;
+            match display_orientation_from_sensor_value(sensor_orientation, invert_sensor_rotation) {
                 Some(orientation) => {
                     runtime_log_info(format!(
-                        "monitor-sensor orientation changed: sensor={sensor_orientation} mapped_display={orientation:?}"
+                        "monitor-sensor orientation changed: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}"
                     ));
                     if let Err(err) = crate::hardware::display_config::set_orientation(&orientation)
                     {
                         runtime_log_warn(format!(
-                            "failed to apply accelerometer orientation: sensor={sensor_orientation} mapped_display={orientation:?}: {err}"
+                            "failed to apply accelerometer orientation: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}: {err}"
                         ));
                     } else {
                         runtime_log_info(format!(
-                            "applied accelerometer orientation: sensor={sensor_orientation} mapped_display={orientation:?}"
+                            "applied accelerometer orientation: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}"
                         ));
                     }
                 }
@@ -883,7 +885,7 @@ async fn log_monitor_sensor_stderr(stderr: tokio::process::ChildStderr) {
 }
 
 fn parse_rotation_line(line: &str) -> Option<Orientation> {
-    sensor_orientation_value(line).and_then(display_orientation_from_sensor_value)
+    sensor_orientation_value(line).and_then(|value| display_orientation_from_sensor_value(value, false))
 }
 
 fn sensor_orientation_value(line: &str) -> Option<&str> {
@@ -892,12 +894,14 @@ fn sensor_orientation_value(line: &str) -> Option<&str> {
         .map(str::trim)
 }
 
-fn display_orientation_from_sensor_value(value: &str) -> Option<Orientation> {
-    match value {
-        "left-up" => Some(Orientation::Left),
-        "right-up" => Some(Orientation::Right),
-        "bottom-up" => Some(Orientation::Inverted),
-        "normal" => Some(Orientation::Normal),
+fn display_orientation_from_sensor_value(value: &str, invert_sensor_rotation: bool) -> Option<Orientation> {
+    match (value, invert_sensor_rotation) {
+        ("left-up", false) => Some(Orientation::Left),
+        ("left-up", true) => Some(Orientation::Right),
+        ("right-up", false) => Some(Orientation::Right),
+        ("right-up", true) => Some(Orientation::Left),
+        ("bottom-up", _) => Some(Orientation::Inverted),
+        ("normal", _) => Some(Orientation::Normal),
         _ => None,
     }
 }
@@ -957,6 +961,26 @@ mod tests {
         );
         assert_eq!(
             parse_rotation_line("    Accelerometer orientation changed: normal"),
+            Some(Orientation::Normal)
+        );
+    }
+
+    #[test]
+    fn inverted_sensor_rotation_swaps_only_left_and_right() {
+        assert_eq!(
+            display_orientation_from_sensor_value("left-up", true),
+            Some(Orientation::Right)
+        );
+        assert_eq!(
+            display_orientation_from_sensor_value("right-up", true),
+            Some(Orientation::Left)
+        );
+        assert_eq!(
+            display_orientation_from_sensor_value("bottom-up", true),
+            Some(Orientation::Inverted)
+        );
+        assert_eq!(
+            display_orientation_from_sensor_value("normal", true),
             Some(Orientation::Normal)
         );
     }

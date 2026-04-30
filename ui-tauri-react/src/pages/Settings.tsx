@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { IconDeviceFloppy, IconKeyboard, IconPlayerPause, IconPlayerPlay } from "@tabler/icons-react";
+import { IconDeviceFloppy, IconKeyboard, IconPlayerPause, IconPlayerPlay, IconRotate } from "@tabler/icons-react";
 
 export default function Settings() {
   const store = useStore();
@@ -174,6 +174,27 @@ export default function Settings() {
       </div>
 
       <div className="mt-5 glass-card animate-stagger-in stagger-2 rounded-xl p-5">
+        <div className="mb-5 flex items-center gap-2.5">
+          <div className="flex size-7 items-center justify-center rounded-lg bg-purple-500/10 text-purple-500 dark:bg-purple-400/10 dark:text-purple-400">
+            <IconRotate className="size-3.5" stroke={1.75} />
+          </div>
+          <h3 className="text-[13px] font-semibold text-foreground">
+            Rotation
+          </h3>
+        </div>
+
+        <SettingRow
+          label="Flip sensor left/right"
+          description="Enable when physical left/right rotation goes the opposite direction for your hardware"
+        >
+          <Switch
+            checked={localSettings.invertSensorRotation}
+            onCheckedChange={(checked) => updateLocal("invertSensorRotation", checked)}
+          />
+        </SettingRow>
+      </div>
+
+      <div className="mt-5 glass-card animate-stagger-in stagger-3 rounded-xl p-5">
         <div className="mb-5 flex items-center gap-2.5">
           <div className="flex size-7 items-center justify-center rounded-lg bg-teal-500/10 text-teal-500 dark:bg-teal-400/10 dark:text-teal-400">
             <IconKeyboard className="size-3.5" stroke={1.75} />

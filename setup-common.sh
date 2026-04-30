@@ -218,6 +218,7 @@ if settings_file.exists():
 data.setdefault("autoDualScreen", True)
 data.setdefault("syncBrightness", True)
 data.setdefault("theme", "system")
+data.setdefault("invertSensorRotation", False)
 
 data["defaultBacklight"] = default_backlight
 data["defaultScale"] = default_scale

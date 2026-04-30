@@ -21,6 +21,7 @@ export const DEFAULT_DUO_SETTINGS: DuoSettings = {
   theme: "system",
   usbMediaRemapEnabled: true,
   startOnBootMinimized: false,
+  invertSensorRotation: false,
   setupCompleted: false,
   touchscreenDisabled: [],
   savedDisplayLayout: null,
@@ -30,6 +31,7 @@ export function withDuoSettingsDefaults(settings: Partial<DuoSettings>): DuoSett
   return {
     ...DEFAULT_DUO_SETTINGS,
     ...settings,
+    invertSensorRotation: settings.invertSensorRotation ?? DEFAULT_DUO_SETTINGS.invertSensorRotation,
     touchscreenDisabled: settings.touchscreenDisabled ?? DEFAULT_DUO_SETTINGS.touchscreenDisabled,
     savedDisplayLayout: settings.savedDisplayLayout ?? DEFAULT_DUO_SETTINGS.savedDisplayLayout,
   };
