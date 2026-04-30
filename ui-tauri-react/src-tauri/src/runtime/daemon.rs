@@ -113,20 +113,8 @@ fn restart_owned_services() -> Result<(), String> {
 }
 
 fn restart_target_user_unit(unit: &str) -> Result<(), String> {
-    let uid = target_uid();
-    let gid = target_gid();
-    let mut command = Command::new("systemctl");
-    command
-        .args(["--user", "restart", unit])
-        .env("XDG_RUNTIME_DIR", format!("/run/user/{uid}"))
-        .env(
-            "DBUS_SESSION_BUS_ADDRESS",
-            format!("unix:path=/run/user/{uid}/bus"),
-        );
-
-    if Uid::current().is_root() {
-        command.uid(uid).gid(gid);
-    }
+    let mut command = target_user_systemctl_command();
+    command.args(["--user", "restart", unit]);
 
     let output = command
         .output()
@@ -140,6 +128,40 @@ fn restart_target_user_unit(unit: &str) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ))
     }
+}
+
+fn target_user_systemctl_command() -> Command {
+    let uid = target_uid();
+    let gid = target_gid();
+    let mut command = Command::new("systemctl");
+    command
+        .env("XDG_RUNTIME_DIR", format!("/run/user/{uid}"))
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!("unix:path=/run/user/{uid}/bus"),
+        );
+
+    if Uid::current().is_root() {
+        command.uid(uid).gid(gid);
+    }
+
+    command
+}
+
+fn queue_target_user_unit_restart(unit: &str) -> Result<(), String> {
+    let mut command = target_user_systemctl_command();
+    command
+        .args(["--user", "restart", unit])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    tokio::task::spawn_blocking(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        command.status()
+    });
+
+    Ok(())
 }
 
 fn queue_system_unit_restart(unit: &str) -> Result<(), String> {
@@ -665,7 +687,7 @@ pub(crate) async fn forward_session_command(
 pub(crate) async fn session_display_layout(
     state: Arc<RwLock<RuntimeState>>,
 ) -> Option<DisplayLayout> {
-    match request_session(state, SessionCommand::GetDisplayLayout, true).await {
+    match request_session(state, SessionCommand::GetDisplayLayout, false).await {
         Ok(SessionResponse::DisplayLayout { layout }) => Some(layout),
         _ => None,
     }
@@ -843,6 +865,20 @@ async fn mark_session_agent_disconnected(state: &Arc<RwLock<RuntimeState>>, reas
         "rust-daemon: session agent disconnected: {}",
         reason
     ));
+    drop(guard);
+
+    if was_connected {
+        if let Err(err) = queue_target_user_unit_restart("zenbook-duo-session-agent.service") {
+            log::warn!("failed to queue session agent restart: {err}");
+            let _ = logger::append_line(format!(
+                "rust-daemon: failed to queue session agent restart: {}",
+                err
+            ));
+        } else {
+            let _ = logger::append_line("rust-daemon: queued session agent restart");
+        }
+    }
+
     if let Err(err) = send_runtime_notification_direct(
         "Zenbook Duo Runtime Error",
         &format!("Session agent disconnected: {reason}"),
@@ -1180,6 +1216,84 @@ mod tests {
         .expect("external display should cause a safe no-op");
 
         server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn passive_display_layout_timeout_keeps_session_agent_connected() {
+        let socket_path = unique_test_socket_path("passive-layout-timeout");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (_reader, _writer) = stream.into_split();
+            tokio::time::sleep(Duration::from_secs(4)).await;
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.service_active = true;
+        }
+
+        let layout = timeout(
+            Duration::from_secs(4),
+            session_display_layout(state.clone()),
+        )
+        .await
+        .expect("passive layout probe should return after session timeout");
+
+        assert!(layout.is_none());
+        let guard = state.read().await;
+        assert!(guard.session_agent.connected);
+        assert!(guard.status.service_active);
+        drop(guard);
+
+        server.abort();
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn active_session_command_timeout_marks_session_agent_disconnected() {
+        let socket_path = unique_test_socket_path("active-command-timeout");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (_reader, _writer) = stream.into_split();
+            tokio::time::sleep(Duration::from_secs(4)).await;
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.service_active = true;
+        }
+
+        let result = timeout(
+            Duration::from_secs(4),
+            forward_session_command(
+                &state,
+                SessionCommand::SetDockMode {
+                    attached: true,
+                    scale: 1.66,
+                },
+            ),
+        )
+        .await
+        .expect("active session command should return after session timeout");
+
+        assert_eq!(result, Err("Timed out waiting for session response".into()));
+        let guard = state.read().await;
+        assert!(!guard.session_agent.connected);
+        assert!(!guard.status.service_active);
+        drop(guard);
+
+        server.abort();
         let _ = fs::remove_file(&socket_path);
     }
 
