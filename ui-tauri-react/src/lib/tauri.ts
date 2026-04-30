@@ -15,6 +15,7 @@ import type {
   HidrawCapture,
   UsbMediaRemapStatus,
   TouchscreenDevice,
+  VersionInfo,
 } from "@/types/duo";
 
 // Status
@@ -35,6 +36,7 @@ export const setOrientation = (orientation: Orientation) =>
 
 // Service
 export const isServiceActive = () => invoke<boolean>("is_service_active");
+export const getVersionInfo = () => invoke<VersionInfo>("get_version_info");
 export const restartService = () => invoke<void>("restart_service");
 
 // Settings

@@ -11,9 +11,11 @@ import type {
   DuoSettings,
   Profile,
   HardwareEvent,
+  VersionInfo,
 } from "@/types/duo";
 import { DEFAULT_DUO_SETTINGS, DEFAULT_DUO_STATUS, withDuoSettingsDefaults } from "@/lib/defaults";
 import * as api from "@/lib/tauri";
+import { APP_VERSION } from "@/lib/version";
 
 export interface AppState {
   status: DuoStatus;
@@ -21,6 +23,7 @@ export interface AppState {
   profiles: Profile[];
   events: HardwareEvent[];
   logs: string[];
+  versionInfo: VersionInfo;
   loading: boolean;
 }
 
@@ -30,6 +33,7 @@ type Action =
   | { type: "SET_PROFILES"; payload: Profile[] }
   | { type: "SET_EVENTS"; payload: HardwareEvent[] }
   | { type: "SET_LOGS"; payload: string[] }
+  | { type: "SET_VERSION_INFO"; payload: VersionInfo }
   | { type: "SET_LOADING"; payload: boolean };
 
 const initialState: AppState = {
@@ -38,6 +42,13 @@ const initialState: AppState = {
   profiles: [],
   events: [],
   logs: [],
+  versionInfo: {
+    appVersion: APP_VERSION,
+    appProtocolVersion: 0,
+    daemonVersion: null,
+    daemonProtocolVersion: null,
+    serviceAvailable: false,
+  },
   loading: true,
 };
 
@@ -53,6 +64,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, events: action.payload };
     case "SET_LOGS":
       return { ...state, logs: action.payload };
+    case "SET_VERSION_INFO":
+      return { ...state, versionInfo: action.payload };
     case "SET_LOADING":
       return { ...state, loading: action.payload };
   }
@@ -135,6 +148,15 @@ export async function refreshEvents(dispatch: Dispatch<Action>) {
   }
 }
 
+export async function refreshVersionInfo(dispatch: Dispatch<Action>) {
+  try {
+    const versionInfo = await api.getVersionInfo();
+    dispatch({ type: "SET_VERSION_INFO", payload: versionInfo });
+  } catch (e) {
+    console.error("Failed to get version info:", e);
+  }
+}
+
 export function useStoreInit() {
   const dispatch = useDispatch();
 
@@ -150,11 +172,15 @@ export function useStoreInit() {
         refreshProfiles(dispatch),
         refreshLogs(dispatch),
         refreshEvents(dispatch),
+        refreshVersionInfo(dispatch),
       ]);
 
       dispatch({ type: "SET_LOADING", payload: false });
 
-      unlisteners.push(api.onStatusChanged(() => refreshStatus(dispatch)));
+      unlisteners.push(api.onStatusChanged(() => {
+        refreshStatus(dispatch);
+        refreshVersionInfo(dispatch);
+      }));
       unlisteners.push(api.onLogUpdated(() => refreshLogs(dispatch)));
       unlisteners.push(api.onHardwareEvent(() => refreshEvents(dispatch)));
     }

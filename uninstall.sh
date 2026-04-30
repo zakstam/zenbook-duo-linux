@@ -62,13 +62,19 @@ fi
 
 function run_user_systemctl() {
     if [ "${TARGET_USER}" = "${USER}" ] && [ "${EUID}" != "0" ]; then
-        systemctl --user "$@"
+        XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+            systemctl --user "$@"
         return
     fi
     sudo -u "${TARGET_USER}" \
         XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
         systemctl --user "$@"
+}
+
+function run_user_systemctl_best_effort() {
+    run_user_systemctl "$@" >/dev/null 2>&1 || true
 }
 
 # ============================================================================
@@ -86,15 +92,15 @@ pkill -f zenbook-duo-control 2>/dev/null || true
 sudo systemctl stop zenbook-duo.service 2>/dev/null
 sudo systemctl stop zenbook-duo-rust-daemon.service 2>/dev/null
 sudo systemctl stop zenbook-duo-rust-lifecycle.service 2>/dev/null
-run_user_systemctl stop zenbook-duo-user.service 2>/dev/null
-run_user_systemctl stop zenbook-duo-session-agent.service 2>/dev/null
+run_user_systemctl_best_effort stop zenbook-duo-user.service
+run_user_systemctl_best_effort stop zenbook-duo-session-agent.service
 
 # Disable services
 sudo systemctl disable zenbook-duo.service 2>/dev/null
 sudo systemctl disable zenbook-duo-rust-daemon.service 2>/dev/null
 sudo systemctl disable zenbook-duo-rust-lifecycle.service 2>/dev/null
-run_user_systemctl disable zenbook-duo-user.service 2>/dev/null
-run_user_systemctl disable zenbook-duo-session-agent.service 2>/dev/null
+run_user_systemctl_best_effort disable zenbook-duo-user.service
+run_user_systemctl_best_effort disable zenbook-duo-session-agent.service
 sudo systemctl --global disable zenbook-duo-user.service 2>/dev/null
 
 # Remove service files and sleep hook
@@ -108,7 +114,7 @@ sudo rm -f /usr/lib/systemd/system-sleep/zenbook-duo-rust-lifecycle
 
 # Reload systemd
 sudo systemctl daemon-reload
-run_user_systemctl daemon-reload
+run_user_systemctl_best_effort daemon-reload
 
 # ============================================================================
 # UDEV & HWDB RULES

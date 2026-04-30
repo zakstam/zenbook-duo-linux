@@ -11,3 +11,4 @@ pub mod runtime_dir;
 pub mod session;
 pub mod session_agent;
 pub mod state;
+pub mod version;

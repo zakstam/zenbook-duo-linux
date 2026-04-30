@@ -1,7 +1,8 @@
 use std::process::Command;
 
 use crate::hardware::sysfs;
-use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse, PROTOCOL_VERSION};
+use crate::models::VersionInfo;
 use crate::runtime::client;
 
 const LEGACY_DAEMON_RESTART_ERROR: &str = "Service restart not yet owned by rust-daemon";
@@ -12,6 +13,36 @@ pub fn is_service_active() -> bool {
         Ok(DaemonResponse::Status { status }) => status.service_active,
         _ => sysfs::is_service_active(),
     }
+}
+
+#[tauri::command]
+pub fn get_version_info() -> VersionInfo {
+    let app_version = env!("CARGO_PKG_VERSION");
+
+    match client::request(DaemonRequest::GetVersion) {
+        Ok(DaemonResponse::Version { version }) => {
+            VersionInfo::from_daemon(app_version, PROTOCOL_VERSION, version)
+        }
+        Ok(DaemonResponse::Error { message }) => parse_daemon_protocol_version(&message)
+            .map(|daemon_protocol_version| {
+                VersionInfo::protocol_mismatch(
+                    app_version,
+                    PROTOCOL_VERSION,
+                    daemon_protocol_version,
+                )
+            })
+            .unwrap_or_else(|| VersionInfo::unavailable(app_version, PROTOCOL_VERSION)),
+        _ => VersionInfo::unavailable(app_version, PROTOCOL_VERSION),
+    }
+}
+
+fn parse_daemon_protocol_version(message: &str) -> Option<u32> {
+    message
+        .strip_prefix("Protocol mismatch: expected ")?
+        .split_once(',')?
+        .0
+        .parse()
+        .ok()
 }
 
 #[tauri::command]

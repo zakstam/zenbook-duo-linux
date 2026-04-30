@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::commands::usb_media_remap::UsbMediaRemapStatus;
-use crate::models::{DisplayLayout, DuoSettings, DuoStatus, HardwareEvent, Orientation};
+use crate::models::{
+    DaemonVersionInfo, DisplayLayout, DuoSettings, DuoStatus, HardwareEvent, Orientation,
+};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -29,6 +31,7 @@ pub enum DaemonRequest {
         phase: LifecyclePhase,
     },
     GetStatus,
+    GetVersion,
     GetDisplayLayout,
     GetSettings,
     SaveSettings {
@@ -74,6 +77,9 @@ pub enum DaemonResponse {
     Ack,
     Status {
         status: DuoStatus,
+    },
+    Version {
+        version: DaemonVersionInfo,
     },
     DisplayLayout {
         layout: DisplayLayout,

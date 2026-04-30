@@ -67,6 +67,7 @@ pub fn run() {
             commands::display::apply_display_layout,
             commands::display::set_orientation,
             commands::service::is_service_active,
+            commands::service::get_version_info,
             commands::service::restart_service,
             commands::settings::load_settings,
             commands::settings::save_settings,

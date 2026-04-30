@@ -18,6 +18,7 @@ use crate::ipc::protocol::{
     DaemonRequest, DaemonResponse, Envelope, LifecyclePhase, SessionCommand, SessionResponse,
     PROTOCOL_VERSION,
 };
+use crate::models::DaemonVersionInfo;
 use crate::runtime::{logger, paths, state::RuntimeState};
 use crate::{
     commands, hardware,
@@ -221,6 +222,12 @@ async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> 
                 status.service_active = guard.session_agent.connected;
                 DaemonResponse::Status { status }
             }
+            DaemonRequest::GetVersion => DaemonResponse::Version {
+                version: DaemonVersionInfo {
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    protocol_version: PROTOCOL_VERSION,
+                },
+            },
             DaemonRequest::GetDisplayLayout => {
                 match request_session(state.clone(), SessionCommand::GetDisplayLayout, true).await {
                     Ok(SessionResponse::DisplayLayout { layout }) => {

@@ -37,24 +37,100 @@ if [ -z "${TARGET_HOME}" ]; then
   exit 1
 fi
 
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+emit_systemctl_failure() {
+  local manager="$1"
+  local command_display="$2"
+  local output="${3:-}"
+
+  echo "ERROR: ${manager} systemd manager is unavailable; cannot run: ${command_display}" >&2
+  if [ -n "${output}" ]; then
+    printf '%s\n' "${output}" | sed 's/^/  systemctl: /' >&2
+  fi
+}
+
+run_system_systemctl() {
+  local output=""
+  if ! output="$(sudo systemctl --system "$@" 2>&1)"; then
+    emit_systemctl_failure "The system" "sudo systemctl --system $*" "${output}"
+    echo "Make sure this machine is booted with systemd and that 'sudo systemctl status' works, then rerun ./install.sh." >&2
+    exit 1
+  fi
+  if [ -n "${output}" ]; then
+    printf '%s\n' "${output}"
+  fi
+}
+
 run_user_systemctl() {
+  local runtime_dir="/run/user/${TARGET_UID}"
+  local bus_address="unix:path=${runtime_dir}/bus"
+
   if [ "${TARGET_USER}" = "${USER:-}" ] && [ "${EUID}" != "0" ]; then
-    systemctl --user "$@"
+    XDG_RUNTIME_DIR="${runtime_dir}" \
+      DBUS_SESSION_BUS_ADDRESS="${bus_address}" \
+      systemctl --user "$@"
     return
   fi
 
   sudo -u "${TARGET_USER}" \
-    XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
-    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+    XDG_RUNTIME_DIR="${runtime_dir}" \
+    DBUS_SESSION_BUS_ADDRESS="${bus_address}" \
     systemctl --user "$@"
 }
 
+run_user_systemctl_checked() {
+  local output=""
+  if ! output="$(run_user_systemctl "$@" 2>&1)"; then
+    emit_systemctl_failure "The ${TARGET_USER} user" "systemctl --user $*" "${output}"
+    echo "Run the installer from an active desktop login where 'systemctl --user status' works, then rerun ./install.sh." >&2
+    exit 1
+  fi
+  if [ -n "${output}" ]; then
+    printf '%s\n' "${output}"
+  fi
+}
+
+ensure_system_manager_available() {
+  local output=""
+  if ! output="$(sudo systemctl --system show --property=Version --value 2>&1)"; then
+    emit_systemctl_failure "The system" "sudo systemctl --system show --property=Version --value" "${output}"
+    echo "Make sure this machine is booted with systemd and that 'sudo systemctl status' works, then rerun ./install.sh." >&2
+    exit 1
+  fi
+}
+
+ensure_user_manager_available() {
+  local runtime_dir="/run/user/${TARGET_UID}"
+  local bus_path="${runtime_dir}/bus"
+  local output=""
+
+  if [ ! -d "${runtime_dir}" ]; then
+    die "The systemd user runtime directory is missing for ${TARGET_USER}: ${runtime_dir}. Log in as ${TARGET_USER} and rerun ./install.sh from that desktop session."
+  fi
+
+  if [ ! -S "${bus_path}" ]; then
+    die "The systemd user bus is missing for ${TARGET_USER}: ${bus_path}. Log in as ${TARGET_USER} and rerun ./install.sh from that desktop session."
+  fi
+
+  if ! output="$(run_user_systemctl show-environment 2>&1)"; then
+    emit_systemctl_failure "The ${TARGET_USER} user" "systemctl --user show-environment" "${output}"
+    echo "Run the installer from an active desktop login where 'systemctl --user status' works, then rerun ./install.sh." >&2
+    exit 1
+  fi
+}
+
 import_user_environment() {
-  run_user_systemctl import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE || true
+  run_user_systemctl import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
 
   if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     if [ "${TARGET_USER}" = "${USER:-}" ] && [ "${EUID}" != "0" ]; then
-      dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
+      XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+        dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
     else
       sudo -u "${TARGET_USER}" \
         XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
@@ -72,6 +148,9 @@ need_cmd() {
 }
 
 need_cmd cargo
+need_cmd systemctl
+ensure_system_manager_available
+ensure_user_manager_available
 
 if [ ! -f "${TAURI_DIR}/Cargo.toml" ]; then
   echo "ERROR: Could not find Tauri crate at ${TAURI_DIR}" >&2
@@ -100,6 +179,15 @@ sudo install -m 0755 \
 sudo install -m 0755 \
   "${TAURI_DIR}/target/release/zenbook-duo-usb-remap-helper" \
   "${RUNTIME_INSTALL_DIR}/zenbook-duo-usb-remap-helper"
+
+echo "Installed Rust runtime versions:"
+for binary in \
+  zenbook-duo-daemon \
+  zenbook-duo-session-agent \
+  zenbook-duo-lifecycle \
+  zenbook-duo-usb-remap-helper; do
+  "${RUNTIME_INSTALL_DIR}/${binary}" --version || true
+done
 
 echo "Installing Rust runtime services..."
 cat <<EOF | sudo tee "/etc/systemd/system/${SYSTEM_SERVICE_NAME}" >/dev/null
@@ -168,17 +256,18 @@ sudo systemctl disable zenbook-duo.service 2>/dev/null || true
 sudo systemctl stop zenbook-duo.service 2>/dev/null || true
 sudo rm -f /usr/lib/systemd/system-sleep/duo
 
-sudo systemctl daemon-reload
-sudo systemctl enable "${SYSTEM_SERVICE_NAME}"
-sudo systemctl enable "${LIFECYCLE_SERVICE_NAME}"
-sudo systemctl restart "${SYSTEM_SERVICE_NAME}"
-sudo systemctl restart "${LIFECYCLE_SERVICE_NAME}"
+run_system_systemctl daemon-reload
+run_system_systemctl enable "${SYSTEM_SERVICE_NAME}"
+run_system_systemctl enable "${LIFECYCLE_SERVICE_NAME}"
+run_system_systemctl restart "${SYSTEM_SERVICE_NAME}"
+run_system_systemctl restart "${LIFECYCLE_SERVICE_NAME}"
 
-run_user_systemctl daemon-reload
+ensure_user_manager_available
+run_user_systemctl_checked daemon-reload
 import_user_environment
-run_user_systemctl disable zenbook-duo-user.service 2>/dev/null || true
-run_user_systemctl stop zenbook-duo-user.service 2>/dev/null || true
-run_user_systemctl enable "${USER_SERVICE_NAME}"
-run_user_systemctl restart "${USER_SERVICE_NAME}"
+run_user_systemctl disable zenbook-duo-user.service >/dev/null 2>&1 || true
+run_user_systemctl stop zenbook-duo-user.service >/dev/null 2>&1 || true
+run_user_systemctl_checked enable "${USER_SERVICE_NAME}"
+run_user_systemctl_checked restart "${USER_SERVICE_NAME}"
 
 echo "Rust runtime services installed."

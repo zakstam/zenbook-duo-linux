@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { formatVersion } from "@/lib/version";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -39,6 +40,16 @@ export default function Status() {
   } = useUsbMediaRemap();
 
   const keyboardConnected = store.status.connectionType !== "none";
+  const versionInfo = store.versionInfo;
+  const appVersion = formatVersion(versionInfo.appVersion);
+  const daemonVersion = versionInfo.daemonVersion
+    ? formatVersion(versionInfo.daemonVersion)
+    : "Unavailable";
+  const serviceVersionMatches = versionInfo.daemonVersion === versionInfo.appVersion;
+  const protocolMatches =
+    versionInfo.daemonProtocolVersion === versionInfo.appProtocolVersion;
+  const versionHealthy =
+    versionInfo.serviceAvailable && serviceVersionMatches && protocolMatches;
 
   const brightnessPercent = useMemo(
     () =>
@@ -249,6 +260,41 @@ export default function Status() {
                 )}>
                   {store.status.serviceActive ? "Active" : "Inactive"}
                 </span>
+              </div>
+            </StatusRow>
+            <StatusRow label="App version">
+              <span className="font-mono text-xs text-muted-foreground">
+                {appVersion}
+              </span>
+            </StatusRow>
+            <StatusRow label="Service version">
+              <div className="flex items-center gap-2">
+                <span className={cn(
+                  "font-mono text-xs",
+                  versionInfo.serviceAvailable ? "text-muted-foreground" : "text-destructive"
+                )}>
+                  {daemonVersion}
+                </span>
+                {versionInfo.serviceAvailable && !serviceVersionMatches && (
+                  <Badge className="border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200">
+                    Mismatch
+                  </Badge>
+                )}
+              </div>
+            </StatusRow>
+            <StatusRow label="IPC protocol">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs text-muted-foreground">
+                  App {versionInfo.appProtocolVersion}
+                  {versionInfo.daemonProtocolVersion !== null &&
+                    versionInfo.daemonProtocolVersion !== undefined &&
+                    ` / Service ${versionInfo.daemonProtocolVersion}`}
+                </span>
+                {!versionHealthy && versionInfo.serviceAvailable && !protocolMatches && (
+                  <Badge className="border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200">
+                    Mismatch
+                  </Badge>
+                )}
               </div>
             </StatusRow>
           </div>

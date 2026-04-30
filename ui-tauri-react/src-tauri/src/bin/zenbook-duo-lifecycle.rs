@@ -3,6 +3,7 @@ use zenbook_duo_control_lib::ipc::protocol::{DaemonRequest, DaemonResponse, Life
 use zenbook_duo_control_lib::runtime::client;
 
 fn main() {
+    zenbook_duo_control_lib::runtime::version::print_and_exit_if_requested("zenbook-duo-lifecycle");
     env_logger::init();
 
     let Some(raw_phase) = std::env::args().nth(1) else {

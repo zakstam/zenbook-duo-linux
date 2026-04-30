@@ -72,6 +72,14 @@ export interface UsbMediaRemapStatus {
   paused: boolean;
 }
 
+export interface VersionInfo {
+  appVersion: string;
+  appProtocolVersion: number;
+  daemonVersion?: string | null;
+  daemonProtocolVersion?: number | null;
+  serviceAvailable: boolean;
+}
+
 export interface Profile {
   id: string;
   name: string;

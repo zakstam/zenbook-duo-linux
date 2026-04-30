@@ -152,12 +152,66 @@ if ! grep -q 'import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT
   exit 1
 fi
 
+if ! grep -q 'ensure_system_manager_available' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: runtime installer should preflight the system service manager before building" >&2
+  exit 1
+fi
+
+if ! grep -q 'run_system_systemctl daemon-reload' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: runtime installer should wrap required system daemon reloads with clear errors" >&2
+  exit 1
+fi
+
+if ! grep -q 'ensure_user_manager_available' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: runtime installer should preflight the target user service manager" >&2
+  exit 1
+fi
+
+if ! grep -q 'run_user_systemctl_checked daemon-reload' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: runtime installer should hard-fail required user daemon reloads with clear errors" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'local bus_address="unix:path=${runtime_dir}/bus"' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: runtime installer should avoid stale user bus environment when calling systemctl --user" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'DBUS_SESSION_BUS_ADDRESS="${bus_address}"' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: runtime installer should pass the stable user bus to systemctl --user" >&2
+  exit 1
+fi
+
 for service_name in \
   'SYSTEM_SERVICE_NAME="zenbook-duo-rust-daemon.service"' \
   'LIFECYCLE_SERVICE_NAME="zenbook-duo-rust-lifecycle.service"' \
   'USER_SERVICE_NAME="zenbook-duo-session-agent.service"'; do
   if ! grep -q "${service_name}" "${ROOT_DIR}/install-rust-runtime.sh"; then
     echo "FAIL: runtime installer should keep service name ${service_name}" >&2
+    exit 1
+  fi
+done
+
+if ! grep -q 'Installed Rust runtime versions:' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: runtime installer should print installed runtime versions" >&2
+  exit 1
+fi
+
+if ! grep -Fq '"${RUNTIME_INSTALL_DIR}/${binary}" --version' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: runtime installer should call installed binaries with --version" >&2
+  exit 1
+fi
+
+for binary_hook in \
+  'src/bin/zenbook-duo-daemon.rs:print_and_exit_if_requested("zenbook-duo-daemon")' \
+  'src/bin/zenbook-duo-session-agent.rs:print_and_exit_if_requested("zenbook-duo-session-agent")' \
+  'src/bin/zenbook-duo-lifecycle.rs:print_and_exit_if_requested("zenbook-duo-lifecycle")' \
+  'src/bin/zenbook-duo-usb-remap-helper.rs:print_and_exit_if_requested("zenbook-duo-usb-remap-helper")' \
+  'src/bin/usb-media-remap.rs:print_and_exit_if_requested("usb-media-remap")'; do
+  binary_path="${binary_hook%%:*}"
+  hook="${binary_hook#*:}"
+  if ! grep -Fq "${hook}" "${ROOT_DIR}/ui-tauri-react/src-tauri/${binary_path}"; then
+    echo "FAIL: runtime binary ${binary_path} should support --version" >&2
     exit 1
   fi
 done
@@ -169,6 +223,16 @@ fi
 
 if ! grep -q 'ln -sfn "${RUNTIME_INSTALL_DIR}/zenbook-duo-lifecycle" "${SYSTEM_SLEEP_HOOK_PATH}"' "${ROOT_DIR}/install-rust-runtime.sh"; then
   echo "FAIL: lifecycle binary should be the single system-sleep entrypoint" >&2
+  exit 1
+fi
+
+if ! grep -q 'run_user_systemctl_best_effort daemon-reload' "${ROOT_DIR}/uninstall.sh"; then
+  echo "FAIL: uninstaller should not fail cleanup when the user manager daemon reload is unavailable" >&2
+  exit 1
+fi
+
+if ! grep -q 'run_user_systemctl_best_effort stop zenbook-duo-session-agent.service' "${ROOT_DIR}/uninstall.sh"; then
+  echo "FAIL: uninstaller should treat user service cleanup as best-effort" >&2
   exit 1
 fi
 

@@ -1,7 +1,8 @@
 import type { Page } from "@/App";
-import { useEffect, useState } from "react";
+import { useStore } from "@/lib/store";
 import ThemeToggle from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
+import { APP_VERSION, formatVersion } from "@/lib/version";
 import {
   IconCircleDot,
   IconAdjustments,
@@ -31,23 +32,11 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
-  const [version, setVersion] = useState<string>("v0.3.0");
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { getVersion } = await import("@tauri-apps/api/app");
-        const v = await getVersion();
-        if (!cancelled && v) setVersion(`v${v}`);
-      } catch {
-        // Non-Tauri context or restricted API; keep fallback.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { versionInfo } = useStore();
+  const appVersion = formatVersion(versionInfo.appVersion || APP_VERSION);
+  const serviceVersion = versionInfo.daemonVersion
+    ? formatVersion(versionInfo.daemonVersion)
+    : "Service unavailable";
 
   return (
     <nav className="flex h-full w-[220px] shrink-0 flex-col bg-sidebar">
@@ -112,10 +101,9 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       <div className="px-3 py-3">
         <ThemeToggle />
       </div>
-      <div className="px-5 pb-4">
-        <span className="font-mono text-[10px] text-muted-foreground/50">
-          {version}
-        </span>
+      <div className="space-y-1 px-5 pb-4 font-mono text-[10px] text-muted-foreground/50">
+        <div>{appVersion}</div>
+        <div>{serviceVersion}</div>
       </div>
     </nav>
   );
