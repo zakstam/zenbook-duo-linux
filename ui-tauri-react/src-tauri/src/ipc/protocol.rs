@@ -56,6 +56,9 @@ pub enum DaemonRequest {
         backend: SessionBackend,
         socket_path: String,
     },
+    AppendLog {
+        line: String,
+    },
     TailLogs {
         lines: usize,
     },

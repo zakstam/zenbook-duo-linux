@@ -341,6 +341,10 @@ async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> 
                     Err(message) => DaemonResponse::Error { message },
                 }
             }
+            DaemonRequest::AppendLog { line } => match logger::append_line(line) {
+                Ok(()) => DaemonResponse::Ack,
+                Err(message) => DaemonResponse::Error { message },
+            },
             DaemonRequest::TailLogs { lines } => DaemonResponse::Logs {
                 lines: hardware::sysfs::read_log_lines(lines),
             },

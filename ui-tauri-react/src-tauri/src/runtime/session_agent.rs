@@ -16,7 +16,7 @@ use crate::ipc::protocol::{
     DaemonRequest, DaemonResponse, Envelope, SessionBackend, SessionCommand, SessionResponse,
 };
 use crate::models::Orientation;
-use crate::runtime::{compositor, paths, session, state::RuntimeState};
+use crate::runtime::{client, compositor, paths, session, state::RuntimeState};
 
 pub async fn run() -> Result<(), String> {
     ensure_user_runtime_dir()?;
@@ -24,16 +24,7 @@ pub async fn run() -> Result<(), String> {
 
     let backend = wait_for_ready_backend().await;
     register_with_daemon(backend).await?;
-    tokio::spawn(async {
-        if let Err(err) = watch_rotation().await {
-            log::warn!("session-agent rotation watcher failed: {err}");
-            let _ = send_runtime_notification(
-                "Zenbook Duo Runtime Error",
-                &format!("Rotation watcher failed: {err}"),
-                true,
-            );
-        }
-    });
+    tokio::spawn(supervise_rotation_watcher());
     tokio::spawn(async {
         if let Err(err) = watch_brightness_sync().await {
             log::warn!("session-agent brightness watcher failed: {err}");
@@ -753,13 +744,72 @@ fn step_brightness(direction: &str) -> Result<(), String> {
     }
 }
 
+fn runtime_log_info(message: impl AsRef<str>) {
+    let message = message.as_ref();
+    log::info!("{message}");
+    append_runtime_log(format!("session-agent: {message}"));
+}
+
+fn runtime_log_warn(message: impl AsRef<str>) {
+    let message = message.as_ref();
+    log::warn!("{message}");
+    append_runtime_log(format!("session-agent: warn: {message}"));
+}
+
+fn append_runtime_log(line: String) {
+    if let Err(err) = client::request(DaemonRequest::AppendLog { line }) {
+        log::warn!("failed to append session-agent log to runtime log: {err}");
+    }
+}
+
+async fn supervise_rotation_watcher() {
+    let mut notified_failure = false;
+
+    loop {
+        match watch_rotation().await {
+            Ok(()) => runtime_log_warn(format!(
+                "rotation watcher exited cleanly; restarting in {}s",
+                rotation_watcher_restart_delay().as_secs()
+            )),
+            Err(err) => {
+                runtime_log_warn(format!(
+                    "rotation watcher failed: {err}; restarting in {}s",
+                    rotation_watcher_restart_delay().as_secs()
+                ));
+                if !notified_failure {
+                    let _ = send_runtime_notification(
+                        "Zenbook Duo Runtime Error",
+                        &format!("Rotation watcher failed and will restart: {err}"),
+                        true,
+                    );
+                    notified_failure = true;
+                }
+            }
+        }
+
+        tokio::time::sleep(rotation_watcher_restart_delay()).await;
+    }
+}
+
+fn rotation_watcher_restart_delay() -> Duration {
+    Duration::from_secs(2)
+}
+
 async fn watch_rotation() -> Result<(), String> {
     let mut child = TokioCommand::new("monitor-sensor")
         .arg("--accel")
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to start monitor-sensor: {e}"))?;
+
+    runtime_log_info("rotation watcher started monitor-sensor --accel");
+
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "monitor-sensor stderr unavailable".to_string())?;
+    let stderr_task = tokio::spawn(log_monitor_sensor_stderr(stderr));
 
     let stdout = child
         .stdout
@@ -772,9 +822,28 @@ async fn watch_rotation() -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed reading monitor-sensor output: {e}"))?
     {
-        if let Some(orientation) = parse_rotation_line(&line) {
-            if let Err(err) = crate::hardware::display_config::set_orientation(&orientation) {
-                log::warn!("failed to apply accelerometer orientation: {err}");
+        if let Some(sensor_orientation) = sensor_orientation_value(&line) {
+            match display_orientation_from_sensor_value(sensor_orientation) {
+                Some(orientation) => {
+                    runtime_log_info(format!(
+                        "monitor-sensor orientation changed: sensor={sensor_orientation} mapped_display={orientation:?}"
+                    ));
+                    if let Err(err) = crate::hardware::display_config::set_orientation(&orientation)
+                    {
+                        runtime_log_warn(format!(
+                            "failed to apply accelerometer orientation: sensor={sensor_orientation} mapped_display={orientation:?}: {err}"
+                        ));
+                    } else {
+                        runtime_log_info(format!(
+                            "applied accelerometer orientation: sensor={sensor_orientation} mapped_display={orientation:?}"
+                        ));
+                    }
+                }
+                None => {
+                    runtime_log_warn(format!(
+                        "monitor-sensor reported unsupported accelerometer orientation: {sensor_orientation}"
+                    ));
+                }
             }
         }
     }
@@ -783,6 +852,10 @@ async fn watch_rotation() -> Result<(), String> {
         .wait()
         .await
         .map_err(|e| format!("Failed waiting for monitor-sensor: {e}"))?;
+    if let Err(err) = stderr_task.await {
+        runtime_log_warn(format!("monitor-sensor stderr logger task failed: {err}"));
+    }
+
     if status.success() {
         Ok(())
     } else {
@@ -790,11 +863,36 @@ async fn watch_rotation() -> Result<(), String> {
     }
 }
 
+async fn log_monitor_sensor_stderr(stderr: tokio::process::ChildStderr) {
+    let mut lines = BufReader::new(stderr).lines();
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                let line = line.trim();
+                if !line.is_empty() {
+                    runtime_log_warn(format!("monitor-sensor stderr: {line}"));
+                }
+            }
+            Ok(None) => break,
+            Err(err) => {
+                runtime_log_warn(format!("failed reading monitor-sensor stderr: {err}"));
+                break;
+            }
+        }
+    }
+}
+
 fn parse_rotation_line(line: &str) -> Option<Orientation> {
-    let value = line
-        .split("Accelerometer orientation changed:")
-        .nth(1)?
-        .trim();
+    sensor_orientation_value(line).and_then(display_orientation_from_sensor_value)
+}
+
+fn sensor_orientation_value(line: &str) -> Option<&str> {
+    line.split("Accelerometer orientation changed:")
+        .nth(1)
+        .map(str::trim)
+}
+
+fn display_orientation_from_sensor_value(value: &str) -> Option<Orientation> {
     match value {
         "left-up" => Some(Orientation::Left),
         "right-up" => Some(Orientation::Right),
@@ -833,6 +931,33 @@ mod tests {
         assert_eq!(
             dock_mode_notification_message(true),
             "Keyboard attached: bottom screen disabled"
+        );
+    }
+
+    #[test]
+    fn rotation_watcher_restart_delay_is_short_and_nonzero() {
+        let delay = rotation_watcher_restart_delay();
+        assert!(delay >= Duration::from_secs(1));
+        assert!(delay <= Duration::from_secs(5));
+    }
+
+    #[test]
+    fn parses_sensor_edge_orientation_as_display_transform() {
+        assert_eq!(
+            parse_rotation_line("    Accelerometer orientation changed: left-up"),
+            Some(Orientation::Left)
+        );
+        assert_eq!(
+            parse_rotation_line("    Accelerometer orientation changed: right-up"),
+            Some(Orientation::Right)
+        );
+        assert_eq!(
+            parse_rotation_line("    Accelerometer orientation changed: bottom-up"),
+            Some(Orientation::Inverted)
+        );
+        assert_eq!(
+            parse_rotation_line("    Accelerometer orientation changed: normal"),
+            Some(Orientation::Normal)
         );
     }
 
