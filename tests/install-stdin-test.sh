@@ -132,10 +132,35 @@ if ! grep -q 'After=graphical-session.target' "${ROOT_DIR}/install-rust-runtime.
   exit 1
 fi
 
+if ! grep -q 'StartLimitIntervalSec=0' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: user service should keep retrying while the graphical session environment is not ready" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'ExecStartPre=/bin/sh -c '\''test -n "\${DISPLAY:-}\${WAYLAND_DISPLAY:-}\${NIRI_SOCKET:-}"'\''' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: user service should wait for graphical session variables before starting" >&2
+  exit 1
+fi
+
+if ! grep -q 'RestartSec=2' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: user service should retry startup at a bounded cadence" >&2
+  exit 1
+fi
+
 if ! grep -q 'import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE' "${ROOT_DIR}/install-rust-runtime.sh"; then
   echo "FAIL: installer should import graphical session environment for the user manager" >&2
   exit 1
 fi
+
+for service_name in \
+  'SYSTEM_SERVICE_NAME="zenbook-duo-rust-daemon.service"' \
+  'LIFECYCLE_SERVICE_NAME="zenbook-duo-rust-lifecycle.service"' \
+  'USER_SERVICE_NAME="zenbook-duo-session-agent.service"'; do
+  if ! grep -q "${service_name}" "${ROOT_DIR}/install-rust-runtime.sh"; then
+    echo "FAIL: runtime installer should keep service name ${service_name}" >&2
+    exit 1
+  fi
+done
 
 if ! grep -q 'SYSTEM_SLEEP_HOOK_PATH="/usr/lib/systemd/system-sleep/zenbook-duo-rust-lifecycle"' "${ROOT_DIR}/install-rust-runtime.sh"; then
   echo "FAIL: installer should install the Rust lifecycle sleep hook" >&2
@@ -157,10 +182,15 @@ if ! grep -q 'command -v pacman' "${ROOT_DIR}/setup-common.sh"; then
   exit 1
 fi
 
-if ! grep -q 'DUO_COMMON_DNF_PACKAGES=(usbutils iio-sensor-proxy systemd)' "${ROOT_DIR}/setup-common.sh"; then
-  echo "FAIL: shared setup helper should centralize common dnf dependencies" >&2
-  exit 1
-fi
+for common_packages in \
+  'DUO_COMMON_DNF_PACKAGES=(usbutils iio-sensor-proxy systemd)' \
+  'DUO_COMMON_APT_PACKAGES=(usbutils iio-sensor-proxy systemd)' \
+  'DUO_COMMON_PACMAN_PACKAGES=(usbutils iio-sensor-proxy systemd)'; do
+  if ! grep -q "${common_packages}" "${ROOT_DIR}/setup-common.sh"; then
+    echo "FAIL: shared setup helper should centralize common dependency list ${common_packages}" >&2
+    exit 1
+  fi
+done
 
 remap_default_output="$(bash --noprofile --norc -c '
   set -euo pipefail
@@ -189,7 +219,59 @@ if [[ "${remap_default_output}" != $'false\ntrue' ]]; then
   exit 1
 fi
 
+cat > "${temp_root}/settings-defaults-test.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$1"
+temp_home="$2/home"
+mkdir -p "${temp_home}"
+TARGET_HOME="${temp_home}"
+TARGET_USER="${USER:-$(id -un)}"
+DEFAULT_BACKLIGHT="${DUO_DEFAULT_BACKLIGHT}"
+DEFAULT_SCALE="${DUO_DEFAULT_SCALE}"
+USB_MEDIA_REMAP_ENABLED="${DUO_DEFAULT_USB_MEDIA_REMAP_ENABLED}"
+write_duo_settings_defaults
+python3 - "${temp_home}/.config/zenbook-duo/settings.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+settings = json.loads(Path(sys.argv[1]).read_text())
+expected = {
+    "defaultBacklight": 0,
+    "defaultScale": 1.66,
+    "usbMediaRemapEnabled": True,
+    "setupCompleted": True,
+    "autoDualScreen": True,
+    "syncBrightness": True,
+    "theme": "system",
+}
+for key, value in expected.items():
+    if settings.get(key) != value:
+        raise SystemExit(f"{key} expected {value!r}, got {settings.get(key)!r}")
+PY
+EOF
+
+bash "${temp_root}/settings-defaults-test.sh" "${ROOT_DIR}/setup-common.sh" "${temp_root}" || {
+  echo "FAIL: installer-written settings defaults should match the compatibility contract" >&2
+  exit 1
+}
+
+if ! grep -q 'pub const DEFAULT_BACKLIGHT_LEVEL: u8 = 0;' "${ROOT_DIR}/ui-tauri-react/src-tauri/src/models/settings.rs"; then
+  echo "FAIL: Rust settings default backlight should match installer defaults" >&2
+  exit 1
+fi
+
+if ! grep -q 'defaultBacklight: 0,' "${ROOT_DIR}/ui-tauri-react/src/lib/defaults.ts"; then
+  echo "FAIL: frontend settings default backlight should match installer defaults" >&2
+  exit 1
+fi
+
 for setup_script in setup-gnome.sh setup-kde.sh setup-niri.sh; do
+  expected_name="${setup_script}"
+  if ! grep -q "SETUP_SCRIPT_NAME=\"${expected_name}\"" "${ROOT_DIR}/${setup_script}"; then
+    echo "FAIL: ${setup_script} should declare its setup script name for shared errors" >&2
+    exit 1
+  fi
   if ! grep -q 'source "${DUO_SETUP_DIR}/setup-common.sh"' "${ROOT_DIR}/${setup_script}"; then
     echo "FAIL: ${setup_script} should delegate to setup-common.sh" >&2
     exit 1

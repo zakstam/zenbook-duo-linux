@@ -4,6 +4,8 @@ use crate::hardware::sysfs;
 use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::runtime::client;
 
+const LEGACY_DAEMON_RESTART_ERROR: &str = "Service restart not yet owned by rust-daemon";
+
 #[tauri::command]
 pub fn is_service_active() -> bool {
     match client::request(DaemonRequest::GetStatus) {
@@ -16,8 +18,11 @@ pub fn is_service_active() -> bool {
 pub fn restart_service() -> Result<(), String> {
     match client::request(DaemonRequest::RestartService) {
         Ok(DaemonResponse::Ack) => return Ok(()),
+        Ok(DaemonResponse::Error { message }) if message != LEGACY_DAEMON_RESTART_ERROR => {
+            return Err(message);
+        }
         Ok(DaemonResponse::Error { .. }) => {}
-        Ok(_) => {}
+        Ok(_) => return Err("Unexpected daemon response while restarting service".into()),
         Err(_) => {}
     }
 

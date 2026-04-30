@@ -12,6 +12,7 @@ import type {
   Profile,
   HardwareEvent,
 } from "@/types/duo";
+import { DEFAULT_DUO_SETTINGS, DEFAULT_DUO_STATUS, withDuoSettingsDefaults } from "@/lib/defaults";
 import * as api from "@/lib/tauri";
 
 export interface AppState {
@@ -31,34 +32,9 @@ type Action =
   | { type: "SET_LOGS"; payload: string[] }
   | { type: "SET_LOADING"; payload: boolean };
 
-const defaultStatus: DuoStatus = {
-  keyboardAttached: false,
-  connectionType: "none",
-  monitorCount: 0,
-  wifiEnabled: false,
-  bluetoothEnabled: false,
-  backlightLevel: 0,
-  displayBrightness: 0,
-  maxBrightness: 1,
-  serviceActive: false,
-  orientation: "normal",
-};
-
-const defaultSettings: DuoSettings = {
-  defaultBacklight: 3,
-  defaultScale: 1.66,
-  autoDualScreen: true,
-  syncBrightness: true,
-  theme: "system",
-  usbMediaRemapEnabled: true,
-  setupCompleted: false,
-  touchscreenDisabled: [],
-  savedDisplayLayout: null,
-};
-
 const initialState: AppState = {
-  status: defaultStatus,
-  settings: defaultSettings,
+  status: DEFAULT_DUO_STATUS,
+  settings: DEFAULT_DUO_SETTINGS,
   profiles: [],
   events: [],
   logs: [],
@@ -117,7 +93,7 @@ export async function refreshStatus(dispatch: Dispatch<Action>) {
 export async function refreshSettings(dispatch: Dispatch<Action>) {
   try {
     const settings = await api.loadSettings();
-    dispatch({ type: "SET_SETTINGS", payload: settings });
+    dispatch({ type: "SET_SETTINGS", payload: withDuoSettingsDefaults(settings) });
   } catch (e) {
     console.error("Failed to load settings:", e);
   }

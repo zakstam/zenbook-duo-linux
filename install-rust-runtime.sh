@@ -145,12 +145,14 @@ cat <<EOF | sudo tee "/etc/systemd/user/${USER_SERVICE_NAME}" >/dev/null
 Description=Zenbook Duo Session Agent
 ConditionUser=!gdm
 After=graphical-session.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+ExecStartPre=/bin/sh -c 'test -n "\${DISPLAY:-}\${WAYLAND_DISPLAY:-}\${NIRI_SOCKET:-}"'
 ExecStart=${RUNTIME_INSTALL_DIR}/zenbook-duo-session-agent
 Restart=on-failure
-RestartSec=1
+RestartSec=2
 TimeoutStopSec=5
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 

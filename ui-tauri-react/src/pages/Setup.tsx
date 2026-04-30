@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useDispatch, useStore, refreshSettings } from "@/lib/store";
+import { withDuoSettingsDefaults } from "@/lib/defaults";
 import { saveSettings, usbMediaRemapStart, usbMediaRemapStop } from "@/lib/tauri";
 import type { DuoSettings, ThemePreference } from "@/types/duo";
 
@@ -13,14 +14,10 @@ export default function Setup() {
   const dispatch = useDispatch();
   const { setTheme } = useTheme();
 
-  const initial = useMemo<DuoSettings>(() => {
-    // Ensure sensible defaults even if older backends return settings without new keys.
-    return {
-      ...store.settings,
-      usbMediaRemapEnabled: store.settings.usbMediaRemapEnabled ?? true,
-      setupCompleted: store.settings.setupCompleted ?? false,
-    };
-  }, [store.settings]);
+  const initial = useMemo<DuoSettings>(
+    () => withDuoSettingsDefaults(store.settings),
+    [store.settings],
+  );
 
   const [local, setLocal] = useState<DuoSettings>(initial);
   const [saving, setSaving] = useState(false);

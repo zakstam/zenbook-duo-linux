@@ -202,32 +202,28 @@ fn detect_ready_backend() -> SessionBackend {
 
 fn detect_ready_backend_from<F>(hinted: SessionBackend, mut is_ready: F) -> SessionBackend
 where
-    F: FnMut(SessionBackend) -> bool,
+    F: FnMut(&session::BackendProbe) -> bool,
 {
-    for backend in session::backend_probe_order(&hinted) {
-        if is_ready(backend.clone()) {
-            return backend;
+    for probe in session::backend_probe_sequence(&hinted) {
+        if is_ready(&probe) {
+            return probe.backend;
         }
     }
     SessionBackend::Unknown
 }
 
-fn backend_is_ready(backend: SessionBackend) -> bool {
-    match backend {
-        SessionBackend::Gnome => {
-            if !gui_session_env_ready() {
-                return false;
-            }
-            compositor::command_succeeds("gdctl", &["show"])
+fn backend_is_ready(probe: &session::BackendProbe) -> bool {
+    if probe.requires_gui_session && !gui_session_env_ready() {
+        return false;
+    }
+
+    match probe.readiness_runner {
+        session::BackendCommandRunner::Compositor => {
+            compositor::command_succeeds(probe.readiness_program, probe.readiness_args)
         }
-        SessionBackend::Kde => {
-            if !gui_session_env_ready() {
-                return false;
-            }
-            compositor::command_succeeds("kscreen-doctor", &["-j"])
+        session::BackendCommandRunner::Niri => {
+            compositor::niri_command_succeeds(probe.readiness_args)
         }
-        SessionBackend::Niri => compositor::niri_command_succeeds(&["msg", "--json", "outputs"]),
-        SessionBackend::Unknown => false,
     }
 }
 
@@ -256,7 +252,7 @@ async fn wait_for_ready_backend_with<D, R>(
 ) -> SessionBackend
 where
     D: FnMut() -> SessionBackend,
-    R: FnMut(SessionBackend) -> bool,
+    R: FnMut(&session::BackendProbe) -> bool,
 {
     let first_notice_at = tokio::time::Instant::now() + first_notice_after;
     let mut warned_after_first_timeout = false;
@@ -294,9 +290,9 @@ fn apply_dock_mode(attached: bool, scale: f64) -> Result<(), String> {
     Ok(())
 }
 
-fn apply_gnome_dock_mode(attached: bool, scale: f64) -> Result<(), String> {
+fn gnome_dock_mode_args(attached: bool, scale: f64) -> Vec<String> {
     let scale_str = format!("{scale:.6}");
-    let args = if attached {
+    if attached {
         vec![
             "set".to_string(),
             "--logical-monitor".to_string(),
@@ -323,39 +319,60 @@ fn apply_gnome_dock_mode(attached: bool, scale: f64) -> Result<(), String> {
             "--below".to_string(),
             PRIMARY_INTERNAL_CONNECTOR.to_string(),
         ]
-    };
-    run_command("gdctl", &args)
+    }
+}
+
+fn apply_gnome_dock_mode(attached: bool, scale: f64) -> Result<(), String> {
+    run_command("gdctl", &gnome_dock_mode_args(attached, scale))
+}
+
+fn kde_dock_mode_args(attached: bool, primary_logical_height: i64) -> Vec<String> {
+    if attached {
+        vec![
+            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
+            format!("output.{SECONDARY_INTERNAL_CONNECTOR}.disable"),
+        ]
+    } else {
+        vec![
+            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
+            format!("output.{SECONDARY_INTERNAL_CONNECTOR}.enable"),
+            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.position.0,0"),
+            format!("output.{SECONDARY_INTERNAL_CONNECTOR}.position.0,{primary_logical_height}"),
+        ]
+    }
 }
 
 fn apply_kde_dock_mode(attached: bool) -> Result<(), String> {
     ensure_gui_session_env("KDE display control")?;
-    if attached {
-        let args = vec![
-            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
-            format!("output.{SECONDARY_INTERNAL_CONNECTOR}.disable"),
-        ];
-        run_command("kscreen-doctor", &args)
+    let primary_logical_height = if attached {
+        0
     } else {
-        let (_, h) = kde_output_logical_size(PRIMARY_INTERNAL_CONNECTOR).unwrap_or((0, 0));
-        let args = vec![
-            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
-            format!("output.{SECONDARY_INTERNAL_CONNECTOR}.enable"),
-            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.position.0,0"),
-            format!("output.{SECONDARY_INTERNAL_CONNECTOR}.position.0,{h}"),
-        ];
-        run_command("kscreen-doctor", &args)
-    }
+        kde_output_logical_size(PRIMARY_INTERNAL_CONNECTOR)
+            .unwrap_or((0, 0))
+            .1
+    };
+    run_command(
+        "kscreen-doctor",
+        &kde_dock_mode_args(attached, primary_logical_height),
+    )
 }
 
-fn apply_niri_dock_mode(attached: bool) -> Result<(), String> {
+fn string_args(args: &[&str]) -> Vec<String> {
+    args.iter().map(|arg| (*arg).to_string()).collect()
+}
+
+fn niri_dock_mode_commands(attached: bool, primary_logical_height: i64) -> Vec<Vec<String>> {
     if attached {
-        run_niri_command(&["msg", "output", PRIMARY_INTERNAL_CONNECTOR, "on"])?;
-        run_niri_command(&["msg", "output", SECONDARY_INTERNAL_CONNECTOR, "off"])
-    } else {
-        run_niri_command(&["msg", "output", PRIMARY_INTERNAL_CONNECTOR, "on"])?;
-        run_niri_command(&["msg", "output", SECONDARY_INTERNAL_CONNECTOR, "on"])?;
-        let (_, h) = niri_output_logical_size(PRIMARY_INTERNAL_CONNECTOR).unwrap_or((0, 0));
-        run_niri_command(&[
+        return vec![
+            string_args(&["msg", "output", PRIMARY_INTERNAL_CONNECTOR, "on"]),
+            string_args(&["msg", "output", SECONDARY_INTERNAL_CONNECTOR, "off"]),
+        ];
+    }
+
+    vec![
+        string_args(&["msg", "output", PRIMARY_INTERNAL_CONNECTOR, "on"]),
+        string_args(&["msg", "output", SECONDARY_INTERNAL_CONNECTOR, "on"]),
+        string_args(&[
             "msg",
             "output",
             PRIMARY_INTERNAL_CONNECTOR,
@@ -363,17 +380,31 @@ fn apply_niri_dock_mode(attached: bool) -> Result<(), String> {
             "set",
             "0",
             "0",
-        ])?;
-        run_niri_command(&[
-            "msg",
-            "output",
-            SECONDARY_INTERNAL_CONNECTOR,
-            "position",
-            "set",
-            "0",
-            &h.to_string(),
-        ])
+        ]),
+        vec![
+            "msg".to_string(),
+            "output".to_string(),
+            SECONDARY_INTERNAL_CONNECTOR.to_string(),
+            "position".to_string(),
+            "set".to_string(),
+            "0".to_string(),
+            primary_logical_height.to_string(),
+        ],
+    ]
+}
+
+fn apply_niri_dock_mode(attached: bool) -> Result<(), String> {
+    let primary_logical_height = if attached {
+        0
+    } else {
+        niri_output_logical_size(PRIMARY_INTERNAL_CONNECTOR)
+            .unwrap_or((0, 0))
+            .1
+    };
+    for args in niri_dock_mode_commands(attached, primary_logical_height) {
+        run_niri_command_args(&args)?;
     }
+    Ok(())
 }
 
 fn kde_output_logical_size(name: &str) -> Result<(i64, i64), String> {
@@ -401,6 +432,11 @@ fn ensure_gui_session_env(action: &str) -> Result<(), String> {
 
 fn run_niri_command(args: &[&str]) -> Result<(), String> {
     compositor::run_niri_command(args)
+}
+
+fn run_niri_command_args(args: &[String]) -> Result<(), String> {
+    let borrowed_args: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_niri_command(&borrowed_args)
 }
 
 fn dock_mode_notification_message(attached: bool) -> &'static str {
@@ -815,19 +851,147 @@ mod tests {
     }
 
     #[test]
+    fn builds_gnome_dock_mode_arguments_without_running_gdctl() {
+        assert_eq!(
+            gnome_dock_mode_args(true, 1.66),
+            string_args(&[
+                "set",
+                "--logical-monitor",
+                "--primary",
+                "--scale",
+                "1.660000",
+                "--monitor",
+                PRIMARY_INTERNAL_CONNECTOR,
+            ])
+        );
+        assert_eq!(
+            gnome_dock_mode_args(false, 1.66),
+            string_args(&[
+                "set",
+                "--logical-monitor",
+                "--primary",
+                "--scale",
+                "1.660000",
+                "--monitor",
+                PRIMARY_INTERNAL_CONNECTOR,
+                "--logical-monitor",
+                "--scale",
+                "1.660000",
+                "--monitor",
+                SECONDARY_INTERNAL_CONNECTOR,
+                "--below",
+                PRIMARY_INTERNAL_CONNECTOR,
+            ])
+        );
+    }
+
+    #[test]
+    fn builds_kde_dock_mode_arguments_without_running_kscreen_doctor() {
+        assert_eq!(
+            kde_dock_mode_args(true, 1200),
+            vec![
+                format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
+                format!("output.{SECONDARY_INTERNAL_CONNECTOR}.disable"),
+            ]
+        );
+        assert_eq!(
+            kde_dock_mode_args(false, 1200),
+            vec![
+                format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
+                format!("output.{SECONDARY_INTERNAL_CONNECTOR}.enable"),
+                format!("output.{PRIMARY_INTERNAL_CONNECTOR}.position.0,0"),
+                format!("output.{SECONDARY_INTERNAL_CONNECTOR}.position.0,1200"),
+            ]
+        );
+    }
+
+    #[test]
+    fn builds_niri_dock_mode_commands_without_running_niri() {
+        assert_eq!(
+            niri_dock_mode_commands(true, 1200),
+            vec![
+                string_args(&["msg", "output", PRIMARY_INTERNAL_CONNECTOR, "on"]),
+                string_args(&["msg", "output", SECONDARY_INTERNAL_CONNECTOR, "off"]),
+            ]
+        );
+        assert_eq!(
+            niri_dock_mode_commands(false, 1200),
+            vec![
+                string_args(&["msg", "output", PRIMARY_INTERNAL_CONNECTOR, "on"]),
+                string_args(&["msg", "output", SECONDARY_INTERNAL_CONNECTOR, "on"]),
+                string_args(&[
+                    "msg",
+                    "output",
+                    PRIMARY_INTERNAL_CONNECTOR,
+                    "position",
+                    "set",
+                    "0",
+                    "0",
+                ]),
+                string_args(&[
+                    "msg",
+                    "output",
+                    SECONDARY_INTERNAL_CONNECTOR,
+                    "position",
+                    "set",
+                    "0",
+                    "1200",
+                ]),
+            ]
+        );
+    }
+
+    #[test]
     fn detect_ready_backend_prefers_hint_when_ready() {
-        let ready = detect_ready_backend_from(SessionBackend::Kde, |backend| {
-            backend == SessionBackend::Kde
+        let ready = detect_ready_backend_from(SessionBackend::Kde, |probe| {
+            probe.backend == SessionBackend::Kde
         });
         assert_eq!(ready, SessionBackend::Kde);
     }
 
     #[test]
+    fn backend_readiness_metadata_preserves_existing_commands() {
+        let gnome = session::backend_probe(&SessionBackend::Gnome).expect("gnome probe");
+        assert_eq!(gnome.readiness_program, "gdctl");
+        assert_eq!(gnome.readiness_args, ["show"]);
+        assert!(gnome.requires_gui_session);
+
+        let kde = session::backend_probe(&SessionBackend::Kde).expect("kde probe");
+        assert_eq!(kde.readiness_program, "kscreen-doctor");
+        assert_eq!(kde.readiness_args, ["-j"]);
+        assert!(kde.requires_gui_session);
+
+        let niri = session::backend_probe(&SessionBackend::Niri).expect("niri probe");
+        assert_eq!(niri.readiness_program, "niri");
+        assert_eq!(niri.readiness_args, ["msg", "--json", "outputs"]);
+        assert!(!niri.requires_gui_session);
+    }
+
+    #[test]
     fn detect_ready_backend_falls_through_to_other_ready_backend() {
-        let ready = detect_ready_backend_from(SessionBackend::Unknown, |backend| {
-            backend == SessionBackend::Niri
+        let ready = detect_ready_backend_from(SessionBackend::Unknown, |probe| {
+            probe.backend == SessionBackend::Niri
         });
         assert_eq!(ready, SessionBackend::Niri);
+    }
+
+    #[test]
+    fn detect_ready_backend_uses_hinted_order_then_fallback_metadata() {
+        let mut seen = Vec::new();
+        let ready = detect_ready_backend_from(SessionBackend::Kde, |probe| {
+            seen.push(probe.backend);
+            probe.backend == SessionBackend::Gnome
+        });
+
+        assert_eq!(ready, SessionBackend::Gnome);
+        assert_eq!(
+            seen,
+            vec![
+                SessionBackend::Kde,
+                SessionBackend::Niri,
+                SessionBackend::Gnome,
+            ]
+        );
     }
 
     #[test]
@@ -841,9 +1005,9 @@ mod tests {
         let mut attempts = 0;
         let backend = wait_for_ready_backend_with(
             || SessionBackend::Kde,
-            |backend| {
+            |probe| {
                 attempts += 1;
-                backend == SessionBackend::Kde && attempts >= 3
+                probe.backend == SessionBackend::Kde && attempts >= 3
             },
             Duration::from_millis(1),
             Duration::from_millis(1),

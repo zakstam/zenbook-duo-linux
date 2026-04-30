@@ -10,6 +10,31 @@ const DESKTOP_ENV_VARS: [&str; 3] = [
     "DESKTOP_SESSION",
 ];
 
+const GNOME_READINESS_ARGS: &[&str] = &["show"];
+const KDE_READINESS_ARGS: &[&str] = &["-j"];
+const NIRI_READINESS_ARGS: &[&str] = &["msg", "--json", "outputs"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendCommandRunner {
+    Compositor,
+    Niri,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackendProbe {
+    pub backend: SessionBackend,
+    pub readiness_program: &'static str,
+    pub readiness_args: &'static [&'static str],
+    pub readiness_runner: BackendCommandRunner,
+    pub requires_gui_session: bool,
+}
+
+pub const SUPPORTED_BACKENDS: [SessionBackend; 3] = [
+    SessionBackend::Niri,
+    SessionBackend::Gnome,
+    SessionBackend::Kde,
+];
+
 pub fn detect_backend_from_env() -> SessionBackend {
     detect_backend_from_hint(&desktop_hint_from_env(), resolve_niri_socket().is_some())
 }
@@ -43,20 +68,57 @@ fn desktop_hint_from_env() -> String {
 }
 
 pub fn backend_probe_order(hinted: &SessionBackend) -> Vec<SessionBackend> {
+    backend_probe_sequence(hinted)
+        .into_iter()
+        .map(|probe| probe.backend)
+        .collect()
+}
+
+pub fn backend_probe_sequence(hinted: &SessionBackend) -> Vec<BackendProbe> {
     let mut order = Vec::new();
     if hinted != &SessionBackend::Unknown {
-        order.push(hinted.clone());
+        if let Some(probe) = backend_probe(hinted) {
+            order.push(probe);
+        }
     }
-    for backend in [
-        SessionBackend::Niri,
-        SessionBackend::Gnome,
-        SessionBackend::Kde,
-    ] {
-        if !order.contains(&backend) {
-            order.push(backend);
+    for backend in SUPPORTED_BACKENDS {
+        if !order
+            .iter()
+            .any(|probe: &BackendProbe| probe.backend == backend)
+        {
+            if let Some(probe) = backend_probe(&backend) {
+                order.push(probe);
+            }
         }
     }
     order
+}
+
+pub fn backend_probe(backend: &SessionBackend) -> Option<BackendProbe> {
+    match backend {
+        SessionBackend::Gnome => Some(BackendProbe {
+            backend: SessionBackend::Gnome,
+            readiness_program: "gdctl",
+            readiness_args: GNOME_READINESS_ARGS,
+            readiness_runner: BackendCommandRunner::Compositor,
+            requires_gui_session: true,
+        }),
+        SessionBackend::Kde => Some(BackendProbe {
+            backend: SessionBackend::Kde,
+            readiness_program: "kscreen-doctor",
+            readiness_args: KDE_READINESS_ARGS,
+            readiness_runner: BackendCommandRunner::Compositor,
+            requires_gui_session: true,
+        }),
+        SessionBackend::Niri => Some(BackendProbe {
+            backend: SessionBackend::Niri,
+            readiness_program: "niri",
+            readiness_args: NIRI_READINESS_ARGS,
+            readiness_runner: BackendCommandRunner::Niri,
+            requires_gui_session: false,
+        }),
+        SessionBackend::Unknown => None,
+    }
 }
 
 pub fn resolve_niri_socket() -> Option<PathBuf> {

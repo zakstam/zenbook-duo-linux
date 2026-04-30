@@ -160,8 +160,10 @@ Supported matrix covered by the installer smoke tests:
 Compatibility checklist for maintainers:
 
 - Keep common setup behavior in `setup-common.sh`; keep desktop wrappers limited to backend-specific packages and manual dependency hints.
+- Keep settings defaults aligned across `setup-common.sh`, the Rust `DuoSettings` defaults, and the frontend default settings helper. The installer writes `setupCompleted=true`; a missing settings file should still show first-run setup.
 - Preserve GNOME, KDE, and Niri command arguments when refactoring display code unless a backend-specific behavior change is intentional and tested.
-- Update `tests/install-stdin-test.sh` whenever supported desktops, package managers, service units, or installer entrypoints change.
+- Keep desktop readiness probes centralized in the Rust session helpers so GNOME, KDE, and Niri fallback behavior stays consistent.
+- Update `tests/install-stdin-test.sh` whenever supported desktops, package managers, service units, defaults, or installer entrypoints change.
 - Run the narrow `./check.sh` target for the area you touched; run `./check.sh all` before handing off broad cross-area changes.
 
 ### Troubleshooting

@@ -8,6 +8,13 @@ DUO_COMMON_APT_PACKAGES=(usbutils iio-sensor-proxy systemd)
 DUO_COMMON_PACMAN_PACKAGES=(usbutils iio-sensor-proxy systemd)
 DUO_COMMON_MANUAL_DEPENDENCIES_HINT="usbutils, iio-sensor-proxy, systemd"
 
+# Keep these defaults aligned with DuoSettings::default in the Rust runtime and
+# DEFAULT_DUO_SETTINGS in the frontend.
+DUO_DEFAULT_BACKLIGHT=0
+DUO_DEFAULT_SCALE=1.66
+DUO_DEFAULT_USB_MEDIA_REMAP_ENABLED=true
+DUO_INSTALLER_MARKS_SETUP_COMPLETED=true
+
 build_duo_setup_package_lists() {
   DNF_DESKTOP_PACKAGES=("${DNF_DESKTOP_PACKAGES[@]:-}")
   APT_DESKTOP_PACKAGES=("${APT_DESKTOP_PACKAGES[@]:-}")
@@ -27,9 +34,9 @@ build_duo_setup_package_lists() {
 run_duo_setup() {
   : "${SETUP_SCRIPT_NAME:?SETUP_SCRIPT_NAME is required}"
 
-  DEFAULT_BACKLIGHT="${DEFAULT_BACKLIGHT:-0}"
-  DEFAULT_SCALE="${DEFAULT_SCALE:-1.66}"
-  USB_MEDIA_REMAP_ENABLED="${USB_MEDIA_REMAP_ENABLED:-true}"
+  DEFAULT_BACKLIGHT="${DEFAULT_BACKLIGHT:-${DUO_DEFAULT_BACKLIGHT}}"
+  DEFAULT_SCALE="${DEFAULT_SCALE:-${DUO_DEFAULT_SCALE}}"
+  USB_MEDIA_REMAP_ENABLED="${USB_MEDIA_REMAP_ENABLED:-${DUO_DEFAULT_USB_MEDIA_REMAP_ENABLED}}"
 
   build_duo_setup_package_lists
 
@@ -182,7 +189,7 @@ write_duo_settings_defaults() {
     mkdir -p "${config_dir}" 2>/dev/null || true
   fi
 
-  "${python_cmd[@]}" - "${settings_file}" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}" <<'PY'
+  "${python_cmd[@]}" - "${settings_file}" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}" "${DUO_INSTALLER_MARKS_SETUP_COMPLETED}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -191,6 +198,7 @@ settings_file = Path(sys.argv[1])
 default_backlight = int(sys.argv[2])
 default_scale = float(sys.argv[3])
 usb_media_remap_enabled = sys.argv[4].strip().lower() in ("1", "true", "yes", "y", "on")
+setup_completed = sys.argv[5].strip().lower() in ("1", "true", "yes", "y", "on")
 
 settings_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -210,7 +218,7 @@ data.setdefault("theme", "system")
 data["defaultBacklight"] = default_backlight
 data["defaultScale"] = default_scale
 data["usbMediaRemapEnabled"] = usb_media_remap_enabled
-data["setupCompleted"] = True
+data["setupCompleted"] = setup_completed
 
 settings_file.write_text(json.dumps(data, indent=2) + "\n")
 PY
