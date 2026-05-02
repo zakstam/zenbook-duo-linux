@@ -512,23 +512,7 @@ async fn handle_lifecycle(
                 }
             }
 
-            match replay_current_display_mode(state, attached, scale).await {
-                Ok(()) => Ok(()),
-                Err(err) => {
-                    notify_runtime_error(
-                        state,
-                        "Zenbook Duo Runtime Error",
-                        &format!("Lifecycle dock refresh skipped: {err}"),
-                    )
-                    .await;
-                    logger::append_line(format!(
-                        "rust-daemon: lifecycle dock refresh skipped: {}",
-                        err
-                    ))
-                    .ok();
-                    Ok(())
-                }
-            }
+            refresh_lifecycle_display_mode(state, attached, scale).await
         }
     }
 }
@@ -542,6 +526,39 @@ fn lifecycle_should_stop_usb_media_remap(phase: &LifecyclePhase) -> bool {
 
 fn lifecycle_should_queue_usb_media_remap_retry(phase: &LifecyclePhase) -> bool {
     matches!(phase, LifecyclePhase::Post | LifecyclePhase::Thaw)
+}
+
+async fn refresh_lifecycle_display_mode(
+    state: &Arc<RwLock<RuntimeState>>,
+    attached: bool,
+    scale: f64,
+) -> Result<(), String> {
+    match replay_current_display_mode_with_disconnect(state, attached, scale, false).await {
+        Ok(()) => Ok(()),
+        Err(err) if is_lid_display_deferral(&err) => {
+            logger::append_line(format!(
+                "rust-daemon: lifecycle dock refresh deferred: {}",
+                err
+            ))
+            .ok();
+            queue_lifecycle_display_retry(state.clone(), attached, scale);
+            Ok(())
+        }
+        Err(err) => {
+            notify_runtime_error(
+                state,
+                "Zenbook Duo Runtime Error",
+                &format!("Lifecycle dock refresh skipped: {err}"),
+            )
+            .await;
+            logger::append_line(format!(
+                "rust-daemon: lifecycle dock refresh skipped: {}",
+                err
+            ))
+            .ok();
+            Ok(())
+        }
+    }
 }
 
 async fn handle_session_registration(
@@ -591,6 +608,28 @@ pub(crate) async fn replay_current_display_mode(
     attached: bool,
     scale: f64,
 ) -> Result<(), String> {
+    replay_current_display_mode_with_disconnect(state, attached, scale, true).await
+}
+
+async fn replay_current_display_mode_with_disconnect(
+    state: &Arc<RwLock<RuntimeState>>,
+    attached: bool,
+    scale: f64,
+    disconnect_on_failure: bool,
+) -> Result<(), String> {
+    if state.read().await.lid_closed {
+        if apply_external_only_clamshell_layout(state, disconnect_on_failure).await? {
+            let _ = logger::append_line(
+                "rust-daemon: enforced external-only display layout while lid is closed",
+            );
+        } else {
+            let _ = logger::append_line(
+                "rust-daemon: skipped display replay while lid is closed and no external display is active",
+            );
+        }
+        return Ok(());
+    }
+
     let saved_layout = saved_layout_for_display_mode(state, attached).await;
 
     if active_external_display_connected(state, attached).await
@@ -606,10 +645,205 @@ pub(crate) async fn replay_current_display_mode(
     }
 
     if let Some(layout) = saved_layout {
-        return forward_session_command(state, SessionCommand::ApplyDisplayLayout { layout }).await;
+        return forward_session_command_with_disconnect(
+            state,
+            SessionCommand::ApplyDisplayLayout { layout },
+            disconnect_on_failure,
+        )
+        .await;
     }
 
-    replay_current_dock_mode(state, attached, scale).await
+    replay_current_dock_mode_with_disconnect(state, attached, scale, disconnect_on_failure).await
+}
+
+pub(crate) async fn handle_lid_closed_change(
+    state: &Arc<RwLock<RuntimeState>>,
+    lid_closed: bool,
+) -> Result<(), String> {
+    let (attached, scale) = record_lid_closed_state(state, lid_closed).await;
+
+    let result = apply_lid_display_state(state, lid_closed, attached, scale).await;
+    if let Err(err) = &result {
+        if is_lid_display_deferral(err) {
+            queue_lid_display_retry(state.clone(), lid_closed);
+        }
+    }
+    result
+}
+
+async fn record_lid_closed_state(
+    state: &Arc<RwLock<RuntimeState>>,
+    lid_closed: bool,
+) -> (bool, f64) {
+    let mut guard = state.write().await;
+    guard.lid_closed = lid_closed;
+    guard.recent_events.push(HardwareEvent::info(
+        EventCategory::Display,
+        if lid_closed {
+            "Lid closed"
+        } else {
+            "Lid opened"
+        },
+        "rust-daemon",
+    ));
+    if guard.recent_events.len() > 500 {
+        let overflow = guard.recent_events.len() - 500;
+        guard.recent_events.drain(0..overflow);
+    }
+    guard.touch();
+    persist_state(&guard);
+    (guard.status.keyboard_attached, guard.settings.default_scale)
+}
+
+async fn apply_lid_display_state(
+    state: &Arc<RwLock<RuntimeState>>,
+    lid_closed: bool,
+    attached: bool,
+    scale: f64,
+) -> Result<(), String> {
+    if lid_closed {
+        if apply_external_only_clamshell_layout(state, false).await? {
+            let _ = logger::append_line(
+                "rust-daemon: lid closed with external display; applied external-only layout",
+            );
+        } else {
+            let _ = logger::append_line(
+                "rust-daemon: lid closed without an active external display; no display layout change applied",
+            );
+        }
+        Ok(())
+    } else {
+        let _ = logger::append_line("rust-daemon: lid opened; replaying current dock display mode");
+        replay_current_display_mode_with_disconnect(state, attached, scale, false).await
+    }
+}
+
+fn queue_lid_display_retry(state: Arc<RwLock<RuntimeState>>, lid_closed: bool) {
+    tokio::spawn(async move {
+        const RETRY_ATTEMPTS: usize = 6;
+        const RETRY_DELAY: Duration = Duration::from_secs(1);
+
+        for attempt in 1..=RETRY_ATTEMPTS {
+            tokio::time::sleep(RETRY_DELAY).await;
+
+            let (current_lid_closed, attached, scale) = {
+                let guard = state.read().await;
+                (
+                    guard.lid_closed,
+                    guard.status.keyboard_attached,
+                    guard.settings.default_scale,
+                )
+            };
+            if current_lid_closed != lid_closed {
+                let _ = logger::append_line(
+                    "rust-daemon: cancelled lid display retry after lid state changed",
+                );
+                return;
+            }
+
+            match apply_lid_display_state(&state, lid_closed, attached, scale).await {
+                Ok(()) => {
+                    let _ = logger::append_line(format!(
+                        "rust-daemon: lid display retry succeeded on attempt {attempt}"
+                    ));
+                    return;
+                }
+                Err(err) if is_lid_display_deferral(&err) => {
+                    let _ = logger::append_line(format!(
+                        "rust-daemon: lid display retry deferred on attempt {attempt}: {err}"
+                    ));
+                }
+                Err(err) => {
+                    log::warn!("lid display retry failed: {err}");
+                    let _ = logger::append_line(format!(
+                        "rust-daemon: lid display retry failed on attempt {attempt}: {err}"
+                    ));
+                    return;
+                }
+            }
+        }
+    });
+}
+
+fn queue_lifecycle_display_retry(state: Arc<RwLock<RuntimeState>>, attached: bool, scale: f64) {
+    tokio::spawn(async move {
+        const RETRY_ATTEMPTS: usize = 6;
+        const RETRY_DELAY: Duration = Duration::from_secs(1);
+
+        for attempt in 1..=RETRY_ATTEMPTS {
+            tokio::time::sleep(RETRY_DELAY).await;
+
+            match replay_current_display_mode_with_disconnect(&state, attached, scale, false).await
+            {
+                Ok(()) => {
+                    let _ = logger::append_line(format!(
+                        "rust-daemon: lifecycle dock refresh retry succeeded on attempt {attempt}"
+                    ));
+                    return;
+                }
+                Err(err) if is_lid_display_deferral(&err) => {
+                    let _ = logger::append_line(format!(
+                        "rust-daemon: lifecycle dock refresh retry deferred on attempt {attempt}: {err}"
+                    ));
+                }
+                Err(err) => {
+                    log::warn!("lifecycle dock refresh retry failed: {err}");
+                    let _ = logger::append_line(format!(
+                        "rust-daemon: lifecycle dock refresh retry failed on attempt {attempt}: {err}"
+                    ));
+                    return;
+                }
+            }
+        }
+    });
+}
+
+pub(crate) fn is_lid_display_deferral(message: &str) -> bool {
+    message == "No session agent registered"
+        || message.starts_with("Timed out ")
+        || message.starts_with("Failed to connect to session agent")
+        || message == "Session agent closed before replying"
+}
+
+async fn apply_external_only_clamshell_layout(
+    state: &Arc<RwLock<RuntimeState>>,
+    disconnect_on_failure: bool,
+) -> Result<bool, String> {
+    let current_layout =
+        session_display_layout_result(state.clone(), disconnect_on_failure).await?;
+    let Some(layout) = external_only_layout(&current_layout) else {
+        return Ok(false);
+    };
+
+    forward_session_command_with_disconnect(
+        state,
+        SessionCommand::ApplyDisplayLayout { layout },
+        disconnect_on_failure,
+    )
+    .await?;
+    Ok(true)
+}
+
+fn external_only_layout(layout: &DisplayLayout) -> Option<DisplayLayout> {
+    let mut displays: Vec<_> = layout
+        .displays
+        .iter()
+        .filter(|display| !hardware::duo::is_internal_connector(&display.connector))
+        .cloned()
+        .collect();
+
+    if displays.is_empty() {
+        return None;
+    }
+
+    if !displays.iter().any(|display| display.primary) {
+        displays[0].primary = true;
+    }
+    for display in displays.iter_mut().skip(1) {
+        display.primary = false;
+    }
+
+    Some(DisplayLayout { displays })
 }
 
 async fn saved_layout_for_display_mode(
@@ -667,19 +901,33 @@ async fn active_external_display_connected(
         .is_some_and(layout_has_external_display)
 }
 
-async fn replay_current_dock_mode(
+async fn replay_current_dock_mode_with_disconnect(
     state: &Arc<RwLock<RuntimeState>>,
     attached: bool,
     scale: f64,
+    disconnect_on_failure: bool,
 ) -> Result<(), String> {
-    forward_session_command(state, SessionCommand::SetDockMode { attached, scale }).await
+    forward_session_command_with_disconnect(
+        state,
+        SessionCommand::SetDockMode { attached, scale },
+        disconnect_on_failure,
+    )
+    .await
 }
 
 pub(crate) async fn forward_session_command(
     state: &Arc<RwLock<RuntimeState>>,
     command: SessionCommand,
 ) -> Result<(), String> {
-    match request_session(state.clone(), command, true).await? {
+    forward_session_command_with_disconnect(state, command, true).await
+}
+
+async fn forward_session_command_with_disconnect(
+    state: &Arc<RwLock<RuntimeState>>,
+    command: SessionCommand,
+    disconnect_on_failure: bool,
+) -> Result<(), String> {
+    match request_session(state.clone(), command, disconnect_on_failure).await? {
         SessionResponse::Ack => Ok(()),
         SessionResponse::Error { message } => Err(message),
         SessionResponse::DisplayLayout { .. } => {
@@ -691,9 +939,23 @@ pub(crate) async fn forward_session_command(
 pub(crate) async fn session_display_layout(
     state: Arc<RwLock<RuntimeState>>,
 ) -> Option<DisplayLayout> {
-    match request_session(state, SessionCommand::GetDisplayLayout, false).await {
-        Ok(SessionResponse::DisplayLayout { layout }) => Some(layout),
-        _ => None,
+    session_display_layout_result(state, false).await.ok()
+}
+
+async fn session_display_layout_result(
+    state: Arc<RwLock<RuntimeState>>,
+    disconnect_on_failure: bool,
+) -> Result<DisplayLayout, String> {
+    match request_session(
+        state,
+        SessionCommand::GetDisplayLayout,
+        disconnect_on_failure,
+    )
+    .await?
+    {
+        SessionResponse::DisplayLayout { layout } => Ok(layout),
+        SessionResponse::Error { message } => Err(message),
+        SessionResponse::Ack => Err("Unexpected ack response for display-layout request".into()),
     }
 }
 
@@ -883,12 +1145,18 @@ async fn mark_session_agent_disconnected(state: &Arc<RwLock<RuntimeState>>, reas
         }
     }
 
-    if let Err(err) = send_runtime_notification_direct(
-        "Zenbook Duo Runtime Error",
-        &format!("Session agent disconnected: {reason}"),
-    ) {
-        log::warn!("failed to send direct disconnect notification: {err}");
+    if should_notify_session_agent_disconnect(reason) {
+        if let Err(err) = send_runtime_notification_direct(
+            "Zenbook Duo Runtime Error",
+            &format!("Session agent disconnected: {reason}"),
+        ) {
+            log::warn!("failed to send direct disconnect notification: {err}");
+        }
     }
+}
+
+fn should_notify_session_agent_disconnect(reason: &str) -> bool {
+    !is_lid_display_deferral(reason)
 }
 
 pub(crate) async fn notify_runtime_error(
@@ -921,6 +1189,8 @@ fn should_notify_runtime_error(title: &str, message: &str) -> bool {
         message,
         "Lifecycle dock refresh skipped: No session agent registered"
             | "Display-mode policy action failed: No session agent registered"
+            | "Lifecycle dock refresh skipped: Timed out waiting for session response"
+            | "Display-mode policy action failed: Timed out waiting for session response"
     )
 }
 
@@ -1221,6 +1491,369 @@ mod tests {
 
         server.await.expect("join session server");
         let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn lid_close_applies_external_only_layout() {
+        let socket_path = unique_test_socket_path("lid-close-external");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept layout query client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read layout query")
+                .expect("layout query line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode layout query");
+            assert!(matches!(envelope.payload, SessionCommand::GetDisplayLayout));
+            let reply = serde_json::to_string(&Envelope::new(SessionResponse::DisplayLayout {
+                layout: external_display_layout(),
+            }))
+            .expect("encode layout response");
+            writer
+                .write_all(reply.as_bytes())
+                .await
+                .expect("write layout response");
+            writer.write_all(b"\n").await.expect("terminate layout");
+
+            let (stream, _) = listener.accept().await.expect("accept layout apply client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read layout apply")
+                .expect("layout apply line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode layout apply");
+            match envelope.payload {
+                SessionCommand::ApplyDisplayLayout { layout } => {
+                    assert_eq!(layout.displays.len(), 1);
+                    assert_eq!(layout.displays[0].connector, "HDMI-A-1");
+                    assert!(layout.displays[0].primary);
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+        }
+
+        timeout(
+            Duration::from_secs(1),
+            handle_lid_closed_change(&state, true),
+        )
+        .await
+        .expect("lid close handling should not hang")
+        .expect("external-only layout should apply");
+
+        assert!(state.read().await.lid_closed);
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn session_registration_does_not_reenable_internal_displays_when_lid_is_closed() {
+        let socket_path = unique_test_socket_path("register-lid-closed");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept layout query client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read layout query")
+                .expect("layout query line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode layout query");
+            assert!(matches!(envelope.payload, SessionCommand::GetDisplayLayout));
+            let reply = serde_json::to_string(&Envelope::new(SessionResponse::DisplayLayout {
+                layout: external_display_layout(),
+            }))
+            .expect("encode layout response");
+            writer
+                .write_all(reply.as_bytes())
+                .await
+                .expect("write layout response");
+            writer.write_all(b"\n").await.expect("terminate layout");
+
+            let (stream, _) = listener.accept().await.expect("accept layout apply client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read layout apply")
+                .expect("layout apply line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode layout apply");
+            match envelope.payload {
+                SessionCommand::ApplyDisplayLayout { layout } => {
+                    assert_eq!(layout.displays.len(), 1);
+                    assert_eq!(layout.displays[0].connector, "HDMI-A-1");
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.lid_closed = true;
+            guard.status.keyboard_attached = true;
+            guard.settings.default_scale = 1.25;
+        }
+
+        handle_session_registration(
+            &state,
+            "test-session".into(),
+            SessionBackend::Gnome,
+            socket_path.to_string_lossy().into_owned(),
+        )
+        .await
+        .expect("registration should succeed");
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn lid_open_replays_current_dock_mode() {
+        let socket_path = unique_test_socket_path("lid-open-replay");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept replay client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read replay request")
+                .expect("replay request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode replay request");
+            match envelope.payload {
+                SessionCommand::SetDockMode { attached, scale } => {
+                    assert!(attached);
+                    assert_eq!(scale, 1.5);
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.lid_closed = true;
+            guard.status.keyboard_attached = true;
+            guard.settings.default_scale = 1.5;
+        }
+
+        timeout(
+            Duration::from_secs(1),
+            handle_lid_closed_change(&state, false),
+        )
+        .await
+        .expect("lid open handling should not hang")
+        .expect("dock replay should succeed");
+
+        assert!(!state.read().await.lid_closed);
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn missing_session_agent_during_lid_transition_defers_without_disconnect() {
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.status.service_active = true;
+        }
+
+        let result = handle_lid_closed_change(&state, true).await;
+
+        assert_eq!(result, Err("No session agent registered".into()));
+        assert!(is_lid_display_deferral(
+            result.as_ref().expect_err("lid update should defer")
+        ));
+        let guard = state.read().await;
+        assert!(guard.lid_closed);
+        assert!(guard.status.service_active);
+    }
+
+    #[tokio::test]
+    async fn timed_out_lid_transition_keeps_session_agent_connected_and_retries() {
+        let socket_path = unique_test_socket_path("lid-timeout-retry");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept initial layout query client");
+            let held_stream = stream;
+
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept retry layout query client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read retry layout query")
+                .expect("retry layout query line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode retry layout query");
+            assert!(matches!(envelope.payload, SessionCommand::GetDisplayLayout));
+            let reply = serde_json::to_string(&Envelope::new(SessionResponse::DisplayLayout {
+                layout: external_display_layout(),
+            }))
+            .expect("encode retry layout response");
+            writer
+                .write_all(reply.as_bytes())
+                .await
+                .expect("write retry layout response");
+            writer
+                .write_all(b"\n")
+                .await
+                .expect("terminate retry layout");
+
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept retry layout apply client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read retry layout apply")
+                .expect("retry layout apply line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode retry layout apply");
+            match envelope.payload {
+                SessionCommand::ApplyDisplayLayout { layout } => {
+                    assert_eq!(layout.displays.len(), 1);
+                    assert_eq!(layout.displays[0].connector, "HDMI-A-1");
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+
+            drop(held_stream);
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.service_active = true;
+        }
+
+        let result = timeout(
+            Duration::from_secs(4),
+            handle_lid_closed_change(&state, true),
+        )
+        .await
+        .expect("lid close handling should return after the session timeout");
+
+        assert_eq!(result, Err("Timed out waiting for session response".into()));
+        assert!(is_lid_display_deferral(
+            result.as_ref().expect_err("lid update should defer")
+        ));
+        {
+            let guard = state.read().await;
+            assert!(guard.session_agent.connected);
+            assert!(guard.status.service_active);
+        }
+
+        timeout(Duration::from_secs(5), server)
+            .await
+            .expect("lid retry should finish")
+            .expect("join retry server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_display_timeout_defers_without_disconnect() {
+        let socket_path = unique_test_socket_path("lifecycle-timeout");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (_reader, _writer) = stream.into_split();
+            tokio::time::sleep(Duration::from_secs(4)).await;
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.service_active = true;
+        }
+
+        timeout(
+            Duration::from_secs(4),
+            refresh_lifecycle_display_mode(&state, true, 1.66),
+        )
+        .await
+        .expect("lifecycle refresh should return after session timeout")
+        .expect("retryable lifecycle refresh should be handled");
+
+        let guard = state.read().await;
+        assert!(guard.session_agent.connected);
+        assert!(guard.status.service_active);
+        drop(guard);
+
+        server.abort();
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[test]
+    fn retryable_session_disconnect_reasons_are_not_directly_notified() {
+        assert!(!should_notify_session_agent_disconnect(
+            "Timed out waiting for session response"
+        ));
+        assert!(!should_notify_session_agent_disconnect(
+            "No session agent registered"
+        ));
+        assert!(should_notify_session_agent_disconnect(
+            "Failed to decode session response"
+        ));
     }
 
     #[tokio::test]
@@ -1574,7 +2207,7 @@ mod tests {
     }
 
     #[test]
-    fn no_session_agent_registered_is_not_notifiable() {
+    fn retryable_display_session_errors_are_not_notifiable() {
         assert!(!should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             "Lifecycle dock refresh skipped: No session agent registered",
@@ -1583,13 +2216,21 @@ mod tests {
             "Zenbook Duo Runtime Error",
             "Display-mode policy action failed: No session agent registered",
         ));
+        assert!(!should_notify_runtime_error(
+            "Zenbook Duo Runtime Error",
+            "Lifecycle dock refresh skipped: Timed out waiting for session response",
+        ));
+        assert!(!should_notify_runtime_error(
+            "Zenbook Duo Runtime Error",
+            "Display-mode policy action failed: Timed out waiting for session response",
+        ));
     }
 
     #[test]
     fn real_runtime_errors_remain_notifiable() {
         assert!(should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
-            "Display-mode policy action failed: Timed out waiting for session response",
+            "Display-mode policy action failed: gdctl set failed",
         ));
     }
 

@@ -65,6 +65,34 @@ async fn watch_logind(state: Arc<RwLock<RuntimeState>>) -> Result<(), zbus::Erro
                 }
                 let _ = logger::append_line(format!("rust-daemon: {}", message));
             }
+
+            if let Some(lid_closed) = args
+                .changed_properties()
+                .get("LidClosed")
+                .and_then(|value| value.downcast_ref::<bool>().ok())
+            {
+                if let Err(err) =
+                    crate::runtime::daemon::handle_lid_closed_change(&state, lid_closed).await
+                {
+                    if crate::runtime::daemon::is_lid_display_deferral(&err) {
+                        let _ = logger::append_line(format!(
+                            "rust-daemon: lid state display update deferred: {err}"
+                        ));
+                        continue;
+                    }
+
+                    log::warn!("failed to handle lid state change: {err}");
+                    crate::runtime::daemon::notify_runtime_error(
+                        &state,
+                        "Zenbook Duo Runtime Error",
+                        &format!("Lid state display update failed: {err}"),
+                    )
+                    .await;
+                    let _ = logger::append_line(format!(
+                        "rust-daemon: lid state display update failed: {err}"
+                    ));
+                }
+            }
         }
     }
 

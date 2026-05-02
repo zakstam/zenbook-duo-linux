@@ -16,6 +16,8 @@ pub struct RuntimeState {
     pub usb_media_remap_reconcile: UsbMediaRemapReconcileState,
     #[serde(default)]
     pub last_runtime_notification: Option<RuntimeNotificationState>,
+    #[serde(default)]
+    pub lid_closed: bool,
     pub remembered_wifi_enabled: Option<bool>,
     pub remembered_bluetooth_enabled: Option<bool>,
     pub last_updated: DateTime<Utc>,
@@ -30,6 +32,7 @@ impl Default for RuntimeState {
             session_agent: SessionAgentState::default(),
             usb_media_remap_reconcile: UsbMediaRemapReconcileState::default(),
             last_runtime_notification: None,
+            lid_closed: false,
             remembered_wifi_enabled: None,
             remembered_bluetooth_enabled: None,
             last_updated: Utc::now(),
