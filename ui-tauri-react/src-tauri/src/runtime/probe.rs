@@ -1,12 +1,13 @@
 use std::process::Command;
 
 use crate::hardware::{display_config, sysfs};
-use crate::models::{DisplayLayout, DuoStatus, Orientation};
+use crate::models::{ConnectionType, DisplayLayout, DuoStatus, Orientation};
 
 pub fn current_status() -> DuoStatus {
     let mut status = sysfs::get_full_status();
-    status.keyboard_attached = keyboard_attached();
-    status.connection_type = sysfs::detect_connection_type();
+    let connection_type = sysfs::detect_connection_type();
+    status.keyboard_attached = keyboard_attached(&connection_type);
+    status.connection_type = connection_type;
     status.wifi_enabled = wifi_enabled();
     status.bluetooth_enabled = bluetooth_enabled();
     apply_layout_to_status(
@@ -21,12 +22,8 @@ pub fn apply_layout_to_status(status: &mut DuoStatus, layout: Option<&DisplayLay
     status.orientation = inferred_orientation(layout).unwrap_or(status.orientation.clone());
 }
 
-pub fn keyboard_attached() -> bool {
-    Command::new("lsusb")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("Zenbook Duo Keyboard"))
-        .unwrap_or(false)
+pub fn keyboard_attached(connection_type: &ConnectionType) -> bool {
+    matches!(connection_type, ConnectionType::Usb)
 }
 
 pub fn wifi_enabled() -> bool {
@@ -76,6 +73,13 @@ fn inferred_orientation(layout: Option<&crate::models::DisplayLayout>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usb_connection_counts_as_attached_keyboard() {
+        assert!(keyboard_attached(&ConnectionType::Usb));
+        assert!(!keyboard_attached(&ConnectionType::Bluetooth));
+        assert!(!keyboard_attached(&ConnectionType::None));
+    }
 
     #[test]
     fn applies_primary_display_transform_to_status() {

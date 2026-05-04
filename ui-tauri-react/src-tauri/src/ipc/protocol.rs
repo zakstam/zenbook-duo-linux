@@ -149,6 +149,8 @@ pub enum SessionCommand {
     SetDockMode {
         attached: bool,
         scale: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layout: Option<DisplayLayout>,
     },
     ApplyDisplayLayout {
         layout: DisplayLayout,

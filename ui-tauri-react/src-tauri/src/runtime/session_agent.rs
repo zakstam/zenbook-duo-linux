@@ -6,7 +6,9 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use crate::hardware::duo::{PRIMARY_INTERNAL_CONNECTOR, SECONDARY_INTERNAL_CONNECTOR};
+use crate::hardware::duo::{
+    is_internal_connector, PRIMARY_INTERNAL_CONNECTOR, SECONDARY_INTERNAL_CONNECTOR,
+};
 use evdev::{AbsoluteAxisType, Device, EventType};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -15,7 +17,7 @@ use tokio::process::Command as TokioCommand;
 use crate::ipc::protocol::{
     DaemonRequest, DaemonResponse, Envelope, SessionBackend, SessionCommand, SessionResponse,
 };
-use crate::models::Orientation;
+use crate::models::{DisplayInfo, DisplayLayout, Orientation};
 use crate::runtime::{client, compositor, paths, session, state::RuntimeState};
 
 pub async fn run() -> Result<(), String> {
@@ -119,12 +121,14 @@ async fn handle_session_command(stream: UnixStream) -> Result<(), String> {
                     Err(message) => SessionResponse::Error { message },
                 }
             }
-            SessionCommand::SetDockMode { attached, scale } => {
-                match apply_dock_mode(attached, scale) {
-                    Ok(()) => SessionResponse::Ack,
-                    Err(message) => SessionResponse::Error { message },
-                }
-            }
+            SessionCommand::SetDockMode {
+                attached,
+                scale,
+                layout,
+            } => match apply_dock_mode(attached, scale, layout) {
+                Ok(()) => SessionResponse::Ack,
+                Err(message) => SessionResponse::Error { message },
+            },
             SessionCommand::ApplyDisplayLayout { layout } => {
                 match crate::hardware::display_config::apply_display_layout(&layout) {
                     Ok(()) => SessionResponse::Ack,
@@ -266,19 +270,95 @@ where
     }
 }
 
-fn apply_dock_mode(attached: bool, scale: f64) -> Result<(), String> {
-    match detect_ready_backend() {
-        SessionBackend::Gnome => apply_gnome_dock_mode(attached, scale),
-        SessionBackend::Kde => apply_kde_dock_mode(attached),
-        SessionBackend::Niri => apply_niri_dock_mode(attached),
-        SessionBackend::Unknown => Err("Unsupported session backend for dock mode".into()),
-    }?;
+fn apply_dock_mode(
+    attached: bool,
+    scale: f64,
+    layout: Option<DisplayLayout>,
+) -> Result<(), String> {
+    if let Some(layout) = layout
+        .or_else(|| crate::hardware::display_config::get_display_layout().ok())
+        .and_then(|layout| dock_layout_from_base(&layout, attached, scale))
+    {
+        crate::hardware::display_config::apply_display_layout(&layout)?;
+    } else {
+        match detect_ready_backend() {
+            SessionBackend::Gnome => apply_gnome_dock_mode(attached, scale),
+            SessionBackend::Kde => apply_kde_dock_mode(attached),
+            SessionBackend::Niri => apply_niri_dock_mode(attached),
+            SessionBackend::Unknown => Err("Unsupported session backend for dock mode".into()),
+        }?;
+    }
 
     if let Err(err) = send_dock_mode_notification(attached) {
         log::warn!("failed to send dock-mode notification: {err}");
     }
 
     Ok(())
+}
+
+fn stacked_logical_height(display: &DisplayInfo) -> i32 {
+    let rotated = display.transform == 90 || display.transform == 270;
+    let physical_height = if rotated {
+        display.width
+    } else {
+        display.height
+    };
+    let scale = display.scale.max(0.1);
+    (physical_height as f64 / scale).ceil() as i32
+}
+
+fn dock_layout_from_base(
+    layout: &DisplayLayout,
+    attached: bool,
+    scale: f64,
+) -> Option<DisplayLayout> {
+    let target_scale = scale.max(0.1);
+    let mut primary = layout
+        .displays
+        .iter()
+        .find(|display| display.connector == PRIMARY_INTERNAL_CONNECTOR)
+        .cloned()
+        .or_else(|| {
+            layout
+                .displays
+                .iter()
+                .find(|display| is_internal_connector(&display.connector))
+                .cloned()
+        })?;
+    primary.scale = target_scale;
+    primary.x = 0;
+    primary.y = 0;
+    primary.primary = true;
+
+    if attached {
+        return Some(DisplayLayout {
+            displays: vec![primary],
+        });
+    }
+
+    let mut secondary = layout
+        .displays
+        .iter()
+        .find(|display| display.connector == SECONDARY_INTERNAL_CONNECTOR)
+        .cloned()
+        .or_else(|| {
+            if primary.connector == SECONDARY_INTERNAL_CONNECTOR {
+                None
+            } else {
+                let mut cloned = primary.clone();
+                cloned.connector = SECONDARY_INTERNAL_CONNECTOR.to_string();
+                cloned.primary = false;
+                Some(cloned)
+            }
+        })?;
+    secondary.scale = target_scale;
+    secondary.x = 0;
+    secondary.y = stacked_logical_height(&primary);
+    secondary.primary = false;
+
+    Some(DisplayLayout {
+        displays: vec![primary, secondary],
+    })
 }
 
 fn gnome_dock_mode_args(attached: bool, scale: f64) -> Vec<String> {
@@ -825,7 +905,8 @@ async fn watch_rotation() -> Result<(), String> {
         if let Some(sensor_orientation) = sensor_orientation_value(&line) {
             let invert_sensor_rotation =
                 crate::commands::settings::load_settings_local().invert_sensor_rotation;
-            match display_orientation_from_sensor_value(sensor_orientation, invert_sensor_rotation) {
+            match display_orientation_from_sensor_value(sensor_orientation, invert_sensor_rotation)
+            {
                 Some(orientation) => {
                     runtime_log_info(format!(
                         "monitor-sensor orientation changed: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}"
@@ -885,7 +966,8 @@ async fn log_monitor_sensor_stderr(stderr: tokio::process::ChildStderr) {
 }
 
 fn parse_rotation_line(line: &str) -> Option<Orientation> {
-    sensor_orientation_value(line).and_then(|value| display_orientation_from_sensor_value(value, false))
+    sensor_orientation_value(line)
+        .and_then(|value| display_orientation_from_sensor_value(value, false))
 }
 
 fn sensor_orientation_value(line: &str) -> Option<&str> {
@@ -894,7 +976,10 @@ fn sensor_orientation_value(line: &str) -> Option<&str> {
         .map(str::trim)
 }
 
-fn display_orientation_from_sensor_value(value: &str, invert_sensor_rotation: bool) -> Option<Orientation> {
+fn display_orientation_from_sensor_value(
+    value: &str,
+    invert_sensor_rotation: bool,
+) -> Option<Orientation> {
     match (value, invert_sensor_rotation) {
         ("left-up", false) => Some(Orientation::Left),
         ("left-up", true) => Some(Orientation::Right),
@@ -909,6 +994,7 @@ fn display_orientation_from_sensor_value(value: &str, invert_sensor_rotation: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{DisplayMode, RefreshPolicy};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -997,6 +1083,31 @@ mod tests {
 
         drop(listener);
         let _ = fs::remove_file(&socket_path);
+    }
+
+    #[test]
+    fn dock_layout_reuses_existing_refresh_modes_for_attached_replay() {
+        let layout = dual_internal_layout(120.0);
+        let docked = dock_layout_from_base(&layout, true, 1.5).expect("dock layout");
+
+        assert_eq!(docked.displays.len(), 1);
+        assert_eq!(docked.displays[0].connector, PRIMARY_INTERNAL_CONNECTOR);
+        assert_eq!(docked.displays[0].current_mode.refresh_rate, 120.0);
+        assert_eq!(docked.displays[0].scale, 1.5);
+    }
+
+    #[test]
+    fn dock_layout_clones_primary_mode_for_missing_secondary_panel() {
+        let layout = DisplayLayout {
+            displays: vec![display(PRIMARY_INTERNAL_CONNECTOR, 120.0, 0, 0, true)],
+        };
+        let docked = dock_layout_from_base(&layout, false, 1.25).expect("dock layout");
+
+        assert_eq!(docked.displays.len(), 2);
+        assert_eq!(docked.displays[1].connector, SECONDARY_INTERNAL_CONNECTOR);
+        assert_eq!(docked.displays[1].current_mode.refresh_rate, 120.0);
+        assert_eq!(docked.displays[1].scale, 1.25);
+        assert_eq!(docked.displays[1].y, 960);
     }
 
     #[test]
@@ -1165,6 +1276,41 @@ mod tests {
 
         assert_eq!(backend, SessionBackend::Kde);
         assert!(attempts >= 3);
+    }
+
+    fn dual_internal_layout(refresh_rate: f64) -> DisplayLayout {
+        DisplayLayout {
+            displays: vec![
+                display(PRIMARY_INTERNAL_CONNECTOR, refresh_rate, 0, 0, true),
+                display(SECONDARY_INTERNAL_CONNECTOR, refresh_rate, 0, 1200, false),
+            ],
+        }
+    }
+
+    fn display(connector: &str, refresh_rate: f64, x: i32, y: i32, primary: bool) -> DisplayInfo {
+        let mode = DisplayMode {
+            mode_id: format!("1920x1200@{refresh_rate}"),
+            backend_mode_id: None,
+            width: 1920,
+            height: 1200,
+            refresh_rate,
+        };
+
+        DisplayInfo {
+            connector: connector.to_string(),
+            width: mode.width,
+            height: mode.height,
+            refresh_rate: mode.refresh_rate,
+            scale: 1.0,
+            x,
+            y,
+            transform: 0,
+            primary,
+            current_mode: mode.clone(),
+            available_modes: vec![mode],
+            refresh_policy: RefreshPolicy::Fixed,
+            supports_dynamic_refresh: false,
+        }
     }
 
     fn unique_test_socket_path(label: &str) -> PathBuf {

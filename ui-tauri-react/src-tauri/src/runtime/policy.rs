@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use crate::models::{DuoStatus, EventCategory, HardwareEvent};
+use crate::models::{ConnectionType, DuoStatus, EventCategory, HardwareEvent};
 use crate::runtime::state::RuntimeState;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,21 +16,23 @@ pub fn apply_transition_policy(
     previous: &DuoStatus,
 ) -> Vec<PolicyAction> {
     let mut actions = Vec::new();
+    let was_attached = display_mode_attached(previous);
+    let is_attached = display_mode_attached(&state.status);
 
-    if previous.keyboard_attached == state.status.keyboard_attached {
-        if state.status.keyboard_attached {
+    if was_attached == is_attached {
+        if is_attached {
             state.remembered_wifi_enabled = Some(state.status.wifi_enabled);
             state.remembered_bluetooth_enabled = Some(state.status.bluetooth_enabled);
         }
         return actions;
     }
 
-    if !state.status.keyboard_attached {
+    if !is_attached {
         state.remembered_wifi_enabled = Some(previous.wifi_enabled);
         state.remembered_bluetooth_enabled = Some(previous.bluetooth_enabled);
     }
 
-    if state.status.keyboard_attached {
+    if is_attached {
         if let Some(wifi_enabled) = state.remembered_wifi_enabled {
             actions.push(PolicyAction::SetWifi(wifi_enabled));
             state.recent_events.push(HardwareEvent::info(
@@ -84,6 +86,10 @@ pub fn apply_transition_policy(
     }
 
     actions
+}
+
+fn display_mode_attached(status: &DuoStatus) -> bool {
+    matches!(status.connection_type, ConnectionType::Usb)
 }
 
 pub fn set_wifi_enabled(enabled: bool) -> Result<(), String> {
@@ -155,6 +161,23 @@ mod tests {
         assert!(attach_actions.contains(&PolicyAction::SetBluetooth(false)));
         assert!(!state.status.wifi_enabled);
         assert!(!state.status.bluetooth_enabled);
+    }
+
+    #[test]
+    fn bluetooth_only_transition_does_not_replay_display_mode() {
+        let mut state = RuntimeState {
+            status: DuoStatus {
+                keyboard_attached: false,
+                connection_type: ConnectionType::Bluetooth,
+                ..status(false, true, true)
+            },
+            ..RuntimeState::default()
+        };
+        let previous = status(false, true, true);
+
+        let actions = apply_transition_policy(&mut state, &previous);
+
+        assert!(actions.is_empty());
     }
 
     #[test]

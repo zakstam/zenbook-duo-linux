@@ -653,7 +653,14 @@ async fn replay_current_display_mode_with_disconnect(
         .await;
     }
 
-    replay_current_dock_mode_with_disconnect(state, attached, scale, disconnect_on_failure).await
+    replay_current_dock_mode_with_disconnect(
+        state,
+        attached,
+        scale,
+        fallback_saved_layout(state).await,
+        disconnect_on_failure,
+    )
+    .await
 }
 
 pub(crate) async fn handle_lid_closed_change(
@@ -901,15 +908,24 @@ async fn active_external_display_connected(
         .is_some_and(layout_has_external_display)
 }
 
+async fn fallback_saved_layout(state: &Arc<RwLock<RuntimeState>>) -> Option<DisplayLayout> {
+    state.read().await.settings.saved_display_layout.clone()
+}
+
 async fn replay_current_dock_mode_with_disconnect(
     state: &Arc<RwLock<RuntimeState>>,
     attached: bool,
     scale: f64,
+    layout: Option<DisplayLayout>,
     disconnect_on_failure: bool,
 ) -> Result<(), String> {
     forward_session_command_with_disconnect(
         state,
-        SessionCommand::SetDockMode { attached, scale },
+        SessionCommand::SetDockMode {
+            attached,
+            scale,
+            layout,
+        },
         disconnect_on_failure,
     )
     .await
@@ -1350,9 +1366,14 @@ mod tests {
             let envelope: Envelope<SessionCommand> =
                 serde_json::from_str(&line).expect("decode session request");
             match envelope.payload {
-                SessionCommand::SetDockMode { attached, scale } => {
+                SessionCommand::SetDockMode {
+                    attached,
+                    scale,
+                    layout,
+                } => {
                     assert!(!attached);
                     assert_eq!(scale, 1.66);
+                    assert!(layout.is_none());
                 }
                 other => panic!("unexpected session command: {other:?}"),
             }
@@ -1428,6 +1449,65 @@ mod tests {
             guard.status.keyboard_attached = false;
             guard.settings.default_scale = 1.66;
             guard.settings.saved_display_layout = Some(saved_layout);
+        }
+
+        handle_session_registration(
+            &state,
+            "test-session".into(),
+            SessionBackend::Gnome,
+            socket_path.to_string_lossy().into_owned(),
+        )
+        .await
+        .expect("registration should succeed");
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn session_registration_passes_saved_layout_through_dock_replay_when_mode_shape_differs()
+    {
+        let socket_path = unique_test_socket_path("register-fallback-layout");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read test request")
+                .expect("session request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode session request");
+            match envelope.payload {
+                SessionCommand::SetDockMode {
+                    attached,
+                    scale,
+                    layout,
+                } => {
+                    assert!(attached);
+                    assert_eq!(scale, 1.5);
+                    let layout = layout.expect("fallback layout should be forwarded");
+                    assert_eq!(layout.displays.len(), 2);
+                    assert_eq!(layout.displays[0].current_mode.refresh_rate, 120.0);
+                    assert_eq!(layout.displays[1].current_mode.refresh_rate, 120.0);
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.status.keyboard_attached = true;
+            guard.settings.default_scale = 1.5;
+            guard.settings.saved_display_layout = Some(dual_display_layout_with_refresh(120.0));
         }
 
         handle_session_registration(
@@ -1653,9 +1733,14 @@ mod tests {
             let envelope: Envelope<SessionCommand> =
                 serde_json::from_str(&line).expect("decode replay request");
             match envelope.payload {
-                SessionCommand::SetDockMode { attached, scale } => {
+                SessionCommand::SetDockMode {
+                    attached,
+                    scale,
+                    layout,
+                } => {
                     assert!(attached);
                     assert_eq!(scale, 1.5);
+                    assert!(layout.is_none());
                 }
                 other => panic!("unexpected session command: {other:?}"),
             }
@@ -1918,6 +2003,7 @@ mod tests {
                 SessionCommand::SetDockMode {
                     attached: true,
                     scale: 1.66,
+                    layout: None,
                 },
             ),
         )
@@ -1973,9 +2059,14 @@ mod tests {
         let envelope: Envelope<SessionCommand> =
             serde_json::from_str(&line).expect("decode session request");
         match envelope.payload {
-            SessionCommand::SetDockMode { attached, scale } => {
+            SessionCommand::SetDockMode {
+                attached,
+                scale,
+                layout,
+            } => {
                 assert!(attached);
                 assert_eq!(scale, 1.5);
+                assert!(layout.is_none());
             }
             other => panic!("unexpected session command: {other:?}"),
         }
@@ -2007,9 +2098,14 @@ mod tests {
             let envelope: Envelope<SessionCommand> =
                 serde_json::from_str(&line).expect("decode session request");
             match envelope.payload {
-                SessionCommand::SetDockMode { attached, scale } => {
+                SessionCommand::SetDockMode {
+                    attached,
+                    scale,
+                    layout,
+                } => {
                     assert!(attached);
                     assert_eq!(scale, 2.0);
+                    assert!(layout.is_none());
                 }
                 other => panic!("unexpected session command: {other:?}"),
             }
@@ -2066,9 +2162,14 @@ mod tests {
             let envelope: Envelope<SessionCommand> =
                 serde_json::from_str(&line).expect("decode session request");
             match envelope.payload {
-                SessionCommand::SetDockMode { attached, scale } => {
+                SessionCommand::SetDockMode {
+                    attached,
+                    scale,
+                    layout,
+                } => {
                     assert!(attached);
                     assert_eq!(scale, 1.25);
+                    assert!(layout.is_none());
                 }
                 other => panic!("unexpected session command: {other:?}"),
             }
@@ -2305,10 +2406,14 @@ mod tests {
     }
 
     fn dual_display_layout() -> DisplayLayout {
+        dual_display_layout_with_refresh(60.0)
+    }
+
+    fn dual_display_layout_with_refresh(refresh_rate: f64) -> DisplayLayout {
         DisplayLayout {
             displays: vec![
-                display(PRIMARY_INTERNAL_CONNECTOR, 0, 0, true),
-                display(SECONDARY_INTERNAL_CONNECTOR, 0, 1200, false),
+                display_with_refresh(PRIMARY_INTERNAL_CONNECTOR, 0, 0, true, refresh_rate),
+                display_with_refresh(SECONDARY_INTERNAL_CONNECTOR, 0, 1200, false, refresh_rate),
             ],
         }
     }
@@ -2324,12 +2429,22 @@ mod tests {
     }
 
     fn display(connector: &str, x: i32, y: i32, primary: bool) -> DisplayInfo {
+        display_with_refresh(connector, x, y, primary, 60.0)
+    }
+
+    fn display_with_refresh(
+        connector: &str,
+        x: i32,
+        y: i32,
+        primary: bool,
+        refresh_rate: f64,
+    ) -> DisplayInfo {
         let mode = DisplayMode {
-            mode_id: format!("{connector}-mode"),
+            mode_id: format!("{connector}-mode-{refresh_rate}"),
             backend_mode_id: None,
             width: 1920,
             height: 1200,
-            refresh_rate: 60.0,
+            refresh_rate,
         };
 
         DisplayInfo {
