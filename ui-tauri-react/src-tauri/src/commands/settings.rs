@@ -122,3 +122,85 @@ pub fn save_settings(settings: DuoSettings) -> Result<(), String> {
         Ok(DaemonResponse::Ack) | Ok(DaemonResponse::Error { .. }) | Ok(_) | Err(_) => Ok(()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct TestHome {
+        path: PathBuf,
+        previous_home: Option<String>,
+    }
+
+    impl TestHome {
+        fn new() -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock before unix epoch")
+                .as_nanos();
+            let path = env::temp_dir().join(format!(
+                "zenbook-duo-settings-test-{}-{unique}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("create test home");
+            let previous_home = env::var("ZENBOOK_DUO_HOME").ok();
+            env::set_var("ZENBOOK_DUO_HOME", &path);
+            Self { path, previous_home }
+        }
+    }
+
+    impl Drop for TestHome {
+        fn drop(&mut self) {
+            if let Some(previous_home) = &self.previous_home {
+                env::set_var("ZENBOOK_DUO_HOME", previous_home);
+            } else {
+                env::remove_var("ZENBOOK_DUO_HOME");
+            }
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn local_settings_roundtrip_preserves_issue_17_switch_fields() {
+        let _guard = env_lock().lock().expect("settings env lock");
+        let _home = TestHome::new();
+        let mut settings = DuoSettings::default();
+        settings.start_on_boot_minimized = true;
+        settings.invert_sensor_rotation = true;
+        settings.setup_completed = true;
+
+        save_settings_local(settings).expect("save settings");
+        let loaded = load_settings_local();
+
+        assert!(loaded.start_on_boot_minimized);
+        assert!(loaded.invert_sensor_rotation);
+        assert!(loaded.setup_completed);
+    }
+
+    #[test]
+    fn load_settings_uses_autostart_file_as_start_on_boot_source_of_truth() {
+        let _guard = env_lock().lock().expect("settings env lock");
+        let _home = TestHome::new();
+        let mut settings = DuoSettings::default();
+        settings.start_on_boot_minimized = true;
+        settings.invert_sensor_rotation = true;
+
+        save_settings_local(settings).expect("save settings");
+        assert!(!load_settings().start_on_boot_minimized);
+
+        let path = autostart_path();
+        fs::create_dir_all(path.parent().expect("autostart parent")).expect("create autostart dir");
+        fs::write(&path, "[Desktop Entry]\nType=Application\n").expect("write autostart file");
+
+        let loaded = load_settings();
+        assert!(loaded.start_on_boot_minimized);
+        assert!(loaded.invert_sensor_rotation);
+    }
+}

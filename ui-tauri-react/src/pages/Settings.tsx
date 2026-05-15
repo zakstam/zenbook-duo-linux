@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore, useDispatch, refreshSettings } from "@/lib/store";
-import { saveSettings } from "@/lib/tauri";
+import { loadSettings, saveSettings } from "@/lib/tauri";
 import type { DuoSettings, ThemePreference } from "@/types/duo";
 import { resolveThemeForPreference } from "@/lib/theme";
 import { useTheme } from "next-themes";
@@ -25,6 +25,9 @@ export default function Settings() {
   const dispatch = useDispatch();
   const { setTheme } = useTheme();
   const [saving, setSaving] = useState(false);
+  const [autosavingSwitch, setAutosavingSwitch] = useState<
+    Partial<Record<"startOnBootMinimized" | "invertSensorRotation", boolean>>
+  >({});
   const [localSettings, setLocalSettings] = useState<DuoSettings>({
     ...store.settings,
   });
@@ -54,6 +57,33 @@ export default function Settings() {
   const updateLocal = (key: keyof DuoSettings, value: unknown) => {
     setSettingsDirty(true);
     setLocalSettings((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const saveSwitchSetting = async (
+    key: "startOnBootMinimized" | "invertSensorRotation",
+    value: boolean,
+    successMessage: string,
+  ) => {
+    const previousSettings = localSettings;
+    const nextSettings = { ...localSettings, [key]: value };
+    const hadOtherDraftChanges = settingsDirty;
+
+    setLocalSettings(nextSettings);
+    setAutosavingSwitch((prev) => ({ ...prev, [key]: true }));
+
+    try {
+      const persistedSettings = await loadSettings();
+      await saveSettings({ ...persistedSettings, [key]: value });
+      await refreshSettings(dispatch);
+      setSettingsDirty(hadOtherDraftChanges);
+      toast.success(successMessage);
+    } catch (err) {
+      console.error(`Failed to save ${key}:`, err);
+      setLocalSettings(previousSettings);
+      toast.error("Failed to save setting");
+    } finally {
+      setAutosavingSwitch((prev) => ({ ...prev, [key]: false }));
+    }
   };
 
   const handleSave = async () => {
@@ -163,7 +193,14 @@ export default function Settings() {
           >
             <Switch
               checked={localSettings.startOnBootMinimized}
-              onCheckedChange={(checked) => updateLocal("startOnBootMinimized", checked)}
+              onCheckedChange={(checked) =>
+                void saveSwitchSetting(
+                  "startOnBootMinimized",
+                  checked,
+                  checked ? "Start on boot enabled" : "Start on boot disabled",
+                )
+              }
+              disabled={autosavingSwitch.startOnBootMinimized}
             />
           </SettingRow>
         </div>
@@ -185,7 +222,14 @@ export default function Settings() {
         >
           <Switch
             checked={localSettings.invertSensorRotation}
-            onCheckedChange={(checked) => updateLocal("invertSensorRotation", checked)}
+            onCheckedChange={(checked) =>
+              void saveSwitchSetting(
+                "invertSensorRotation",
+                checked,
+                checked ? "Sensor rotation flipped" : "Sensor rotation restored",
+              )
+            }
+            disabled={autosavingSwitch.invertSensorRotation}
           />
         </SettingRow>
       </div>
