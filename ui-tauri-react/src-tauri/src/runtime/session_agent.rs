@@ -844,14 +844,31 @@ fn append_runtime_log(line: String) {
 
 async fn supervise_rotation_watcher() {
     let mut notified_failure = false;
+    let mut consecutive_accelerometer_timeouts = 0;
 
     loop {
-        match watch_rotation().await {
-            Ok(()) => runtime_log_warn(format!(
-                "rotation watcher exited cleanly; restarting in {}s",
-                rotation_watcher_restart_delay().as_secs()
-            )),
+        let restart_delay = match watch_rotation().await {
+            Ok(RotationWatchExit::Clean) => {
+                consecutive_accelerometer_timeouts = 0;
+                runtime_log_warn(format!(
+                    "rotation watcher exited cleanly; restarting in {}s",
+                    rotation_watcher_restart_delay().as_secs()
+                ));
+                rotation_watcher_restart_delay()
+            }
+            Ok(RotationWatchExit::AccelerometerClaimTimeout) => {
+                consecutive_accelerometer_timeouts += 1;
+                let delay = rotation_watcher_accelerometer_timeout_delay(
+                    consecutive_accelerometer_timeouts,
+                );
+                runtime_log_warn(format!(
+                    "monitor-sensor could not claim accelerometer; retrying in {}s",
+                    delay.as_secs()
+                ));
+                delay
+            }
             Err(err) => {
+                consecutive_accelerometer_timeouts = 0;
                 runtime_log_warn(format!(
                     "rotation watcher failed: {err}; restarting in {}s",
                     rotation_watcher_restart_delay().as_secs()
@@ -864,18 +881,35 @@ async fn supervise_rotation_watcher() {
                     );
                     notified_failure = true;
                 }
+                rotation_watcher_restart_delay()
             }
-        }
+        };
 
-        tokio::time::sleep(rotation_watcher_restart_delay()).await;
+        tokio::time::sleep(restart_delay).await;
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RotationWatchExit {
+    Clean,
+    AccelerometerClaimTimeout,
+}
+
+#[derive(Debug, Default)]
+struct MonitorSensorStderrSummary {
+    accelerometer_claim_timeout: bool,
 }
 
 fn rotation_watcher_restart_delay() -> Duration {
     Duration::from_secs(2)
 }
 
-async fn watch_rotation() -> Result<(), String> {
+fn rotation_watcher_accelerometer_timeout_delay(consecutive_timeouts: u32) -> Duration {
+    let exponent = consecutive_timeouts.saturating_sub(1).min(4);
+    Duration::from_secs(30 * 2_u64.pow(exponent))
+}
+
+async fn watch_rotation() -> Result<RotationWatchExit, String> {
     let mut child = TokioCommand::new("monitor-sensor")
         .arg("--accel")
         .stdout(std::process::Stdio::piped())
@@ -935,26 +969,44 @@ async fn watch_rotation() -> Result<(), String> {
         .wait()
         .await
         .map_err(|e| format!("Failed waiting for monitor-sensor: {e}"))?;
-    if let Err(err) = stderr_task.await {
-        runtime_log_warn(format!("monitor-sensor stderr logger task failed: {err}"));
-    }
+    let stderr_summary = match stderr_task.await {
+        Ok(summary) => summary,
+        Err(err) => {
+            runtime_log_warn(format!("monitor-sensor stderr logger task failed: {err}"));
+            MonitorSensorStderrSummary::default()
+        }
+    };
 
     if status.success() {
-        Ok(())
+        if stderr_summary.accelerometer_claim_timeout {
+            Ok(RotationWatchExit::AccelerometerClaimTimeout)
+        } else {
+            Ok(RotationWatchExit::Clean)
+        }
     } else {
         Err(format!("monitor-sensor exited with status {status}"))
     }
 }
 
-async fn log_monitor_sensor_stderr(stderr: tokio::process::ChildStderr) {
+async fn log_monitor_sensor_stderr(
+    stderr: tokio::process::ChildStderr,
+) -> MonitorSensorStderrSummary {
     let mut lines = BufReader::new(stderr).lines();
+    let mut summary = MonitorSensorStderrSummary::default();
     loop {
         match lines.next_line().await {
             Ok(Some(line)) => {
                 let line = line.trim();
-                if !line.is_empty() {
-                    runtime_log_warn(format!("monitor-sensor stderr: {line}"));
+                if line.is_empty() {
+                    continue;
                 }
+
+                if monitor_sensor_accelerometer_claim_timeout(line) {
+                    summary.accelerometer_claim_timeout = true;
+                    continue;
+                }
+
+                runtime_log_warn(format!("monitor-sensor stderr: {line}"));
             }
             Ok(None) => break,
             Err(err) => {
@@ -963,6 +1015,11 @@ async fn log_monitor_sensor_stderr(stderr: tokio::process::ChildStderr) {
             }
         }
     }
+    summary
+}
+
+fn monitor_sensor_accelerometer_claim_timeout(line: &str) -> bool {
+    line.contains("Failed to claim accelerometer") && line.contains("Timeout was reached")
 }
 
 fn parse_rotation_line(line: &str) -> Option<Orientation> {
@@ -1029,6 +1086,39 @@ mod tests {
         let delay = rotation_watcher_restart_delay();
         assert!(delay >= Duration::from_secs(1));
         assert!(delay <= Duration::from_secs(5));
+    }
+
+    #[test]
+    fn accelerometer_claim_timeouts_use_bounded_backoff() {
+        assert_eq!(
+            rotation_watcher_accelerometer_timeout_delay(1),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            rotation_watcher_accelerometer_timeout_delay(2),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            rotation_watcher_accelerometer_timeout_delay(5),
+            Duration::from_secs(480)
+        );
+        assert_eq!(
+            rotation_watcher_accelerometer_timeout_delay(20),
+            Duration::from_secs(480)
+        );
+    }
+
+    #[test]
+    fn recognizes_monitor_sensor_accelerometer_claim_timeout() {
+        assert!(monitor_sensor_accelerometer_claim_timeout(
+            "** (monitor-sensor:3388909): WARNING **: Failed to claim accelerometer: Timeout was reached"
+        ));
+        assert!(!monitor_sensor_accelerometer_claim_timeout(
+            "** (monitor-sensor:3388909): WARNING **: Failed to claim light sensor: Timeout was reached"
+        ));
+        assert!(!monitor_sensor_accelerometer_claim_timeout(
+            "Accelerometer orientation changed: normal"
+        ));
     }
 
     #[test]

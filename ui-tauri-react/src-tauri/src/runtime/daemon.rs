@@ -684,7 +684,7 @@ pub(crate) async fn handle_lid_closed_change(
         return Ok(());
     };
 
-    let result = apply_lid_display_state(state, lid_closed, attached, scale).await;
+    let result = apply_lid_display_state(state, lid_closed, attached, scale, true).await;
     if let Err(err) = &result {
         if is_display_session_deferral(err) {
             queue_lid_display_retry(state.clone(), lid_closed);
@@ -726,20 +726,26 @@ async fn apply_lid_display_state(
     lid_closed: bool,
     attached: bool,
     scale: f64,
+    log_transition: bool,
 ) -> Result<(), String> {
     if lid_closed {
         if apply_external_only_clamshell_layout(state, false).await? {
-            let _ = logger::append_line(
-                "rust-daemon: lid closed with external display; applied external-only layout",
-            );
-        } else {
+            if log_transition {
+                let _ = logger::append_line(
+                    "rust-daemon: lid closed with external display; applied external-only layout",
+                );
+            }
+        } else if log_transition {
             let _ = logger::append_line(
                 "rust-daemon: lid closed without an active external display; no display layout change applied",
             );
         }
         Ok(())
     } else {
-        let _ = logger::append_line("rust-daemon: lid opened; replaying current dock display mode");
+        if log_transition {
+            let _ =
+                logger::append_line("rust-daemon: lid opened; replaying current dock display mode");
+        }
         replay_current_display_mode_with_disconnect(state, attached, scale, false).await
     }
 }
@@ -767,7 +773,7 @@ fn queue_lid_display_retry(state: Arc<RwLock<RuntimeState>>, lid_closed: bool) {
                 return;
             }
 
-            match apply_lid_display_state(&state, lid_closed, attached, scale).await {
+            match apply_lid_display_state(&state, lid_closed, attached, scale, false).await {
                 Ok(()) => {
                     let _ = logger::append_line(format!(
                         "rust-daemon: lid display retry succeeded on attempt {attempt}"

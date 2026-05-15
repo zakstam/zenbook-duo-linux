@@ -74,17 +74,35 @@ mod tests {
 
     #[test]
     fn parses_portal_color_scheme() {
-        assert_eq!(parse_portal_color_scheme("(<<uint32 1>>,)"), Some(ThemePreference::Dark));
-        assert_eq!(parse_portal_color_scheme("(<<uint32 0>>,)"), Some(ThemePreference::Light));
-        assert_eq!(parse_portal_color_scheme("(<<uint32 2>>,)"), Some(ThemePreference::Light));
+        assert_eq!(
+            parse_portal_color_scheme("(<<uint32 1>>,)"),
+            Some(ThemePreference::Dark)
+        );
+        assert_eq!(
+            parse_portal_color_scheme("(<<uint32 0>>,)"),
+            Some(ThemePreference::Light)
+        );
+        assert_eq!(
+            parse_portal_color_scheme("(<<uint32 2>>,)"),
+            Some(ThemePreference::Light)
+        );
         assert_eq!(parse_portal_color_scheme(""), None);
     }
 
     #[test]
     fn parses_gsettings_color_scheme() {
-        assert_eq!(parse_gsettings_color_scheme("'prefer-dark'"), Some(ThemePreference::Dark));
-        assert_eq!(parse_gsettings_color_scheme("'prefer-light'"), Some(ThemePreference::Light));
-        assert_eq!(parse_gsettings_color_scheme("'default'"), Some(ThemePreference::Light));
+        assert_eq!(
+            parse_gsettings_color_scheme("'prefer-dark'"),
+            Some(ThemePreference::Dark)
+        );
+        assert_eq!(
+            parse_gsettings_color_scheme("'prefer-light'"),
+            Some(ThemePreference::Light)
+        );
+        assert_eq!(
+            parse_gsettings_color_scheme("'default'"),
+            Some(ThemePreference::Light)
+        );
         assert_eq!(parse_gsettings_color_scheme("''"), None);
     }
 }
