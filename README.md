@@ -134,6 +134,12 @@ Contributor note: the desktop setup scripts are thin wrappers around `setup-comm
 
 ### Contributor compatibility checks
 
+Use the version bump helper when preparing a release:
+
+```bash
+./bump-version.sh patch    # or minor, major, or an explicit version like 0.3.4
+```
+
 Use the root check script before changing installer, runtime, or UI behavior:
 
 ```bash

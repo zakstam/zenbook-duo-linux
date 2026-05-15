@@ -535,7 +535,7 @@ async fn refresh_lifecycle_display_mode(
 ) -> Result<(), String> {
     match replay_current_display_mode_with_disconnect(state, attached, scale, false).await {
         Ok(()) => Ok(()),
-        Err(err) if is_lid_display_deferral(&err) => {
+        Err(err) if is_display_session_deferral(&err) => {
             logger::append_line(format!(
                 "rust-daemon: lifecycle dock refresh deferred: {}",
                 err
@@ -586,6 +586,15 @@ async fn handle_session_registration(
     let state = Arc::clone(state);
     tokio::spawn(async move {
         if let Err(err) = replay_current_display_mode(&state, attached, scale).await {
+            if is_display_session_deferral(&err) {
+                let _ = logger::append_line(format!(
+                    "rust-daemon: session registration dock replay deferred: {}",
+                    err
+                ));
+                queue_lifecycle_display_retry(state.clone(), attached, scale);
+                return;
+            }
+
             log::warn!("session registration dock replay failed: {err}");
             notify_runtime_error(
                 &state,
@@ -671,7 +680,7 @@ pub(crate) async fn handle_lid_closed_change(
 
     let result = apply_lid_display_state(state, lid_closed, attached, scale).await;
     if let Err(err) = &result {
-        if is_lid_display_deferral(err) {
+        if is_display_session_deferral(err) {
             queue_lid_display_retry(state.clone(), lid_closed);
         }
     }
@@ -755,7 +764,7 @@ fn queue_lid_display_retry(state: Arc<RwLock<RuntimeState>>, lid_closed: bool) {
                     ));
                     return;
                 }
-                Err(err) if is_lid_display_deferral(&err) => {
+                Err(err) if is_display_session_deferral(&err) => {
                     let _ = logger::append_line(format!(
                         "rust-daemon: lid display retry deferred on attempt {attempt}: {err}"
                     ));
@@ -788,7 +797,7 @@ fn queue_lifecycle_display_retry(state: Arc<RwLock<RuntimeState>>, attached: boo
                     ));
                     return;
                 }
-                Err(err) if is_lid_display_deferral(&err) => {
+                Err(err) if is_display_session_deferral(&err) => {
                     let _ = logger::append_line(format!(
                         "rust-daemon: lifecycle dock refresh retry deferred on attempt {attempt}: {err}"
                     ));
@@ -805,11 +814,18 @@ fn queue_lifecycle_display_retry(state: Arc<RwLock<RuntimeState>>, attached: boo
     });
 }
 
-pub(crate) fn is_lid_display_deferral(message: &str) -> bool {
+pub(crate) fn is_display_session_deferral(message: &str) -> bool {
     message == "No session agent registered"
         || message.starts_with("Timed out ")
         || message.starts_with("Failed to connect to session agent")
         || message == "Session agent closed before replying"
+        || is_niri_socket_refused(message)
+}
+
+fn is_niri_socket_refused(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("error connecting to the niri socket")
+        && message.contains("connection refused")
 }
 
 async fn apply_external_only_clamshell_layout(
@@ -1172,7 +1188,7 @@ async fn mark_session_agent_disconnected(state: &Arc<RwLock<RuntimeState>>, reas
 }
 
 fn should_notify_session_agent_disconnect(reason: &str) -> bool {
-    !is_lid_display_deferral(reason)
+    !is_display_session_deferral(reason)
 }
 
 pub(crate) async fn notify_runtime_error(
@@ -1201,13 +1217,22 @@ fn should_notify_runtime_error(title: &str, message: &str) -> bool {
         return true;
     }
 
-    !matches!(
-        message,
-        "Lifecycle dock refresh skipped: No session agent registered"
-            | "Display-mode policy action failed: No session agent registered"
-            | "Lifecycle dock refresh skipped: Timed out waiting for session response"
-            | "Display-mode policy action failed: Timed out waiting for session response"
-    )
+    !runtime_error_is_display_session_deferral(message)
+}
+
+fn runtime_error_is_display_session_deferral(message: &str) -> bool {
+    [
+        "Lifecycle dock refresh skipped: ",
+        "Display-mode policy action failed: ",
+        "Session registration dock replay skipped: ",
+        "Lid state display update failed: ",
+    ]
+    .iter()
+    .any(|prefix| {
+        message
+            .strip_prefix(prefix)
+            .is_some_and(is_display_session_deferral)
+    })
 }
 
 async fn should_emit_runtime_notification(
@@ -1299,6 +1324,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+    const NIRI_SOCKET_REFUSED: &str = "Error: error connecting to the niri socket\n\nCaused by:\n    Connection refused (os error 111)";
 
     #[tokio::test]
     async fn apply_orientation_does_not_deadlock_and_updates_state() {
@@ -1520,6 +1547,90 @@ mod tests {
         .expect("registration should succeed");
 
         server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn niri_socket_refused_session_registration_replay_defers_and_retries() {
+        let socket_path = unique_test_socket_path("register-niri-refused");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept initial replay command");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read initial replay command")
+                .expect("initial replay command line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode initial replay command");
+            assert!(matches!(
+                envelope.payload,
+                SessionCommand::SetDockMode { .. }
+            ));
+            let reply = serde_json::to_string(&Envelope::new(SessionResponse::Error {
+                message: NIRI_SOCKET_REFUSED.into(),
+            }))
+            .expect("encode niri refusal response");
+            writer
+                .write_all(reply.as_bytes())
+                .await
+                .expect("write niri refusal response");
+            writer
+                .write_all(b"\n")
+                .await
+                .expect("terminate niri refusal response");
+
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept retry replay command");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read retry replay command")
+                .expect("retry replay command line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode retry replay command");
+            assert!(matches!(
+                envelope.payload,
+                SessionCommand::SetDockMode { .. }
+            ));
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.status.keyboard_attached = true;
+            guard.settings.default_scale = 1.5;
+        }
+
+        handle_session_registration(
+            &state,
+            "test-session".into(),
+            SessionBackend::Niri,
+            socket_path.to_string_lossy().into_owned(),
+        )
+        .await
+        .expect("registration should succeed");
+
+        assert!(state.read().await.session_agent.connected);
+
+        timeout(Duration::from_secs(3), server)
+            .await
+            .expect("registration replay retry should finish")
+            .expect("join retry server");
         let _ = fs::remove_file(&socket_path);
     }
 
@@ -1785,7 +1896,7 @@ mod tests {
         let result = handle_lid_closed_change(&state, true).await;
 
         assert_eq!(result, Err("No session agent registered".into()));
-        assert!(is_lid_display_deferral(
+        assert!(is_display_session_deferral(
             result.as_ref().expect_err("lid update should defer")
         ));
         let guard = state.read().await;
@@ -1876,7 +1987,7 @@ mod tests {
         .expect("lid close handling should return after the session timeout");
 
         assert_eq!(result, Err("Timed out waiting for session response".into()));
-        assert!(is_lid_display_deferral(
+        assert!(is_display_session_deferral(
             result.as_ref().expect_err("lid update should defer")
         ));
         {
@@ -1888,6 +1999,89 @@ mod tests {
         timeout(Duration::from_secs(5), server)
             .await
             .expect("lid retry should finish")
+            .expect("join retry server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn niri_socket_refused_lifecycle_refresh_defers_without_disconnect_and_retries() {
+        let socket_path = unique_test_socket_path("lifecycle-niri-refused");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept initial display command");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read initial display command")
+                .expect("initial display command line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode initial display command");
+            assert!(matches!(
+                envelope.payload,
+                SessionCommand::SetDockMode { .. }
+            ));
+            let reply = serde_json::to_string(&Envelope::new(SessionResponse::Error {
+                message: NIRI_SOCKET_REFUSED.into(),
+            }))
+            .expect("encode niri refusal response");
+            writer
+                .write_all(reply.as_bytes())
+                .await
+                .expect("write niri refusal response");
+            writer
+                .write_all(b"\n")
+                .await
+                .expect("terminate niri refusal response");
+
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept retry display command");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read retry display command")
+                .expect("retry display command line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode retry display command");
+            assert!(matches!(
+                envelope.payload,
+                SessionCommand::SetDockMode { .. }
+            ));
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.service_active = true;
+        }
+
+        refresh_lifecycle_display_mode(&state, true, 1.66)
+            .await
+            .expect("niri refusal should defer lifecycle refresh");
+
+        let guard = state.read().await;
+        assert!(guard.session_agent.connected);
+        assert!(guard.status.service_active);
+        drop(guard);
+
+        timeout(Duration::from_secs(3), server)
+            .await
+            .expect("lifecycle niri retry should finish")
             .expect("join retry server");
         let _ = fs::remove_file(&socket_path);
     }
@@ -1926,6 +2120,15 @@ mod tests {
 
         server.abort();
         let _ = fs::remove_file(&socket_path);
+    }
+
+    #[test]
+    fn niri_socket_refused_is_display_session_deferral_but_other_compositor_errors_are_not() {
+        assert!(is_display_session_deferral(NIRI_SOCKET_REFUSED));
+        assert!(!is_display_session_deferral("gdctl set failed"));
+        assert!(!is_display_session_deferral(
+            "Dynamic refresh is disabled on Niri because it is unstable on this hardware (eDP-1)"
+        ));
     }
 
     #[test]
@@ -2324,6 +2527,22 @@ mod tests {
         assert!(!should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             "Display-mode policy action failed: Timed out waiting for session response",
+        ));
+        assert!(!should_notify_runtime_error(
+            "Zenbook Duo Runtime Error",
+            &format!("Lifecycle dock refresh skipped: {NIRI_SOCKET_REFUSED}"),
+        ));
+        assert!(!should_notify_runtime_error(
+            "Zenbook Duo Runtime Error",
+            &format!("Display-mode policy action failed: {NIRI_SOCKET_REFUSED}"),
+        ));
+        assert!(!should_notify_runtime_error(
+            "Zenbook Duo Runtime Error",
+            &format!("Session registration dock replay skipped: {NIRI_SOCKET_REFUSED}"),
+        ));
+        assert!(!should_notify_runtime_error(
+            "Zenbook Duo Runtime Error",
+            &format!("Lid state display update failed: {NIRI_SOCKET_REFUSED}"),
         ));
     }
 
