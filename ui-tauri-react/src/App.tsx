@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore, useStoreInit } from "@/lib/store";
 import Sidebar from "@/components/Sidebar";
+import TitleBar from "@/components/TitleBar";
 import Status from "@/pages/Status";
 import Controls from "@/pages/Controls";
 import Settings from "@/pages/Settings";
@@ -86,16 +87,19 @@ export default function App() {
   const PageComponent = pageComponents[currentPage];
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
-      <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Subtle top border accent */}
-        <div className="h-px w-full bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
-        <main className="flex-1 overflow-y-auto px-8 py-7" key={currentPage}>
-          <div className="animate-page-enter mx-auto max-w-4xl">
-            <PageComponent />
-          </div>
-        </main>
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <TitleBar />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Subtle top border accent */}
+          <div className="h-px w-full bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
+          <main className="flex-1 overflow-y-auto px-8 py-7" key={currentPage}>
+            <div className="animate-page-enter mx-auto max-w-4xl">
+              <PageComponent />
+            </div>
+          </main>
+        </div>
       </div>
     </div>
   );
