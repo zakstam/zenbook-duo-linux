@@ -676,7 +676,13 @@ pub(crate) async fn handle_lid_closed_change(
     state: &Arc<RwLock<RuntimeState>>,
     lid_closed: bool,
 ) -> Result<(), String> {
-    let (attached, scale) = record_lid_closed_state(state, lid_closed).await;
+    let Some((attached, scale)) = record_lid_closed_state(state, lid_closed).await else {
+        let _ = logger::append_line(format!(
+            "rust-daemon: ignored duplicate lid {} signal",
+            if lid_closed { "closed" } else { "opened" }
+        ));
+        return Ok(());
+    };
 
     let result = apply_lid_display_state(state, lid_closed, attached, scale).await;
     if let Err(err) = &result {
@@ -690,8 +696,12 @@ pub(crate) async fn handle_lid_closed_change(
 async fn record_lid_closed_state(
     state: &Arc<RwLock<RuntimeState>>,
     lid_closed: bool,
-) -> (bool, f64) {
+) -> Option<(bool, f64)> {
     let mut guard = state.write().await;
+    if guard.lid_closed == lid_closed {
+        return None;
+    }
+
     guard.lid_closed = lid_closed;
     guard.recent_events.push(HardwareEvent::info(
         EventCategory::Display,
@@ -708,7 +718,7 @@ async fn record_lid_closed_state(
     }
     guard.touch();
     persist_state(&guard);
-    (guard.status.keyboard_attached, guard.settings.default_scale)
+    Some((guard.status.keyboard_attached, guard.settings.default_scale))
 }
 
 async fn apply_lid_display_state(
@@ -1825,6 +1835,46 @@ mod tests {
 
         server.await.expect("join session server");
         let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn duplicate_lid_open_signal_is_ignored_without_display_replay() {
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some("/tmp/zenbook-duo-missing-session.sock".into());
+            guard.lid_closed = false;
+            guard.status.keyboard_attached = true;
+            guard.settings.default_scale = 1.5;
+        }
+
+        handle_lid_closed_change(&state, false)
+            .await
+            .expect("duplicate lid-open signal should be ignored");
+
+        let guard = state.read().await;
+        assert!(!guard.lid_closed);
+        assert!(guard.recent_events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn duplicate_lid_closed_signal_is_ignored_without_display_replay() {
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some("/tmp/zenbook-duo-missing-session.sock".into());
+            guard.lid_closed = true;
+        }
+
+        handle_lid_closed_change(&state, true)
+            .await
+            .expect("duplicate lid-closed signal should be ignored");
+
+        let guard = state.read().await;
+        assert!(guard.lid_closed);
+        assert!(guard.recent_events.is_empty());
     }
 
     #[tokio::test]

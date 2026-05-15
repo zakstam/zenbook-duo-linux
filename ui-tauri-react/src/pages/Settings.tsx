@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useStore, useDispatch, refreshSettings } from "@/lib/store";
 import { saveSettings } from "@/lib/tauri";
 import type { DuoSettings, ThemePreference } from "@/types/duo";
+import { resolveThemeForPreference } from "@/lib/theme";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -62,12 +63,7 @@ export default function Settings() {
       await refreshSettings(dispatch);
       setSettingsDirty(false);
 
-      const themeMap: Record<ThemePreference, string> = {
-        system: "system",
-        dark: "dark",
-        light: "light",
-      };
-      setTheme(themeMap[localSettings.theme]);
+      setTheme(await resolveThemeForPreference(localSettings.theme));
 
       toast.success("Settings saved");
     } catch (err) {

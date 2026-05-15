@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   DuoStatus,
   DuoSettings,
+  ThemePreference,
   DisplayLayout,
   Orientation,
   Profile,
@@ -43,6 +44,7 @@ export const restartService = () => invoke<void>("restart_service");
 export const loadSettings = () => invoke<DuoSettings>("load_settings");
 export const saveSettings = (settings: DuoSettings) =>
   invoke<void>("save_settings", { settings });
+export const getSystemTheme = () => invoke<ThemePreference | null>("get_system_theme");
 export const updateSettings = async (
   updater: (settings: DuoSettings) => DuoSettings | void | Promise<DuoSettings | void>,
 ) => {

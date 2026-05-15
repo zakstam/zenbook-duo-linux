@@ -6,8 +6,9 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useDispatch, useStore, refreshSettings } from "@/lib/store";
 import { withDuoSettingsDefaults } from "@/lib/defaults";
+import { resolveThemeForPreference } from "@/lib/theme";
 import { saveSettings, usbMediaRemapStart, usbMediaRemapStop } from "@/lib/tauri";
-import type { DuoSettings, ThemePreference } from "@/types/duo";
+import type { DuoSettings } from "@/types/duo";
 
 export default function Setup() {
   const store = useStore();
@@ -29,12 +30,7 @@ export default function Setup() {
       await saveSettings(next);
 
       // Apply theme immediately (matches behavior in Settings page).
-      const themeMap: Record<ThemePreference, string> = {
-        system: "system",
-        dark: "dark",
-        light: "light",
-      };
-      setTheme(themeMap[next.theme]);
+      setTheme(await resolveThemeForPreference(next.theme));
 
       // Best-effort: start/stop now so the user sees the effect right away.
       try {

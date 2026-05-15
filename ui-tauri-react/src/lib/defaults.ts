@@ -1,4 +1,5 @@
 import type { DuoSettings, DuoStatus } from "@/types/duo";
+import { normalizeThemePreference } from "@/lib/theme";
 
 export const DEFAULT_DUO_STATUS: DuoStatus = {
   keyboardAttached: false,
@@ -31,6 +32,7 @@ export function withDuoSettingsDefaults(settings: Partial<DuoSettings>): DuoSett
   return {
     ...DEFAULT_DUO_SETTINGS,
     ...settings,
+    theme: normalizeThemePreference(settings.theme),
     invertSensorRotation: settings.invertSensorRotation ?? DEFAULT_DUO_SETTINGS.invertSensorRotation,
     touchscreenDisabled: settings.touchscreenDisabled ?? DEFAULT_DUO_SETTINGS.touchscreenDisabled,
     savedDisplayLayout: settings.savedDisplayLayout ?? DEFAULT_DUO_SETTINGS.savedDisplayLayout,

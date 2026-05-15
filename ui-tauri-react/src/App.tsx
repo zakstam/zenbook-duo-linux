@@ -11,6 +11,10 @@ import EventMonitor from "@/pages/EventMonitor";
 import Diagnostics from "@/pages/Diagnostics";
 import Setup from "@/pages/Setup";
 import { useTheme } from "next-themes";
+import {
+  onNativeSystemThemeChanged,
+  resolveThemeForPreference,
+} from "@/lib/theme";
 
 export type Page =
   | "status"
@@ -42,7 +46,37 @@ export default function App() {
 
   useEffect(() => {
     if (store.loading) return;
-    setTheme(store.settings.theme);
+
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    async function applyThemePreference() {
+      const theme = await resolveThemeForPreference(store.settings.theme);
+      if (!cancelled) {
+        setTheme(theme);
+      }
+    }
+
+    void applyThemePreference();
+
+    if (store.settings.theme === "system") {
+      void onNativeSystemThemeChanged((theme) => {
+        if (!cancelled) {
+          setTheme(theme);
+        }
+      }).then((cleanup) => {
+        if (cancelled) {
+          cleanup();
+        } else {
+          unlisten = cleanup;
+        }
+      });
+    }
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, [setTheme, store.loading, store.settings.theme]);
 
   if (!store.loading && !store.settings.setupCompleted) {

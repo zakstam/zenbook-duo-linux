@@ -71,6 +71,7 @@ pub fn run() {
             commands::service::restart_service,
             commands::settings::load_settings,
             commands::settings::save_settings,
+            commands::theme::get_system_theme,
             commands::logs::read_log,
             commands::logs::clear_log,
             commands::profiles::list_profiles,
