@@ -639,7 +639,10 @@ async fn replay_current_display_mode_with_disconnect(
         return Ok(());
     }
 
-    let saved_layout = saved_layout_for_display_mode(state, attached).await;
+    let saved_layout = saved_layout_base(state).await;
+    let exact_saved_layout = saved_layout
+        .clone()
+        .filter(|layout| saved_layout_matches_display_mode(layout, attached));
 
     if active_external_display_connected(state, attached).await
         && saved_layout
@@ -653,7 +656,7 @@ async fn replay_current_display_mode_with_disconnect(
         return Ok(());
     }
 
-    if let Some(layout) = saved_layout {
+    if let Some(layout) = exact_saved_layout {
         return forward_session_command_with_disconnect(
             state,
             SessionCommand::ApplyDisplayLayout { layout },
@@ -666,7 +669,7 @@ async fn replay_current_display_mode_with_disconnect(
         state,
         attached,
         scale,
-        fallback_saved_layout(state).await,
+        saved_layout,
         disconnect_on_failure,
     )
     .await
@@ -885,16 +888,14 @@ fn external_only_layout(layout: &DisplayLayout) -> Option<DisplayLayout> {
     Some(DisplayLayout { displays })
 }
 
-async fn saved_layout_for_display_mode(
-    state: &Arc<RwLock<RuntimeState>>,
-    attached: bool,
-) -> Option<DisplayLayout> {
-    let guard = state.read().await;
-    guard
+async fn saved_layout_base(state: &Arc<RwLock<RuntimeState>>) -> Option<DisplayLayout> {
+    state
+        .read()
+        .await
         .settings
         .saved_display_layout
         .clone()
-        .filter(|layout| saved_layout_matches_display_mode(layout, attached))
+        .filter(|layout| !layout.displays.is_empty())
 }
 
 fn saved_layout_matches_display_mode(layout: &DisplayLayout, attached: bool) -> bool {
@@ -938,10 +939,6 @@ async fn active_external_display_connected(
         .await
         .as_ref()
         .is_some_and(layout_has_external_display)
-}
-
-async fn fallback_saved_layout(state: &Arc<RwLock<RuntimeState>>) -> Option<DisplayLayout> {
-    state.read().await.settings.saved_display_layout.clone()
 }
 
 async fn replay_current_dock_mode_with_disconnect(
@@ -1701,6 +1698,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replay_applies_saved_external_layout_with_refresh_when_external_display_is_active() {
+        let socket_path = unique_test_socket_path("replay-external-saved");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept layout query client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read layout query")
+                .expect("layout query line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode layout query");
+            assert!(matches!(envelope.payload, SessionCommand::GetDisplayLayout));
+            let reply = serde_json::to_string(&Envelope::new(SessionResponse::DisplayLayout {
+                layout: external_display_layout(),
+            }))
+            .expect("encode layout response");
+            writer
+                .write_all(reply.as_bytes())
+                .await
+                .expect("write layout");
+            writer.write_all(b"\n").await.expect("terminate layout");
+
+            let (stream, _) = listener.accept().await.expect("accept layout apply client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read layout apply")
+                .expect("layout apply line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode layout apply");
+            match envelope.payload {
+                SessionCommand::ApplyDisplayLayout { layout } => {
+                    assert_eq!(layout.displays.len(), 3);
+                    let external = layout
+                        .displays
+                        .iter()
+                        .find(|display| display.connector == "HDMI-A-1")
+                        .expect("external display should be preserved");
+                    assert_eq!(external.current_mode.refresh_rate, 144.0);
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.keyboard_attached = false;
+            guard.status.monitor_count = 3;
+            guard.settings.saved_display_layout = Some(external_display_layout_with_refresh(144.0));
+        }
+
+        timeout(
+            Duration::from_secs(1),
+            replay_current_display_mode(&state, false, 1.66),
+        )
+        .await
+        .expect("display replay should not hang")
+        .expect("saved external layout should apply");
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
     async fn lid_close_applies_external_only_layout() {
         let socket_path = unique_test_socket_path("lid-close-external");
         let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
@@ -1884,7 +1958,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lid_open_replays_current_dock_mode() {
+    async fn lid_open_replays_saved_layout_as_refresh_preserving_dock_base() {
         let socket_path = unique_test_socket_path("lid-open-replay");
         let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
 
@@ -1907,7 +1981,10 @@ mod tests {
                 } => {
                     assert!(attached);
                     assert_eq!(scale, 1.5);
-                    assert!(layout.is_none());
+                    let layout = layout.expect("saved layout should be forwarded as dock base");
+                    assert_eq!(layout.displays.len(), 2);
+                    assert_eq!(layout.displays[0].current_mode.refresh_rate, 120.0);
+                    assert_eq!(layout.displays[1].current_mode.refresh_rate, 120.0);
                 }
                 other => panic!("unexpected session command: {other:?}"),
             }
@@ -1925,6 +2002,7 @@ mod tests {
             guard.lid_closed = true;
             guard.status.keyboard_attached = true;
             guard.settings.default_scale = 1.5;
+            guard.settings.saved_display_layout = Some(dual_display_layout_with_refresh(120.0));
         }
 
         timeout(
@@ -2139,6 +2217,68 @@ mod tests {
             .await
             .expect("lifecycle niri retry should finish")
             .expect("join retry server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_refresh_forwards_saved_layout_as_refresh_preserving_dock_base() {
+        let socket_path = unique_test_socket_path("lifecycle-saved-layout");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept lifecycle replay client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read lifecycle replay request")
+                .expect("lifecycle replay request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode lifecycle replay request");
+            match envelope.payload {
+                SessionCommand::SetDockMode {
+                    attached,
+                    scale,
+                    layout,
+                } => {
+                    assert!(attached);
+                    assert_eq!(scale, 1.25);
+                    let layout = layout.expect("saved layout should be forwarded as dock base");
+                    assert_eq!(layout.displays.len(), 2);
+                    assert!(layout
+                        .displays
+                        .iter()
+                        .all(|display| display.current_mode.refresh_rate == 120.0));
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.settings.saved_display_layout = Some(dual_display_layout_with_refresh(120.0));
+        }
+
+        timeout(
+            Duration::from_secs(1),
+            refresh_lifecycle_display_mode(&state, true, 1.25),
+        )
+        .await
+        .expect("lifecycle replay should not hang")
+        .expect("lifecycle replay should succeed");
+
+        server.await.expect("join session server");
         let _ = fs::remove_file(&socket_path);
     }
 
@@ -2694,11 +2834,15 @@ mod tests {
     }
 
     fn external_display_layout() -> DisplayLayout {
+        external_display_layout_with_refresh(60.0)
+    }
+
+    fn external_display_layout_with_refresh(external_refresh_rate: f64) -> DisplayLayout {
         DisplayLayout {
             displays: vec![
                 display(PRIMARY_INTERNAL_CONNECTOR, 0, 0, true),
                 display(SECONDARY_INTERNAL_CONNECTOR, 0, 1200, false),
-                display("HDMI-A-1", 1920, 0, false),
+                display_with_refresh("HDMI-A-1", 1920, 0, false, external_refresh_rate),
             ],
         }
     }

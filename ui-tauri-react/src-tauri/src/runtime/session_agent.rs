@@ -275,12 +275,17 @@ fn apply_dock_mode(
     scale: f64,
     layout: Option<DisplayLayout>,
 ) -> Result<(), String> {
-    if let Some(layout) = layout
-        .or_else(|| crate::hardware::display_config::get_display_layout().ok())
-        .and_then(|layout| dock_layout_from_base(&layout, attached, scale))
+    let base_layout = layout.or_else(|| crate::hardware::display_config::get_display_layout().ok());
+
+    if let Some(layout) = base_layout
+        .as_ref()
+        .and_then(|layout| dock_layout_from_base(layout, attached, scale))
     {
         crate::hardware::display_config::apply_display_layout(&layout)?;
     } else {
+        log::warn!(
+            "No saved or current display layout available for dock replay; using degraded mode-less dock fallback"
+        );
         match detect_ready_backend() {
             SessionBackend::Gnome => apply_gnome_dock_mode(attached, scale),
             SessionBackend::Kde => apply_kde_dock_mode(attached),
@@ -1201,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_gnome_dock_mode_arguments_without_running_gdctl() {
+    fn degraded_gnome_dock_mode_arguments_are_mode_less_and_only_used_without_layout_base() {
         assert_eq!(
             gnome_dock_mode_args(true, 1.66),
             string_args(&[
@@ -1214,8 +1219,9 @@ mod tests {
                 PRIMARY_INTERNAL_CONNECTOR,
             ])
         );
+        let detached_args = gnome_dock_mode_args(false, 1.66);
         assert_eq!(
-            gnome_dock_mode_args(false, 1.66),
+            detached_args,
             string_args(&[
                 "set",
                 "--logical-monitor",
@@ -1233,10 +1239,11 @@ mod tests {
                 PRIMARY_INTERNAL_CONNECTOR,
             ])
         );
+        assert!(!detached_args.iter().any(|arg| arg == "--mode"));
     }
 
     #[test]
-    fn builds_kde_dock_mode_arguments_without_running_kscreen_doctor() {
+    fn degraded_kde_dock_mode_arguments_are_mode_less_and_only_used_without_layout_base() {
         assert_eq!(
             kde_dock_mode_args(true, 1200),
             vec![
@@ -1244,8 +1251,9 @@ mod tests {
                 format!("output.{SECONDARY_INTERNAL_CONNECTOR}.disable"),
             ]
         );
+        let detached_args = kde_dock_mode_args(false, 1200);
         assert_eq!(
-            kde_dock_mode_args(false, 1200),
+            detached_args,
             vec![
                 format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
                 format!("output.{SECONDARY_INTERNAL_CONNECTOR}.enable"),
@@ -1253,10 +1261,11 @@ mod tests {
                 format!("output.{SECONDARY_INTERNAL_CONNECTOR}.position.0,1200"),
             ]
         );
+        assert!(!detached_args.iter().any(|arg| arg.contains(".mode.")));
     }
 
     #[test]
-    fn builds_niri_dock_mode_commands_without_running_niri() {
+    fn degraded_niri_dock_mode_commands_are_mode_less_and_only_used_without_layout_base() {
         assert_eq!(
             niri_dock_mode_commands(true, 1200),
             vec![
@@ -1264,8 +1273,9 @@ mod tests {
                 string_args(&["msg", "output", SECONDARY_INTERNAL_CONNECTOR, "off"]),
             ]
         );
+        let detached_commands = niri_dock_mode_commands(false, 1200);
         assert_eq!(
-            niri_dock_mode_commands(false, 1200),
+            detached_commands,
             vec![
                 string_args(&["msg", "output", PRIMARY_INTERNAL_CONNECTOR, "on"]),
                 string_args(&["msg", "output", SECONDARY_INTERNAL_CONNECTOR, "on"]),
@@ -1289,6 +1299,7 @@ mod tests {
                 ]),
             ]
         );
+        assert!(!detached_commands.iter().flatten().any(|arg| arg == "mode"));
     }
 
     #[test]

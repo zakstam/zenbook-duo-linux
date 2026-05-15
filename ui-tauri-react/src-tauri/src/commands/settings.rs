@@ -152,7 +152,10 @@ mod tests {
             fs::create_dir_all(&path).expect("create test home");
             let previous_home = env::var("ZENBOOK_DUO_HOME").ok();
             env::set_var("ZENBOOK_DUO_HOME", &path);
-            Self { path, previous_home }
+            Self {
+                path,
+                previous_home,
+            }
         }
     }
 
