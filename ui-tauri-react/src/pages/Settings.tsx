@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
-import { useStore, useDispatch, refreshSettings } from "@/lib/store";
-import { loadSettings, saveSettings } from "@/lib/tauri";
+import { useStore, useDispatch } from "@/lib/store";
+import {
+  autosavePersistedSetting,
+  createSettingsDraft,
+  patchSettingsDraft,
+  saveSettingsDraft,
+} from "@/lib/settings-service";
 import type { DuoSettings, ThemePreference } from "@/types/duo";
-import { resolveThemeForPreference } from "@/lib/theme";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -28,9 +32,9 @@ export default function Settings() {
   const [autosavingSwitch, setAutosavingSwitch] = useState<
     Partial<Record<"startOnBootMinimized" | "invertSensorRotation", boolean>>
   >({});
-  const [localSettings, setLocalSettings] = useState<DuoSettings>({
-    ...store.settings,
-  });
+  const [localSettings, setLocalSettings] = useState<DuoSettings>(() =>
+    createSettingsDraft(store.settings),
+  );
   const [settingsDirty, setSettingsDirty] = useState(false);
   const {
     isUsb,
@@ -50,13 +54,13 @@ export default function Settings() {
 
   useEffect(() => {
     if (!settingsDirty) {
-      setLocalSettings({ ...store.settings });
+      setLocalSettings(createSettingsDraft(store.settings));
     }
   }, [settingsDirty, store.settings]);
 
   const updateLocal = (key: keyof DuoSettings, value: unknown) => {
     setSettingsDirty(true);
-    setLocalSettings((prev) => ({ ...prev, [key]: value }));
+    setLocalSettings((prev) => patchSettingsDraft(prev, key, value));
   };
 
   const saveSwitchSetting = async (
@@ -72,9 +76,7 @@ export default function Settings() {
     setAutosavingSwitch((prev) => ({ ...prev, [key]: true }));
 
     try {
-      const persistedSettings = await loadSettings();
-      await saveSettings({ ...persistedSettings, [key]: value });
-      await refreshSettings(dispatch);
+      await autosavePersistedSetting(key, value, dispatch);
       setSettingsDirty(hadOtherDraftChanges);
       toast.success(successMessage);
     } catch (err) {
@@ -89,11 +91,8 @@ export default function Settings() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await saveSettings(localSettings);
-      await refreshSettings(dispatch);
+      await saveSettingsDraft(localSettings, dispatch, setTheme);
       setSettingsDirty(false);
-
-      setTheme(await resolveThemeForPreference(localSettings.theme));
 
       toast.success("Settings saved");
     } catch (err) {

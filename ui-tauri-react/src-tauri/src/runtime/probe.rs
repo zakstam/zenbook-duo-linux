@@ -1,6 +1,5 @@
-use std::process::Command;
-
 use crate::hardware::{display_config, sysfs};
+use crate::runtime::host::{CommandRunner, ProcessCommandRunner};
 use crate::models::{ConnectionType, DisplayLayout, DuoStatus, Orientation};
 
 pub fn current_status() -> DuoStatus {
@@ -8,8 +7,9 @@ pub fn current_status() -> DuoStatus {
     let connection_type = sysfs::detect_connection_type();
     status.keyboard_attached = keyboard_attached(&connection_type);
     status.connection_type = connection_type;
-    status.wifi_enabled = wifi_enabled();
-    status.bluetooth_enabled = bluetooth_enabled();
+    let host = ProcessCommandRunner;
+    status.wifi_enabled = wifi_enabled_with(&host);
+    status.bluetooth_enabled = bluetooth_enabled_with(&host);
     apply_layout_to_status(
         &mut status,
         display_config::get_display_layout().ok().as_ref(),
@@ -27,9 +27,11 @@ pub fn keyboard_attached(connection_type: &ConnectionType) -> bool {
 }
 
 pub fn wifi_enabled() -> bool {
-    Command::new("nmcli")
-        .args(["radio", "wifi"])
-        .output()
+    wifi_enabled_with(&ProcessCommandRunner)
+}
+
+pub fn wifi_enabled_with(host: &impl CommandRunner) -> bool {
+    host.output("nmcli", &["radio", "wifi"])
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.lines().next().unwrap_or_default().trim() == "enabled")
@@ -37,9 +39,11 @@ pub fn wifi_enabled() -> bool {
 }
 
 pub fn bluetooth_enabled() -> bool {
-    Command::new("rfkill")
-        .args(["-n", "-o", "SOFT", "list", "bluetooth"])
-        .output()
+    bluetooth_enabled_with(&ProcessCommandRunner)
+}
+
+pub fn bluetooth_enabled_with(host: &impl CommandRunner) -> bool {
+    host.output("rfkill", &["-n", "-o", "SOFT", "list", "bluetooth"])
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.lines().next().unwrap_or_default().trim() == "unblocked")
@@ -73,6 +77,33 @@ fn inferred_orientation(layout: Option<&crate::models::DisplayLayout>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_radio_status_through_host_adapter() {
+        let host = crate::runtime::host::tests::FakeCommandRunner::new([
+            Ok(crate::runtime::host::tests::FakeCommandRunner::success("enabled\n")),
+            Ok(crate::runtime::host::tests::FakeCommandRunner::success("unblocked\n")),
+        ]);
+
+        assert!(wifi_enabled_with(&host));
+        assert!(bluetooth_enabled_with(&host));
+        assert_eq!(
+            host.calls(),
+            vec![
+                ("nmcli".to_string(), vec!["radio".to_string(), "wifi".to_string()]),
+                (
+                    "rfkill".to_string(),
+                    vec![
+                        "-n".to_string(),
+                        "-o".to_string(),
+                        "SOFT".to_string(),
+                        "list".to_string(),
+                        "bluetooth".to_string(),
+                    ],
+                ),
+            ]
+        );
+    }
 
     #[test]
     fn usb_connection_counts_as_attached_keyboard() {

@@ -1,20 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { refreshSettings, useDispatch, useStore } from "@/lib/store";
+import { saveSettings } from "@/lib/tauri";
 import {
-  saveSettings,
-  usbMediaRemapStart,
-  usbMediaRemapStatus,
-  usbMediaRemapStop,
-  usbMediaRemapTogglePause,
-} from "@/lib/tauri";
-import type { DuoSettings, UsbMediaRemapStatus } from "@/types/duo";
-
-const defaultRemapStatus: UsbMediaRemapStatus = {
-  running: false,
-  pid: null,
-  paused: false,
-};
+  defaultUsbMediaRemapStatus,
+  readUsbMediaRemapStatus,
+  remapErrorMessage,
+  setUsbMediaRemapEnabled,
+  toggleUsbMediaRemapPause,
+  usbMediaRemapStatusLabel,
+} from "@/lib/usb-media-remap-controller";
+import type { DuoSettings } from "@/types/duo";
 
 interface UseUsbMediaRemapOptions {
   settings?: DuoSettings;
@@ -27,7 +23,7 @@ export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
   const isUsb = store.status.connectionType === "usb";
   const [remapBusy, setRemapBusy] = useState(false);
   const [remapStatus, setRemapStatus] =
-    useState<UsbMediaRemapStatus>(defaultRemapStatus);
+    useState(defaultUsbMediaRemapStatus);
   const [remapDesired, setRemapDesired] = useState<boolean | null>(null);
   const remapOpIdRef = useRef(0);
   const remapDesiredRef = useRef<boolean | null>(null);
@@ -39,7 +35,7 @@ export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
 
   const refreshRemapStatus = async () => {
     try {
-      const status = await usbMediaRemapStatus();
+      const status = await readUsbMediaRemapStatus();
       setRemapStatus(status);
       setRemapDesired((desired) =>
         desired !== null && status.running === desired ? null : desired
@@ -73,11 +69,7 @@ export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
     setRemapDesired(nextEnabled);
 
     try {
-      if (nextEnabled) {
-        await usbMediaRemapStart();
-      } else {
-        await usbMediaRemapStop();
-      }
+      await setUsbMediaRemapEnabled(nextEnabled);
 
       await persistRemapPreference(nextEnabled);
       toast.success(
@@ -89,13 +81,7 @@ export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
         setRemapDesired(null);
       }
 
-      const msg =
-        typeof err === "string"
-          ? err
-          : err && typeof err === "object" && "message" in err
-            ? String((err as { message?: unknown }).message)
-            : "Failed to toggle USB media remap";
-      toast.error(msg);
+      toast.error(remapErrorMessage(err));
     } finally {
       setRemapBusy(false);
       void refreshRemapStatus();
@@ -113,7 +99,7 @@ export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
 
   const togglePause = async () => {
     try {
-      await usbMediaRemapTogglePause();
+      await toggleUsbMediaRemapPause();
       await refreshRemapStatus();
     } catch (err) {
       console.error("Failed to toggle pause:", err);
@@ -131,16 +117,7 @@ export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
     return () => clearInterval(interval);
   }, [store.status.connectionType]);
 
-  const statusLabel =
-    remapDesired !== null
-      ? remapDesired
-        ? "Enabling..."
-        : "Disabling..."
-      : remapStatus.running
-        ? remapStatus.paused
-          ? "Paused"
-          : "On"
-        : "Off";
+  const statusLabel = usbMediaRemapStatusLabel(remapStatus, remapDesired);
 
   return {
     isUsb,

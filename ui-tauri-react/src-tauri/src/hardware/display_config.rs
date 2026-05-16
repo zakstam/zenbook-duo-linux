@@ -134,14 +134,70 @@ pub fn normalize_display_layout(layout: DisplayLayout) -> DisplayLayout {
     DisplayLayout { displays }
 }
 
-/// Get the current display layout by parsing gdctl output.
-pub fn get_display_layout() -> Result<DisplayLayout, String> {
-    let layout = match detect_backend() {
-        SessionBackend::Gnome => get_gnome_display_layout(),
-        SessionBackend::Kde => get_kde_display_layout(),
-        SessionBackend::Niri => get_niri_display_layout(),
+trait DisplayAdapter {
+    fn layout(&self) -> Result<DisplayLayout, String>;
+    fn apply_layout(&self, layout: &DisplayLayout) -> Result<(), String>;
+    fn set_orientation(&self, orientation: &Orientation) -> Result<(), String>;
+}
+
+struct GnomeAdapter;
+struct KdeAdapter;
+struct NiriAdapter;
+
+impl DisplayAdapter for GnomeAdapter {
+    fn layout(&self) -> Result<DisplayLayout, String> {
+        get_gnome_display_layout()
+    }
+
+    fn apply_layout(&self, layout: &DisplayLayout) -> Result<(), String> {
+        apply_gnome_display_layout(layout)
+    }
+
+    fn set_orientation(&self, orientation: &Orientation) -> Result<(), String> {
+        set_gnome_orientation(orientation)
+    }
+}
+
+impl DisplayAdapter for KdeAdapter {
+    fn layout(&self) -> Result<DisplayLayout, String> {
+        get_kde_display_layout()
+    }
+
+    fn apply_layout(&self, layout: &DisplayLayout) -> Result<(), String> {
+        apply_kde_display_layout(layout)
+    }
+
+    fn set_orientation(&self, orientation: &Orientation) -> Result<(), String> {
+        set_kde_orientation(orientation)
+    }
+}
+
+impl DisplayAdapter for NiriAdapter {
+    fn layout(&self) -> Result<DisplayLayout, String> {
+        get_niri_display_layout()
+    }
+
+    fn apply_layout(&self, layout: &DisplayLayout) -> Result<(), String> {
+        apply_niri_display_layout(layout)
+    }
+
+    fn set_orientation(&self, orientation: &Orientation) -> Result<(), String> {
+        set_niri_orientation(orientation)
+    }
+}
+
+fn with_display_adapter<T>(backend: SessionBackend, f: impl FnOnce(&dyn DisplayAdapter) -> Result<T, String>) -> Result<T, String> {
+    match backend {
+        SessionBackend::Gnome => f(&GnomeAdapter),
+        SessionBackend::Kde => f(&KdeAdapter),
+        SessionBackend::Niri => f(&NiriAdapter),
         SessionBackend::Unknown => Err("Unsupported session backend for display layout".into()),
-    }?;
+    }
+}
+
+/// Get the current display layout through the selected DisplayAdapter.
+pub fn get_display_layout() -> Result<DisplayLayout, String> {
+    let layout = with_display_adapter(detect_backend(), |adapter| adapter.layout())?;
 
     Ok(normalize_display_layout(layout))
 }
@@ -439,16 +495,10 @@ fn parse_gdctl_output(output: &str) -> Result<DisplayLayout, String> {
     Ok(DisplayLayout { displays })
 }
 
-/// Apply a display layout using gdctl commands.
+/// Apply a display layout through the selected DisplayAdapter.
 pub fn apply_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     let normalized = normalize_display_layout(layout.clone());
-
-    match detect_backend() {
-        SessionBackend::Gnome => apply_gnome_display_layout(&normalized),
-        SessionBackend::Kde => apply_kde_display_layout(&normalized),
-        SessionBackend::Niri => apply_niri_display_layout(&normalized),
-        SessionBackend::Unknown => Err("Unsupported session backend for display layout".into()),
-    }
+    with_display_adapter(detect_backend(), |adapter| adapter.apply_layout(&normalized))
 }
 
 fn gnome_mode_arg(display: &DisplayInfo, current_layout: Option<&DisplayLayout>) -> String {
@@ -1081,16 +1131,16 @@ fn set_niri_orientation(orientation: &Orientation) -> Result<(), String> {
     run_niri_position_command(SECONDARY_INTERNAL_CONNECTOR, pos_x as i32, pos_y as i32)
 }
 
-/// Set screen orientation using compositor-native commands.
+/// Set screen orientation through the selected DisplayAdapter.
 pub fn set_orientation(orientation: &Orientation) -> Result<(), String> {
-    match detect_backend() {
-        SessionBackend::Gnome => set_gnome_orientation(orientation),
-        SessionBackend::Kde => set_kde_orientation(orientation),
-        SessionBackend::Niri => set_niri_orientation(orientation),
-        SessionBackend::Unknown => {
-            Err("Unsupported session backend for orientation control".into())
-        }
-    }
+    with_display_adapter(detect_backend(), |adapter| adapter.set_orientation(orientation))
+        .map_err(|message| {
+            if message == "Unsupported session backend for display layout" {
+                "Unsupported session backend for orientation control".to_string()
+            } else {
+                message
+            }
+        })
 }
 
 #[cfg(test)]
@@ -1114,6 +1164,40 @@ mod tests {
             refresh_policy: RefreshPolicy::Fixed,
             supports_dynamic_refresh: false,
         }
+    }
+
+    struct FakeAdapter;
+
+    impl DisplayAdapter for FakeAdapter {
+        fn layout(&self) -> Result<DisplayLayout, String> {
+            Ok(DisplayLayout {
+                displays: vec![test_display(PRIMARY_INTERNAL_CONNECTOR)],
+            })
+        }
+
+        fn apply_layout(&self, layout: &DisplayLayout) -> Result<(), String> {
+            if layout.displays.is_empty() {
+                Err("empty layout".into())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn set_orientation(&self, _orientation: &Orientation) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn display_adapter_interface_covers_layout_apply_and_orientation() {
+        let adapter = FakeAdapter;
+        assert_eq!(adapter.layout().expect("layout").displays.len(), 1);
+        assert!(adapter
+            .apply_layout(&DisplayLayout {
+                displays: vec![test_display(PRIMARY_INTERNAL_CONNECTOR)],
+            })
+            .is_ok());
+        assert!(adapter.set_orientation(&Orientation::Left).is_ok());
     }
 
     #[test]

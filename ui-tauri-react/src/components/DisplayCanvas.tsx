@@ -10,6 +10,12 @@ import {
 } from "@xyflow/react";
 
 import type { DisplayLayout } from "@/types/duo";
+import {
+  isDuoDisplay,
+  layoutToCanvasNodes,
+  updateDisplayPosition,
+  type DisplayCanvasNodeModel,
+} from "@/lib/display-layout";
 import { cn } from "@/lib/utils";
 
 interface DisplayCanvasProps {
@@ -17,77 +23,7 @@ interface DisplayCanvasProps {
   onLayoutChange: (layout: DisplayLayout) => void;
 }
 
-type DisplayNodeData = {
-  connector: string;
-  width: number;
-  height: number;
-  logicalHeight: number;
-  refreshRate: number;
-  primary: boolean;
-  scale: number;
-};
-
-const PX_SCALE = 0.12; // graph px per real display pixel
-const MIN_NODE_W = 220;
-const MIN_NODE_H = 120;
-const TOP_DISPLAY_CONNECTOR = "eDP-1";
-const BOTTOM_DISPLAY_CONNECTOR = "eDP-2";
-
-function isDuoDisplay(connector: string) {
-  return connector === TOP_DISPLAY_CONNECTOR || connector === BOTTOM_DISPLAY_CONNECTOR;
-}
-
-function snapDisplayPosition(layout: DisplayLayout, id: string, pos: { x: number; y: number }) {
-  const displays = layout.displays;
-  const d = displays.find((x) => x.connector === id);
-  if (!d) return { x: Math.round(pos.x / PX_SCALE), y: Math.round(pos.y / PX_SCALE) };
-
-  const x = Math.round(pos.x / PX_SCALE);
-  const y = Math.round(pos.y / PX_SCALE);
-  return { x, y };
-}
-
-function displayLogicalSize(display: DisplayLayout["displays"][number]) {
-  const rotated = display.transform === 90 || display.transform === 270;
-  const physicalWidth = rotated ? display.height : display.width;
-  const physicalHeight = rotated ? display.width : display.height;
-  const scale = Math.max(display.scale, 0.1);
-
-  return {
-    width: physicalWidth / scale,
-    height: physicalHeight / scale,
-  };
-}
-
-function stackedLogicalHeight(display: DisplayLayout["displays"][number]) {
-  const rotated = display.transform === 90 || display.transform === 270;
-  const physicalHeight = rotated ? display.width : display.height;
-  const scale = Math.max(display.scale, 0.1);
-  return Math.ceil(physicalHeight / scale);
-}
-
-function normalizeDuoDisplays(layout: DisplayLayout) {
-  const topDisplay = layout.displays.find((display) => display.connector === TOP_DISPLAY_CONNECTOR);
-  if (!topDisplay) {
-    return layout;
-  }
-
-  const topLogicalHeight = stackedLogicalHeight(topDisplay);
-
-  return {
-    displays: layout.displays.map((display) => {
-      if (display.connector === TOP_DISPLAY_CONNECTOR) {
-        return { ...display, x: 0, y: 0 };
-      }
-
-      if (display.connector === BOTTOM_DISPLAY_CONNECTOR) {
-        return { ...display, x: 0, y: topLogicalHeight };
-      }
-
-      return display;
-    }),
-  };
-}
+type DisplayNodeData = DisplayCanvasNodeModel["data"];
 
 function DisplayNode({ data, selected }: NodeProps<Node<DisplayNodeData>>) {
   return (
@@ -136,72 +72,11 @@ function DisplayNode({ data, selected }: NodeProps<Node<DisplayNodeData>>) {
 const nodeTypes = { displayNode: DisplayNode };
 
 function layoutToNodes(layout: DisplayLayout): Node<DisplayNodeData>[] {
-  const normalizedLayout = normalizeDuoDisplays(layout);
-
-  // If multiple displays share (x,y), stagger them for usability.
-  const primary =
-    normalizedLayout.displays.find((d) => d.primary) ?? normalizedLayout.displays[0];
-  const baseX = primary?.x ?? 0;
-  const baseY = primary?.y ?? 0;
-  const primaryLogical = primary ? displayLogicalSize(primary) : null;
-
-  const seen = new Map<string, number>();
-
-  return normalizedLayout.displays.map((d) => {
-    const logical = displayLogicalSize(d);
-    const key = `${d.x},${d.y}`;
-    const count = seen.get(key) ?? 0;
-    seen.set(key, count + 1);
-
-    // If this (x,y) collides, stagger below the primary using logical display sizes.
-    const staggerY = count === 0 ? 0 : Math.floor((primaryLogical?.height ?? logical.height) * count);
-    const effectiveX = count === 0 ? d.x : baseX;
-    const effectiveY = count === 0 ? d.y : baseY + staggerY;
-
-    const scaledWidth = Math.round(logical.width * PX_SCALE);
-    const scaledHeight = Math.round(logical.height * PX_SCALE);
-    const w = Math.max(MIN_NODE_W, scaledWidth);
-    const h = isDuoDisplay(d.connector)
-      ? scaledHeight
-      : Math.max(MIN_NODE_H, scaledHeight);
-
-    return {
-      id: d.connector,
-      type: "displayNode",
-      position: { x: effectiveX * PX_SCALE, y: effectiveY * PX_SCALE },
-      draggable: !isDuoDisplay(d.connector),
-      selectable: true,
-      data: {
-        connector: d.connector,
-        width: d.width,
-        height: d.height,
-        logicalHeight: logical.height,
-        refreshRate: d.refreshRate,
-        primary: d.primary,
-        scale: d.scale,
-      },
-      style: {
-        width: w,
-        height: h,
-      },
-    };
-  });
-}
-
-function updateDisplayPosition(layout: DisplayLayout, id: string, pos: { x: number; y: number }) {
-  if (isDuoDisplay(id)) {
-    return normalizeDuoDisplays(layout);
-  }
-
-  const snapped = snapDisplayPosition(layout, id, pos);
-  const displays = layout.displays.map((d) => {
-    if (d.connector === id) {
-      return { ...d, x: snapped.x, y: snapped.y };
-    }
-
-    return d;
-  });
-  return normalizeDuoDisplays({ displays });
+  return layoutToCanvasNodes(layout).map((node) => ({
+    ...node,
+    type: "displayNode",
+    selectable: true,
+  }));
 }
 
 export default function DisplayCanvas({ layout, onLayoutChange }: DisplayCanvasProps) {

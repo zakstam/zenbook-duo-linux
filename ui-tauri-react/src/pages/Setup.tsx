@@ -4,10 +4,10 @@ import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { useDispatch, useStore, refreshSettings } from "@/lib/store";
+import { useDispatch, useStore } from "@/lib/store";
 import { withDuoSettingsDefaults } from "@/lib/defaults";
-import { resolveThemeForPreference } from "@/lib/theme";
-import { saveSettings, usbMediaRemapStart, usbMediaRemapStop } from "@/lib/tauri";
+import { saveSettingsDraft, setupCompletionSettings } from "@/lib/settings-service";
+import { remapErrorMessage, setUsbMediaRemapEnabled } from "@/lib/usb-media-remap-controller";
 import type { DuoSettings } from "@/types/duo";
 
 export default function Setup() {
@@ -26,30 +26,16 @@ export default function Setup() {
   const handleFinish = async () => {
     setSaving(true);
     try {
-      const next: DuoSettings = { ...local, setupCompleted: true };
-      await saveSettings(next);
-
-      // Apply theme immediately (matches behavior in Settings page).
-      setTheme(await resolveThemeForPreference(next.theme));
+      const next: DuoSettings = setupCompletionSettings({ settings: local });
+      await saveSettingsDraft(next, dispatch, setTheme);
 
       // Best-effort: start/stop now so the user sees the effect right away.
       try {
-        if (next.usbMediaRemapEnabled) {
-          await usbMediaRemapStart();
-        } else {
-          await usbMediaRemapStop();
-        }
+        await setUsbMediaRemapEnabled(next.usbMediaRemapEnabled);
       } catch (err) {
-        const msg =
-          typeof err === "string"
-            ? err
-            : err && typeof err === "object" && "message" in err
-              ? String((err as { message?: unknown }).message)
-              : "Failed to apply USB media remap setting";
-        toast.error(msg);
+        toast.error(remapErrorMessage(err, "Failed to apply USB media remap setting"));
       }
 
-      await refreshSettings(dispatch);
       toast.success("Setup complete");
     } catch (err) {
       console.error("Failed to complete setup:", err);

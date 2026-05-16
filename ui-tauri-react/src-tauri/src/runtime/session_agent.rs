@@ -24,11 +24,11 @@ pub async fn run() -> Result<(), String> {
     ensure_user_runtime_dir()?;
     let listener = bind_session_listener(paths::current_user_session_socket_path().as_path())?;
 
-    let backend = wait_for_ready_backend().await;
+    let backend = BackendReadiness::wait_for_ready_backend().await;
     register_with_daemon(backend).await?;
-    tokio::spawn(supervise_rotation_watcher());
+    tokio::spawn(RotationWatcherSupervisor::supervise());
     tokio::spawn(async {
-        if let Err(err) = watch_brightness_sync().await {
+        if let Err(err) = BrightnessSync::watch().await {
             log::warn!("session-agent brightness watcher failed: {err}");
             let _ = send_runtime_notification(
                 "Zenbook Duo Runtime Error",
@@ -38,7 +38,7 @@ pub async fn run() -> Result<(), String> {
         }
     });
     tokio::task::spawn_blocking(|| {
-        if let Err(err) = watch_keyboard_hotkeys() {
+        if let Err(err) = HotkeyWatcher::watch() {
             log::warn!("session-agent keyboard hotkey watcher failed: {err}");
             let _ = send_runtime_notification(
                 "Zenbook Duo Runtime Error",
@@ -125,7 +125,7 @@ async fn handle_session_command(stream: UnixStream) -> Result<(), String> {
                 attached,
                 scale,
                 layout,
-            } => match apply_dock_mode(attached, scale, layout) {
+            } => match DockModePlanner::apply(attached, scale, layout) {
                 Ok(()) => SessionResponse::Ack,
                 Err(message) => SessionResponse::Error { message },
             },
@@ -185,6 +185,22 @@ fn remove_stale_socket(path: &Path) {
 
 fn detect_session_id() -> String {
     env::var("XDG_SESSION_ID").unwrap_or_else(|_| "unknown-session".to_string())
+}
+
+pub(crate) struct BackendReadiness;
+
+impl BackendReadiness {
+    async fn wait_for_ready_backend() -> SessionBackend {
+        wait_for_ready_backend().await
+    }
+
+    #[cfg(test)]
+    fn detect_ready_backend_from<F>(hinted: SessionBackend, is_ready: F) -> SessionBackend
+    where
+        F: FnMut(&session::BackendProbe) -> bool,
+    {
+        detect_ready_backend_from(hinted, is_ready)
+    }
 }
 
 fn detect_backend() -> SessionBackend {
@@ -267,6 +283,19 @@ where
         }
 
         tokio::time::sleep(retry_delay).await;
+    }
+}
+
+pub(crate) struct DockModePlanner;
+
+impl DockModePlanner {
+    fn apply(attached: bool, scale: f64, layout: Option<DisplayLayout>) -> Result<(), String> {
+        apply_dock_mode(attached, scale, layout)
+    }
+
+    #[cfg(test)]
+    fn layout_from_base(layout: &DisplayLayout, attached: bool, scale: f64) -> Option<DisplayLayout> {
+        dock_layout_from_base(layout, attached, scale)
     }
 }
 
@@ -558,6 +587,14 @@ fn send_runtime_notification(title: &str, message: &str, urgent: bool) -> Result
         .map_err(|e| format!("Failed to launch runtime notification: {e}"))
 }
 
+pub(crate) struct BrightnessSync;
+
+impl BrightnessSync {
+    async fn watch() -> Result<(), String> {
+        watch_brightness_sync().await
+    }
+}
+
 async fn watch_brightness_sync() -> Result<(), String> {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
     let mut last_seen: Option<u32> = None;
@@ -630,6 +667,14 @@ fn sync_secondary_brightness(level: u32) -> Result<(), String> {
             "Brightness sync failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ))
+    }
+}
+
+pub(crate) struct HotkeyWatcher;
+
+impl HotkeyWatcher {
+    fn watch() -> Result<(), String> {
+        watch_keyboard_hotkeys()
     }
 }
 
@@ -844,6 +889,14 @@ fn runtime_log_warn(message: impl AsRef<str>) {
 fn append_runtime_log(line: String) {
     if let Err(err) = client::request(DaemonRequest::AppendLog { line }) {
         log::warn!("failed to append session-agent log to runtime log: {err}");
+    }
+}
+
+pub(crate) struct RotationWatcherSupervisor;
+
+impl RotationWatcherSupervisor {
+    async fn supervise() {
+        supervise_rotation_watcher().await;
     }
 }
 
@@ -1178,6 +1231,23 @@ mod tests {
 
         drop(listener);
         let _ = fs::remove_file(&socket_path);
+    }
+
+    #[test]
+    fn dock_mode_planner_interface_reuses_existing_refresh_modes_for_attached_replay() {
+        let layout = dual_internal_layout(120.0);
+        let planned = DockModePlanner::layout_from_base(&layout, false, 1.5).expect("planned layout");
+
+        assert_eq!(planned.displays.len(), 2);
+        assert_eq!(planned.displays[0].scale, 1.5);
+        assert_eq!(planned.displays[1].scale, 1.5);
+    }
+
+    #[test]
+    fn backend_readiness_interface_prefers_ready_hint() {
+        let backend = BackendReadiness::detect_ready_backend_from(SessionBackend::Gnome, |_| true);
+
+        assert_eq!(backend, SessionBackend::Gnome);
     }
 
     #[test]

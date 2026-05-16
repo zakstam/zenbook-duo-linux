@@ -1,13 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import BacklightSlider from "@/components/BacklightSlider";
 import OrientationButtons from "@/components/OrientationButtons";
-import {
-  restartService,
-  listTouchscreens,
-  setTouchscreenEnabled,
-  saveTouchscreenPreference,
-} from "@/lib/tauri";
-import type { TouchscreenDevice } from "@/types/duo";
+import { restartService } from "@/lib/tauri";
+import { useTouchscreens } from "@/hooks/use-touchscreens";
 import { Switch } from "@/components/ui/switch";
 import { refreshStatus, useDispatch, useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -28,23 +23,7 @@ export default function Controls() {
   const [restarting, setRestarting] = useState(false);
   const [restarted, setRestarted] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
-  const [touchscreens, setTouchscreens] = useState<TouchscreenDevice[]>([]);
-
-  useEffect(() => {
-    listTouchscreens().then(setTouchscreens).catch(console.error);
-  }, []);
-
-  const handleTouchToggle = async (connector: string, enabled: boolean) => {
-    try {
-      await setTouchscreenEnabled(connector, enabled);
-      setTouchscreens((prev) =>
-        prev.map((ts) => (ts.connector === connector ? { ...ts, enabled } : ts))
-      );
-      await saveTouchscreenPreference(connector, enabled);
-    } catch (e) {
-      console.error("Failed to toggle touchscreen:", e);
-    }
-  };
+  const { touchscreens, pendingConnector, setEnabled: setTouchscreenEnabled } = useTouchscreens();
 
   const handleRestart = async () => {
     setRestarting(true);
@@ -192,8 +171,9 @@ export default function Controls() {
                   <Switch
                     checked={ts.enabled}
                     onCheckedChange={(checked) =>
-                      handleTouchToggle(ts.connector, checked)
+                      void setTouchscreenEnabled(ts.connector, checked)
                     }
+                    disabled={pendingConnector === ts.connector}
                   />
                 </div>
               ))}

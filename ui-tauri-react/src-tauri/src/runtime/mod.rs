@@ -1,6 +1,7 @@
 pub mod client;
 pub mod compositor;
 pub mod daemon;
+pub mod host;
 pub mod logger;
 pub mod logind;
 pub mod monitor;

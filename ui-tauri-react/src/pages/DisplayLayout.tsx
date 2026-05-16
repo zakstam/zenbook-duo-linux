@@ -3,12 +3,11 @@ import DisplayCanvas from "@/components/DisplayCanvas";
 import {
   getDisplayLayout,
   applyDisplayLayout,
-  listTouchscreens,
-  setTouchscreenEnabled,
-  saveTouchscreenPreference,
   saveDisplayLayoutPreference,
 } from "@/lib/tauri";
-import type { DisplayInfo, DisplayLayout as LayoutType, TouchscreenDevice } from "@/types/duo";
+import { useTouchscreens } from "@/hooks/use-touchscreens";
+import { modesForResolution, refreshSelectValue } from "@/lib/display-layout";
+import type { DisplayLayout as LayoutType } from "@/types/duo";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -25,45 +24,17 @@ import {
   IconAlertTriangle,
 } from "@tabler/icons-react";
 
-const DYNAMIC_REFRESH_VALUE = "__dynamic__";
+const DYNAMIC_REFRESH_VALUE = "dynamic";
 
 function formatRefreshRate(refreshRate: number) {
   return `${refreshRate.toFixed(1)}Hz`;
-}
-
-function refreshSelectValue(display: DisplayInfo) {
-  return display.refreshPolicy === "dynamic"
-    ? DYNAMIC_REFRESH_VALUE
-    : display.currentMode.modeId;
-}
-
-function modesForResolution(display: DisplayInfo, width: number, height: number) {
-  return display.availableModes.filter(
-    (mode) => mode.width === width && mode.height === height
-  );
 }
 
 export default function DisplayLayout() {
   const [layout, setLayout] = useState<LayoutType>({ displays: [] });
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState("");
-  const [touchscreens, setTouchscreens] = useState<TouchscreenDevice[]>([]);
-
-  useEffect(() => {
-    listTouchscreens().then(setTouchscreens).catch(console.error);
-  }, []);
-
-  const handleTouchToggle = async (connector: string, enabled: boolean) => {
-    try {
-      await setTouchscreenEnabled(connector, enabled);
-      setTouchscreens((prev) =>
-        prev.map((ts) => (ts.connector === connector ? { ...ts, enabled } : ts))
-      );
-      await saveTouchscreenPreference(connector, enabled);
-    } catch (e) {
-      console.error("Failed to toggle touchscreen:", e);
-    }
-  };
+  const { touchscreens, pendingConnector, setEnabled: setTouchscreenEnabled } = useTouchscreens();
 
   useEffect(() => {
     getDisplayLayout()
@@ -187,8 +158,9 @@ export default function DisplayLayout() {
                       <Switch
                         checked={ts.enabled}
                         onCheckedChange={(checked) =>
-                          handleTouchToggle(d.connector, checked)
+                          void setTouchscreenEnabled(d.connector, checked)
                         }
+                        disabled={pendingConnector === d.connector}
                       />
                     </div>
                   );
@@ -247,7 +219,7 @@ export default function DisplayLayout() {
                         Dynamic
                       </SelectItem>
                     )}
-                    {modesForResolution(d, d.currentMode.width, d.currentMode.height).map((mode) => (
+                    {modesForResolution(d).map((mode) => (
                       <SelectItem key={mode.modeId} value={mode.modeId}>
                         {formatRefreshRate(mode.refreshRate)}
                       </SelectItem>

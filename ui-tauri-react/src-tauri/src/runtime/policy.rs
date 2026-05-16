@@ -1,6 +1,5 @@
-use std::process::Command;
-
 use crate::models::{ConnectionType, DuoStatus, EventCategory, HardwareEvent};
+use crate::runtime::host::{CommandRunner, ProcessCommandRunner};
 use crate::runtime::state::RuntimeState;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,11 +92,12 @@ fn display_mode_attached(status: &DuoStatus) -> bool {
 }
 
 pub fn set_wifi_enabled(enabled: bool) -> Result<(), String> {
+    set_wifi_enabled_with(&ProcessCommandRunner, enabled)
+}
+
+pub fn set_wifi_enabled_with(host: &impl CommandRunner, enabled: bool) -> Result<(), String> {
     let target = if enabled { "on" } else { "off" };
-    let output = Command::new("nmcli")
-        .args(["radio", "wifi", target])
-        .output()
-        .map_err(|e| format!("Failed to run nmcli: {e}"))?;
+    let output = host.output("nmcli", &["radio", "wifi", target])?;
     if output.status.success() {
         Ok(())
     } else {
@@ -106,11 +106,12 @@ pub fn set_wifi_enabled(enabled: bool) -> Result<(), String> {
 }
 
 pub fn set_bluetooth_enabled(enabled: bool) -> Result<(), String> {
+    set_bluetooth_enabled_with(&ProcessCommandRunner, enabled)
+}
+
+pub fn set_bluetooth_enabled_with(host: &impl CommandRunner, enabled: bool) -> Result<(), String> {
     let action = if enabled { "unblock" } else { "block" };
-    let output = Command::new("rfkill")
-        .args([action, "bluetooth"])
-        .output()
-        .map_err(|e| format!("Failed to run rfkill: {e}"))?;
+    let output = host.output("rfkill", &[action, "bluetooth"])?;
     if output.status.success() {
         Ok(())
     } else {
@@ -135,6 +136,31 @@ mod tests {
             bluetooth_enabled: bluetooth,
             ..DuoStatus::default()
         }
+    }
+
+    #[test]
+    fn radio_actions_execute_through_host_adapter() {
+        let host = crate::runtime::host::tests::FakeCommandRunner::new([
+            Ok(crate::runtime::host::tests::FakeCommandRunner::success("")),
+            Ok(crate::runtime::host::tests::FakeCommandRunner::success("")),
+        ]);
+
+        set_wifi_enabled_with(&host, false).expect("wifi command succeeds");
+        set_bluetooth_enabled_with(&host, true).expect("bluetooth command succeeds");
+
+        assert_eq!(
+            host.calls(),
+            vec![
+                (
+                    "nmcli".to_string(),
+                    vec!["radio".to_string(), "wifi".to_string(), "off".to_string()],
+                ),
+                (
+                    "rfkill".to_string(),
+                    vec!["unblock".to_string(), "bluetooth".to_string()],
+                ),
+            ]
+        );
     }
 
     #[test]

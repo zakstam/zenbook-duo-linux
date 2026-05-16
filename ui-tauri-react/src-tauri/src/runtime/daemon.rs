@@ -94,6 +94,14 @@ fn initialize_state() -> RuntimeState {
     state
 }
 
+pub(crate) struct ServiceManager;
+
+impl ServiceManager {
+    fn restart_owned_services() -> Result<(), String> {
+        restart_owned_services()
+    }
+}
+
 fn restart_owned_services() -> Result<(), String> {
     let mut errors = Vec::new();
 
@@ -233,7 +241,7 @@ async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> 
 
         let response = match envelope.payload {
             DaemonRequest::Ping => DaemonResponse::Pong,
-            DaemonRequest::HandleLifecycle { phase } => match handle_lifecycle(&state, phase).await
+            DaemonRequest::HandleLifecycle { phase } => match DisplayReplayPolicy::handle_lifecycle(&state, phase).await
             {
                 Ok(()) => DaemonResponse::Ack,
                 Err(message) => DaemonResponse::Error { message },
@@ -251,7 +259,7 @@ async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> 
                 },
             },
             DaemonRequest::GetDisplayLayout => {
-                match request_session(state.clone(), SessionCommand::GetDisplayLayout, true).await {
+                match SessionBridge::request(state.clone(), SessionCommand::GetDisplayLayout, true).await {
                     Ok(SessionResponse::DisplayLayout { layout }) => {
                         DaemonResponse::DisplayLayout { layout }
                     }
@@ -327,7 +335,7 @@ async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> 
                     Err(message) => DaemonResponse::Error { message },
                 }
             }
-            DaemonRequest::RestartService => match restart_owned_services() {
+            DaemonRequest::RestartService => match ServiceManager::restart_owned_services() {
                 Ok(()) => DaemonResponse::Ack,
                 Err(message) => DaemonResponse::Error { message },
             },
@@ -427,6 +435,21 @@ fn persist_state(state: &RuntimeState) {
     if let Err(err) = state.save() {
         log::warn!("failed to persist runtime state: {err}");
         let _ = logger::append_line(format!("rust-daemon: failed to persist state: {err}"));
+    }
+}
+
+pub(crate) struct DisplayReplayPolicy;
+
+impl DisplayReplayPolicy {
+    async fn handle_lifecycle(state: &Arc<RwLock<RuntimeState>>, phase: LifecyclePhase) -> Result<(), String> {
+        handle_lifecycle(state, phase).await
+    }
+
+    pub(crate) async fn handle_lid_closed_change(
+        state: &Arc<RwLock<RuntimeState>>,
+        lid_closed: bool,
+    ) -> Result<(), String> {
+        handle_lid_closed_change(state, lid_closed).await
     }
 }
 
@@ -545,7 +568,7 @@ async fn refresh_lifecycle_display_mode(
             Ok(())
         }
         Err(err) => {
-            notify_runtime_error(
+            NotificationSink::runtime_error(
                 state,
                 "Zenbook Duo Runtime Error",
                 &format!("Lifecycle dock refresh skipped: {err}"),
@@ -596,7 +619,7 @@ async fn handle_session_registration(
             }
 
             log::warn!("session registration dock replay failed: {err}");
-            notify_runtime_error(
+            NotificationSink::runtime_error(
                 &state,
                 "Zenbook Duo Runtime Error",
                 &format!("Session registration dock replay skipped: {err}"),
@@ -972,7 +995,7 @@ async fn forward_session_command_with_disconnect(
     command: SessionCommand,
     disconnect_on_failure: bool,
 ) -> Result<(), String> {
-    match request_session(state.clone(), command, disconnect_on_failure).await? {
+    match SessionBridge::request(state.clone(), command, disconnect_on_failure).await? {
         SessionResponse::Ack => Ok(()),
         SessionResponse::Error { message } => Err(message),
         SessionResponse::DisplayLayout { .. } => {
@@ -1055,6 +1078,18 @@ async fn apply_display_layout_request(
             DaemonResponse::Ack
         }
         Err(message) => DaemonResponse::Error { message },
+    }
+}
+
+pub(crate) struct SessionBridge;
+
+impl SessionBridge {
+    async fn request(
+        state: Arc<RwLock<RuntimeState>>,
+        command: SessionCommand,
+        disconnect_on_failure: bool,
+    ) -> Result<SessionResponse, String> {
+        request_session(state, command, disconnect_on_failure).await
     }
 }
 
@@ -1202,6 +1237,14 @@ async fn mark_session_agent_disconnected(state: &Arc<RwLock<RuntimeState>>, reas
 
 fn should_notify_session_agent_disconnect(reason: &str) -> bool {
     !is_display_session_deferral(reason)
+}
+
+pub(crate) struct NotificationSink;
+
+impl NotificationSink {
+    async fn runtime_error(state: &Arc<RwLock<RuntimeState>>, title: &str, message: &str) {
+        notify_runtime_error(state, title, message).await;
+    }
 }
 
 pub(crate) async fn notify_runtime_error(
