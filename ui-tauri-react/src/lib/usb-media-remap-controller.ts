@@ -1,9 +1,4 @@
-import {
-  usbMediaRemapStart,
-  usbMediaRemapStatus,
-  usbMediaRemapStop,
-  usbMediaRemapTogglePause,
-} from "@/lib/tauri";
+import { controlsApi } from "@/lib/tauri-adapters";
 import type { UsbMediaRemapStatus } from "@/types/duo";
 
 export const defaultUsbMediaRemapStatus: UsbMediaRemapStatus = {
@@ -24,19 +19,19 @@ export function usbMediaRemapStatusLabel(
 }
 
 export async function readUsbMediaRemapStatus() {
-  return usbMediaRemapStatus();
+  return controlsApi.usbMediaRemapStatus();
 }
 
 export async function setUsbMediaRemapEnabled(enabled: boolean) {
   if (enabled) {
-    await usbMediaRemapStart();
+    await controlsApi.usbMediaRemapStart();
   } else {
-    await usbMediaRemapStop();
+    await controlsApi.usbMediaRemapStop();
   }
 }
 
 export async function toggleUsbMediaRemapPause() {
-  await usbMediaRemapTogglePause();
+  await controlsApi.usbMediaRemapTogglePause();
 }
 
 export function remapErrorMessage(err: unknown, fallback = "Failed to toggle USB media remap") {

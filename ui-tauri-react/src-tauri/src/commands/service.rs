@@ -10,7 +10,7 @@ const LEGACY_DAEMON_RESTART_ERROR: &str = "Service restart not yet owned by rust
 #[tauri::command]
 pub fn is_service_active() -> bool {
     match client::request(DaemonRequest::GetStatus) {
-        Ok(DaemonResponse::Status { status }) => status.service_active,
+        Ok(DaemonResponse::Status { .. }) => true,
         _ => sysfs::is_service_active(),
     }
 }

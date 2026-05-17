@@ -2,13 +2,17 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Command;
 use std::sync::Arc;
 
+mod session_bridge;
+mod notification_sink;
+pub(crate) use notification_sink::notify_runtime_error;
+use notification_sink::NotificationSink;
+use session_bridge::SessionBridge;
+
 use chrono::{Duration as ChronoDuration, Utc};
-use nix::unistd::{Gid, Uid};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::RwLock;
@@ -19,7 +23,7 @@ use crate::ipc::protocol::{
     PROTOCOL_VERSION,
 };
 use crate::models::DaemonVersionInfo;
-use crate::runtime::{logger, paths, state::RuntimeState};
+use crate::runtime::{logger, paths, router, service_control::ServiceController, state::RuntimeState};
 use crate::{
     commands, hardware,
     models::{DisplayLayout, EventCategory, HardwareEvent, Orientation},
@@ -46,7 +50,7 @@ pub async fn run() -> Result<(), String> {
             .map_err(|e| format!("Failed to accept daemon client: {e}"))?;
         let state = state.clone();
         tokio::spawn(async move {
-            if let Err(err) = handle_client(stream, state).await {
+            if let Err(err) = router::handle_client(stream, state).await {
                 log::warn!("daemon client error: {err}");
             }
         });
@@ -94,326 +98,164 @@ fn initialize_state() -> RuntimeState {
     state
 }
 
-pub(crate) struct ServiceManager;
-
-impl ServiceManager {
-    fn restart_owned_services() -> Result<(), String> {
-        restart_owned_services()
-    }
-}
-
-fn restart_owned_services() -> Result<(), String> {
-    let mut errors = Vec::new();
-
-    if let Err(message) = restart_target_user_unit("zenbook-duo-session-agent.service") {
-        errors.push(message);
-    }
-
-    if let Err(message) = queue_system_unit_restart("zenbook-duo-rust-daemon.service") {
-        errors.push(message);
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
-}
-
-fn restart_target_user_unit(unit: &str) -> Result<(), String> {
-    let mut command = target_user_systemctl_command();
-    command.args(["--user", "restart", unit]);
-
-    let output = command
-        .output()
-        .map_err(|e| format!("Failed to restart {unit}: {e}"))?;
-
-    if output.status.success() || unit_not_found(&output) {
-        Ok(())
-    } else {
-        Err(format!(
-            "Failed to restart {unit}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
-}
-
-fn target_user_systemctl_command() -> Command {
-    let uid = target_uid();
-    let gid = target_gid();
-    let mut command = Command::new("systemctl");
-    command
-        .env("XDG_RUNTIME_DIR", format!("/run/user/{uid}"))
-        .env(
-            "DBUS_SESSION_BUS_ADDRESS",
-            format!("unix:path=/run/user/{uid}/bus"),
-        );
-
-    if Uid::current().is_root() {
-        command.uid(uid).gid(gid);
-    }
-
-    command
-}
-
-fn queue_target_user_unit_restart(unit: &str) -> Result<(), String> {
-    let mut command = target_user_systemctl_command();
-    command
-        .args(["--user", "restart", unit])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-
-    tokio::task::spawn_blocking(move || {
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        command.status()
-    });
-
-    Ok(())
-}
-
-fn queue_system_unit_restart(unit: &str) -> Result<(), String> {
-    let status = Command::new("systemctl")
-        .args(["status", unit])
-        .output()
-        .map_err(|e| format!("Failed to inspect {unit}: {e}"))?;
-
-    if !status.status.success() && unit_not_found(&status) {
-        return Ok(());
-    }
-
-    Command::new("sh")
-        .arg("-c")
-        .arg("sleep 0.2; exec systemctl restart \"$1\"")
-        .arg("zenbook-duo-restart")
-        .arg(unit)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("Failed to queue restart for {unit}: {e}"))
-}
-
-fn target_uid() -> u32 {
-    std::env::var("ZENBOOK_DUO_UID")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or_else(|| Uid::current().as_raw())
-}
-
-fn target_gid() -> u32 {
-    std::env::var("ZENBOOK_DUO_GID")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or_else(|| Gid::current().as_raw())
-}
-
-fn unit_not_found(output: &Output) -> bool {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    stderr.contains("not loaded")
-        || stderr.contains("could not be found")
-        || stderr.contains("Unit ")
-}
-
-async fn handle_client(stream: UnixStream, state: Arc<RwLock<RuntimeState>>) -> Result<(), String> {
-    let (reader, mut writer) = stream.into_split();
-    let mut lines = BufReader::new(reader).lines();
-
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .map_err(|e| format!("Failed to read daemon request: {e}"))?
+pub(super) async fn dispatch_request(
+    payload: DaemonRequest,
+    state: Arc<RwLock<RuntimeState>>,
+) -> DaemonResponse {
+match payload {
+    DaemonRequest::Ping => DaemonResponse::Pong,
+    DaemonRequest::HandleLifecycle { phase } => match DisplayReplayPolicy::handle_lifecycle(&state, phase).await
     {
-        let envelope: Envelope<DaemonRequest> =
-            serde_json::from_str(&line).map_err(|e| format!("Invalid daemon request JSON: {e}"))?;
-
-        if envelope.protocol_version != PROTOCOL_VERSION {
-            write_response(
-                &mut writer,
-                DaemonResponse::Error {
-                    message: format!(
-                        "Protocol mismatch: expected {}, got {}",
-                        PROTOCOL_VERSION, envelope.protocol_version
-                    ),
-                },
-            )
-            .await?;
-            continue;
-        }
-
-        let response = match envelope.payload {
-            DaemonRequest::Ping => DaemonResponse::Pong,
-            DaemonRequest::HandleLifecycle { phase } => match DisplayReplayPolicy::handle_lifecycle(&state, phase).await
-            {
-                Ok(()) => DaemonResponse::Ack,
-                Err(message) => DaemonResponse::Error { message },
-            },
-            DaemonRequest::GetStatus => {
-                let guard = state.read().await;
-                let mut status = guard.status.clone();
-                status.service_active = guard.session_agent.connected;
-                DaemonResponse::Status { status }
-            }
-            DaemonRequest::GetVersion => DaemonResponse::Version {
-                version: DaemonVersionInfo {
-                    version: env!("CARGO_PKG_VERSION").to_string(),
-                    protocol_version: PROTOCOL_VERSION,
-                },
-            },
-            DaemonRequest::GetDisplayLayout => {
-                match SessionBridge::request(state.clone(), SessionCommand::GetDisplayLayout, true).await {
-                    Ok(SessionResponse::DisplayLayout { layout }) => {
-                        DaemonResponse::DisplayLayout { layout }
-                    }
-                    Ok(SessionResponse::Error { message }) => DaemonResponse::Error { message },
-                    Ok(_) => DaemonResponse::Error {
-                        message: "Unexpected session-agent response while reading display layout"
-                            .into(),
-                    },
-                    Err(_) => match hardware::display_config::get_display_layout() {
-                        Ok(layout) => DaemonResponse::DisplayLayout { layout },
-                        Err(message) => DaemonResponse::Error { message },
-                    },
-                }
-            }
-            DaemonRequest::GetSettings => {
-                let guard = state.read().await;
-                DaemonResponse::Settings {
-                    settings: guard.settings.clone(),
-                }
-            }
-            DaemonRequest::UsbMediaRemapStatus => DaemonResponse::UsbMediaRemapStatus {
-                status: commands::usb_media_remap::get_status(),
-            },
-            DaemonRequest::SaveSettings { settings } => {
-                let mut guard = state.write().await;
-                guard.settings = settings;
-                guard.touch();
-                persist_state(&guard);
-                DaemonResponse::Ack
-            }
-            DaemonRequest::SetBacklight { level } => match hardware::hid::set_backlight(level) {
-                Ok(()) => {
-                    let mut guard = state.write().await;
-                    guard.status.backlight_level = level;
-                    let _ = logger::append_line(format!(
-                        "rust-daemon: set backlight request -> {level}"
-                    ));
-                    guard.recent_events.push(HardwareEvent::info(
-                        EventCategory::Keyboard,
-                        format!("Backlight set to {level}"),
-                        "rust-daemon",
-                    ));
-                    guard.touch();
-                    persist_state(&guard);
-                    DaemonResponse::Ack
-                }
-                Err(message) => DaemonResponse::Error { message },
-            },
-            DaemonRequest::SetOrientation { orientation } => {
-                apply_orientation(&state, orientation).await
-            }
-            DaemonRequest::ApplyDisplayLayout { layout } => {
-                apply_display_layout_request(&state, layout).await
-            }
-            DaemonRequest::UsbMediaRemapStart => {
-                let _ = logger::append_line("rust-daemon: start usb media remap request");
-                match commands::usb_media_remap::start_remap() {
-                    Ok(()) => DaemonResponse::Ack,
-                    Err(message) => DaemonResponse::Error { message },
-                }
-            }
-            DaemonRequest::UsbMediaRemapStop => {
-                let _ = logger::append_line("rust-daemon: stop usb media remap request");
-                match commands::usb_media_remap::stop_remap() {
-                    Ok(()) => DaemonResponse::Ack,
-                    Err(message) => DaemonResponse::Error { message },
-                }
-            }
-            DaemonRequest::UsbMediaRemapTogglePause => {
-                let _ = logger::append_line("rust-daemon: toggle usb media remap pause request");
-                match commands::usb_media_remap::toggle_pause() {
-                    Ok(()) => DaemonResponse::Ack,
-                    Err(message) => DaemonResponse::Error { message },
-                }
-            }
-            DaemonRequest::RestartService => match ServiceManager::restart_owned_services() {
-                Ok(()) => DaemonResponse::Ack,
-                Err(message) => DaemonResponse::Error { message },
-            },
-            DaemonRequest::RegisterSessionAgent {
-                session_id,
-                backend,
-                socket_path,
-            } => {
-                match handle_session_registration(&state, session_id, backend, socket_path).await {
-                    Ok(()) => DaemonResponse::Ack,
-                    Err(message) => DaemonResponse::Error { message },
-                }
-            }
-            DaemonRequest::AppendLog { line } => match logger::append_line(line) {
-                Ok(()) => DaemonResponse::Ack,
-                Err(message) => DaemonResponse::Error { message },
-            },
-            DaemonRequest::TailLogs { lines } => DaemonResponse::Logs {
-                lines: hardware::sysfs::read_log_lines(lines),
-            },
-            DaemonRequest::ClearLogs => match logger::clear() {
-                Ok(()) => DaemonResponse::Ack,
-                Err(message) => DaemonResponse::Error { message },
-            },
-            DaemonRequest::GetRecentEvents { limit } => {
-                let guard = state.read().await;
-                let events = guard
-                    .recent_events
-                    .iter()
-                    .rev()
-                    .take(limit)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect();
-                DaemonResponse::Events { events }
-            }
-            DaemonRequest::ListTouchscreens => {
-                let devices = hardware::touchscreen::list_touchscreens();
-                DaemonResponse::Touchscreens { devices }
-            }
-            DaemonRequest::SetTouchscreenEnabled { connector, enabled } => {
-                let devices = hardware::touchscreen::list_touchscreens();
-                match devices.iter().find(|d| d.connector == connector) {
-                    Some(dev) => {
-                        match hardware::touchscreen::set_touchscreen_enabled(&dev.i2c_id, enabled) {
-                            Ok(()) => DaemonResponse::Ack,
-                            Err(message) => DaemonResponse::Error { message },
-                        }
-                    }
-                    None => DaemonResponse::Error {
-                        message: format!("No touchscreen found for connector {}", connector),
-                    },
-                }
-            }
-        };
-
-        write_response(&mut writer, response).await?;
+        Ok(()) => DaemonResponse::Ack,
+        Err(message) => DaemonResponse::Error { message },
+    },
+    DaemonRequest::GetStatus => {
+        let guard = state.read().await;
+        let mut status = guard.status.clone();
+        status.service_active = true;
+        DaemonResponse::Status { status }
     }
-
-    Ok(())
+    DaemonRequest::GetVersion => DaemonResponse::Version {
+        version: DaemonVersionInfo {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            protocol_version: PROTOCOL_VERSION,
+        },
+    },
+    DaemonRequest::GetDisplayLayout => {
+        match SessionBridge::request(state.clone(), SessionCommand::GetDisplayLayout, true).await {
+            Ok(SessionResponse::DisplayLayout { layout }) => {
+                DaemonResponse::DisplayLayout { layout }
+            }
+            Ok(SessionResponse::Error { message }) => DaemonResponse::Error { message },
+            Ok(_) => DaemonResponse::Error {
+                message: "Unexpected session-agent response while reading display layout"
+                    .into(),
+            },
+            Err(_) => match hardware::display_layout::get_display_layout() {
+                Ok(layout) => DaemonResponse::DisplayLayout { layout },
+                Err(message) => DaemonResponse::Error { message },
+            },
+        }
+    }
+    DaemonRequest::GetSettings => {
+        let guard = state.read().await;
+        DaemonResponse::Settings {
+            settings: guard.settings.clone(),
+        }
+    }
+    DaemonRequest::UsbMediaRemapStatus => DaemonResponse::UsbMediaRemapStatus {
+        status: commands::usb_media_remap::get_status(),
+    },
+    DaemonRequest::SaveSettings { settings } => {
+        let mut guard = state.write().await;
+        guard.settings = settings;
+        guard.touch();
+        persist_state(&guard);
+        DaemonResponse::Ack
+    }
+    DaemonRequest::SetBacklight { level } => match hardware::hid::set_backlight(level) {
+        Ok(()) => {
+            let mut guard = state.write().await;
+            guard.status.backlight_level = level;
+            let _ = logger::append_line(format!(
+                "rust-daemon: set backlight request -> {level}"
+            ));
+            guard.push_recent_event(HardwareEvent::info(
+                EventCategory::Keyboard,
+                format!("Backlight set to {level}"),
+                "rust-daemon",
+            ));
+            guard.touch();
+            persist_state(&guard);
+            DaemonResponse::Ack
+        }
+        Err(message) => DaemonResponse::Error { message },
+    },
+    DaemonRequest::SetOrientation { orientation } => {
+        apply_orientation(&state, orientation).await
+    }
+    DaemonRequest::ApplyDisplayLayout { layout } => {
+        apply_display_layout_request(&state, layout).await
+    }
+    DaemonRequest::UsbMediaRemapStart => {
+        let _ = logger::append_line("rust-daemon: start usb media remap request");
+        match commands::usb_media_remap::start_remap() {
+            Ok(()) => DaemonResponse::Ack,
+            Err(message) => DaemonResponse::Error { message },
+        }
+    }
+    DaemonRequest::UsbMediaRemapStop => {
+        let _ = logger::append_line("rust-daemon: stop usb media remap request");
+        match commands::usb_media_remap::stop_remap() {
+            Ok(()) => DaemonResponse::Ack,
+            Err(message) => DaemonResponse::Error { message },
+        }
+    }
+    DaemonRequest::UsbMediaRemapTogglePause => {
+        let _ = logger::append_line("rust-daemon: toggle usb media remap pause request");
+        match commands::usb_media_remap::toggle_pause() {
+            Ok(()) => DaemonResponse::Ack,
+            Err(message) => DaemonResponse::Error { message },
+        }
+    }
+    DaemonRequest::RestartService => match ServiceController::restart_owned_services() {
+        Ok(()) => DaemonResponse::Ack,
+        Err(message) => DaemonResponse::Error { message },
+    },
+    DaemonRequest::RegisterSessionAgent {
+        session_id,
+        backend,
+        socket_path,
+    } => {
+        match handle_session_registration(&state, session_id, backend, socket_path).await {
+            Ok(()) => DaemonResponse::Ack,
+            Err(message) => DaemonResponse::Error { message },
+        }
+    }
+    DaemonRequest::AppendLog { line } => match logger::append_line(line) {
+        Ok(()) => DaemonResponse::Ack,
+        Err(message) => DaemonResponse::Error { message },
+    },
+    DaemonRequest::TailLogs { lines } => DaemonResponse::Logs {
+        lines: hardware::sysfs::read_log_lines(lines),
+    },
+    DaemonRequest::ClearLogs => match logger::clear() {
+        Ok(()) => DaemonResponse::Ack,
+        Err(message) => DaemonResponse::Error { message },
+    },
+    DaemonRequest::GetRecentEvents { limit } => {
+        let guard = state.read().await;
+        let events = guard
+            .recent_events
+            .iter()
+            .rev()
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        DaemonResponse::Events { events }
+    }
+    DaemonRequest::ListTouchscreens => {
+        let devices = hardware::touchscreen::list_touchscreens();
+        DaemonResponse::Touchscreens { devices }
+    }
+    DaemonRequest::SetTouchscreenEnabled { connector, enabled } => {
+        let devices = hardware::touchscreen::list_touchscreens();
+        match devices.iter().find(|d| d.connector == connector) {
+            Some(dev) => {
+                match hardware::touchscreen::set_touchscreen_enabled(&dev.i2c_id, enabled) {
+                    Ok(()) => DaemonResponse::Ack,
+                    Err(message) => DaemonResponse::Error { message },
+                }
+            }
+            None => DaemonResponse::Error {
+                message: format!("No touchscreen found for connector {}", connector),
+            },
+        }
+    }
 }
-
-async fn write_response<W: AsyncWriteExt + Unpin>(
-    writer: &mut W,
-    response: DaemonResponse,
-) -> Result<(), String> {
-    let line = serde_json::to_string(&Envelope::new(response))
-        .map_err(|e| format!("Failed to encode daemon response: {e}"))?;
-    writer
-        .write_all(line.as_bytes())
-        .await
-        .map_err(|e| format!("Failed to write daemon response: {e}"))?;
-    writer
-        .write_all(b"\n")
-        .await
-        .map_err(|e| format!("Failed to terminate daemon response: {e}"))
 }
 
 fn ensure_parent(path: &Path) -> io::Result<()> {
@@ -476,7 +318,7 @@ async fn handle_lifecycle(
             hardware::hid::set_backlight(0)?;
 
             let mut guard = state.write().await;
-            guard.recent_events.push(HardwareEvent::info(
+            guard.push_recent_event(HardwareEvent::info(
                 EventCategory::Service,
                 format!("Lifecycle event: {:?}", phase),
                 "rust-daemon",
@@ -505,8 +347,8 @@ async fn handle_lifecycle(
                 let previous_level = guard.status.backlight_level;
                 guard.status = refreshed;
                 guard.status.backlight_level = previous_level;
-                guard.status.service_active = guard.session_agent.connected;
-                guard.recent_events.push(HardwareEvent::info(
+                guard.status.service_active = true;
+                guard.push_recent_event(HardwareEvent::info(
                     EventCategory::Service,
                     format!("Lifecycle event: {:?}", phase),
                     "rust-daemon",
@@ -564,7 +406,7 @@ async fn refresh_lifecycle_display_mode(
                 err
             ))
             .ok();
-            queue_lifecycle_display_retry(state.clone(), attached, scale);
+            queue_lifecycle_display_retry(state.clone());
             Ok(())
         }
         Err(err) => {
@@ -590,7 +432,7 @@ async fn handle_session_registration(
     backend: crate::ipc::protocol::SessionBackend,
     socket_path: String,
 ) -> Result<(), String> {
-    let (attached, scale) = {
+    {
         let mut guard = state.write().await;
         guard.session_agent.connected = true;
         guard.session_agent.session_id = Some(session_id);
@@ -603,18 +445,17 @@ async fn handle_session_registration(
         ));
         guard.touch();
         persist_state(&guard);
-        (guard.status.keyboard_attached, guard.settings.default_scale)
-    };
+    }
 
     let state = Arc::clone(state);
     tokio::spawn(async move {
-        if let Err(err) = replay_current_display_mode(&state, attached, scale).await {
+        if let Err(err) = replay_current_display_mode_from_state(&state).await {
             if is_display_session_deferral(&err) {
                 let _ = logger::append_line(format!(
                     "rust-daemon: session registration dock replay deferred: {}",
                     err
                 ));
-                queue_lifecycle_display_retry(state.clone(), attached, scale);
+                queue_lifecycle_display_retry(state.clone());
                 return;
             }
 
@@ -641,6 +482,18 @@ pub(crate) async fn replay_current_display_mode(
     scale: f64,
 ) -> Result<(), String> {
     replay_current_display_mode_with_disconnect(state, attached, scale, true).await
+}
+
+async fn current_display_replay_inputs(state: &Arc<RwLock<RuntimeState>>) -> (bool, f64) {
+    let guard = state.read().await;
+    (guard.status.keyboard_attached, guard.settings.default_scale)
+}
+
+async fn replay_current_display_mode_from_state(
+    state: &Arc<RwLock<RuntimeState>>,
+) -> Result<(), String> {
+    let (attached, scale) = current_display_replay_inputs(state).await;
+    replay_current_display_mode(state, attached, scale).await
 }
 
 async fn replay_current_display_mode_with_disconnect(
@@ -729,7 +582,7 @@ async fn record_lid_closed_state(
     }
 
     guard.lid_closed = lid_closed;
-    guard.recent_events.push(HardwareEvent::info(
+    guard.push_recent_event(HardwareEvent::info(
         EventCategory::Display,
         if lid_closed {
             "Lid closed"
@@ -738,10 +591,6 @@ async fn record_lid_closed_state(
         },
         "rust-daemon",
     ));
-    if guard.recent_events.len() > 500 {
-        let overflow = guard.recent_events.len() - 500;
-        guard.recent_events.drain(0..overflow);
-    }
     guard.touch();
     persist_state(&guard);
     Some((guard.status.keyboard_attached, guard.settings.default_scale))
@@ -823,7 +672,7 @@ fn queue_lid_display_retry(state: Arc<RwLock<RuntimeState>>, lid_closed: bool) {
     });
 }
 
-fn queue_lifecycle_display_retry(state: Arc<RwLock<RuntimeState>>, attached: bool, scale: f64) {
+fn queue_lifecycle_display_retry(state: Arc<RwLock<RuntimeState>>) {
     tokio::spawn(async move {
         const RETRY_ATTEMPTS: usize = 6;
         const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -831,6 +680,7 @@ fn queue_lifecycle_display_retry(state: Arc<RwLock<RuntimeState>>, attached: boo
         for attempt in 1..=RETRY_ATTEMPTS {
             tokio::time::sleep(RETRY_DELAY).await;
 
+            let (attached, scale) = current_display_replay_inputs(&state).await;
             match replay_current_display_mode_with_disconnect(&state, attached, scale, false).await
             {
                 Ok(()) => {
@@ -1010,11 +860,17 @@ pub(crate) async fn session_display_layout(
     session_display_layout_result(state, false).await.ok()
 }
 
+pub(crate) async fn session_display_layout_for_liveness(
+    state: Arc<RwLock<RuntimeState>>,
+) -> Option<DisplayLayout> {
+    session_display_layout_result(state, true).await.ok()
+}
+
 async fn session_display_layout_result(
     state: Arc<RwLock<RuntimeState>>,
     disconnect_on_failure: bool,
 ) -> Result<DisplayLayout, String> {
-    match request_session(
+    match session_bridge::request_session(
         state,
         SessionCommand::GetDisplayLayout,
         disconnect_on_failure,
@@ -1081,294 +937,6 @@ async fn apply_display_layout_request(
     }
 }
 
-pub(crate) struct SessionBridge;
-
-impl SessionBridge {
-    async fn request(
-        state: Arc<RwLock<RuntimeState>>,
-        command: SessionCommand,
-        disconnect_on_failure: bool,
-    ) -> Result<SessionResponse, String> {
-        request_session(state, command, disconnect_on_failure).await
-    }
-}
-
-async fn request_session(
-    state: Arc<RwLock<RuntimeState>>,
-    command: SessionCommand,
-    disconnect_on_failure: bool,
-) -> Result<SessionResponse, String> {
-    let socket_path = {
-        let guard = state.read().await;
-        guard
-            .session_agent
-            .socket_path
-            .clone()
-            .ok_or_else(|| "No session agent registered".to_string())?
-    };
-
-    let stream = match timeout(Duration::from_secs(3), UnixStream::connect(&socket_path)).await {
-        Ok(Ok(stream)) => stream,
-        Ok(Err(e)) => {
-            if disconnect_on_failure {
-                mark_session_agent_disconnected(
-                    &state,
-                    &format!("Failed to connect to session agent: {e}"),
-                )
-                .await;
-            }
-            return Err(format!("Failed to connect to session agent: {e}"));
-        }
-        Err(_) => {
-            if disconnect_on_failure {
-                mark_session_agent_disconnected(&state, "Timed out connecting to session agent")
-                    .await;
-            }
-            return Err("Timed out connecting to session agent".to_string());
-        }
-    };
-    let (reader, mut writer) = stream.into_split();
-
-    let line = serde_json::to_string(&Envelope::new(command))
-        .map_err(|e| format!("Failed to encode session command: {e}"))?;
-    if let Err(e) = timeout(Duration::from_secs(3), writer.write_all(line.as_bytes()))
-        .await
-        .map_err(|_| "Timed out writing session command".to_string())?
-    {
-        if disconnect_on_failure {
-            mark_session_agent_disconnected(
-                &state,
-                &format!("Failed to write session command: {e}"),
-            )
-            .await;
-        }
-        return Err(format!("Failed to write session command: {e}"));
-    }
-    if let Err(e) = timeout(Duration::from_secs(3), writer.write_all(b"\n"))
-        .await
-        .map_err(|_| "Timed out terminating session command".to_string())?
-    {
-        if disconnect_on_failure {
-            mark_session_agent_disconnected(
-                &state,
-                &format!("Failed to terminate session command: {e}"),
-            )
-            .await;
-        }
-        return Err(format!("Failed to terminate session command: {e}"));
-    }
-
-    let mut lines = BufReader::new(reader).lines();
-    let reply = match timeout(Duration::from_secs(3), lines.next_line()).await {
-        Err(_) => {
-            if disconnect_on_failure {
-                mark_session_agent_disconnected(&state, "Timed out waiting for session response")
-                    .await;
-            }
-            return Err("Timed out waiting for session response".to_string());
-        }
-        Ok(Ok(Some(reply))) => reply,
-        Ok(Ok(None)) => {
-            if disconnect_on_failure {
-                mark_session_agent_disconnected(&state, "Session agent closed before replying")
-                    .await;
-            }
-            return Err("Session agent closed before replying".to_string());
-        }
-        Ok(Err(e)) => {
-            if disconnect_on_failure {
-                mark_session_agent_disconnected(
-                    &state,
-                    &format!("Failed to read session response: {e}"),
-                )
-                .await;
-            }
-            return Err(format!("Failed to read session response: {e}"));
-        }
-    };
-
-    let envelope: Envelope<SessionResponse> =
-        serde_json::from_str(&reply).map_err(|e| format!("Invalid session response JSON: {e}"))?;
-
-    Ok(envelope.payload)
-}
-
-async fn mark_session_agent_disconnected(state: &Arc<RwLock<RuntimeState>>, reason: &str) {
-    let mut guard = state.write().await;
-    let was_connected = guard.session_agent.connected || guard.status.service_active;
-    guard.session_agent = Default::default();
-    guard.status.service_active = false;
-    if was_connected {
-        guard.recent_events.push(HardwareEvent::warning(
-            EventCategory::Service,
-            format!("Session agent disconnected: {reason}"),
-            "rust-daemon",
-        ));
-    }
-    guard.touch();
-    persist_state(&guard);
-    let _ = logger::append_line(format!(
-        "rust-daemon: session agent disconnected: {}",
-        reason
-    ));
-    drop(guard);
-
-    if was_connected {
-        if let Err(err) = queue_target_user_unit_restart("zenbook-duo-session-agent.service") {
-            log::warn!("failed to queue session agent restart: {err}");
-            let _ = logger::append_line(format!(
-                "rust-daemon: failed to queue session agent restart: {}",
-                err
-            ));
-        } else {
-            let _ = logger::append_line("rust-daemon: queued session agent restart");
-        }
-    }
-
-    if should_notify_session_agent_disconnect(reason) {
-        if let Err(err) = send_runtime_notification_direct(
-            "Zenbook Duo Runtime Error",
-            &format!("Session agent disconnected: {reason}"),
-        ) {
-            log::warn!("failed to send direct disconnect notification: {err}");
-        }
-    }
-}
-
-fn should_notify_session_agent_disconnect(reason: &str) -> bool {
-    !is_display_session_deferral(reason)
-}
-
-pub(crate) struct NotificationSink;
-
-impl NotificationSink {
-    async fn runtime_error(state: &Arc<RwLock<RuntimeState>>, title: &str, message: &str) {
-        notify_runtime_error(state, title, message).await;
-    }
-}
-
-pub(crate) async fn notify_runtime_error(
-    state: &Arc<RwLock<RuntimeState>>,
-    title: &str,
-    message: &str,
-) {
-    if !should_notify_runtime_error(title, message) {
-        return;
-    }
-
-    if !should_emit_runtime_notification(state, title, message).await {
-        return;
-    }
-
-    if let Err(err) = send_runtime_notification_via_session(state, title, message).await {
-        log::warn!("failed to send runtime notification via session agent: {err}");
-        if let Err(fallback_err) = send_runtime_notification_direct(title, message) {
-            log::warn!("failed to send runtime notification directly: {fallback_err}");
-        }
-    }
-}
-
-fn should_notify_runtime_error(title: &str, message: &str) -> bool {
-    if title != "Zenbook Duo Runtime Error" {
-        return true;
-    }
-
-    !runtime_error_is_display_session_deferral(message)
-}
-
-fn runtime_error_is_display_session_deferral(message: &str) -> bool {
-    [
-        "Lifecycle dock refresh skipped: ",
-        "Display-mode policy action failed: ",
-        "Session registration dock replay skipped: ",
-        "Lid state display update failed: ",
-    ]
-    .iter()
-    .any(|prefix| {
-        message
-            .strip_prefix(prefix)
-            .is_some_and(is_display_session_deferral)
-    })
-}
-
-async fn should_emit_runtime_notification(
-    state: &Arc<RwLock<RuntimeState>>,
-    title: &str,
-    message: &str,
-) -> bool {
-    let key = format!("{title}\n{message}");
-    let now = Utc::now();
-    let mut guard = state.write().await;
-    if let Some(last) = &guard.last_runtime_notification {
-        if last.key == key && now - last.emitted_at < ChronoDuration::seconds(30) {
-            return false;
-        }
-    }
-    guard.last_runtime_notification = Some(crate::runtime::state::RuntimeNotificationState {
-        key,
-        emitted_at: now,
-    });
-    persist_state(&guard);
-    true
-}
-
-async fn send_runtime_notification_via_session(
-    state: &Arc<RwLock<RuntimeState>>,
-    title: &str,
-    message: &str,
-) -> Result<(), String> {
-    match request_session(
-        state.clone(),
-        SessionCommand::ShowNotification {
-            title: title.to_string(),
-            message: message.to_string(),
-            urgent: true,
-        },
-        false,
-    )
-    .await?
-    {
-        SessionResponse::Ack => Ok(()),
-        SessionResponse::Error { message } => Err(message),
-        SessionResponse::DisplayLayout { .. } => {
-            Err("Unexpected display-layout response for notification request".into())
-        }
-    }
-}
-
-fn send_runtime_notification_direct(title: &str, message: &str) -> Result<(), String> {
-    let target_user = std::env::var("ZENBOOK_DUO_USER")
-        .map_err(|_| "ZENBOOK_DUO_USER is not set for runtime notifications".to_string())?;
-    let target_uid = std::env::var("ZENBOOK_DUO_UID")
-        .map_err(|_| "ZENBOOK_DUO_UID is not set for runtime notifications".to_string())?;
-    let runtime_dir = format!("/run/user/{target_uid}");
-    let bus_address = format!("unix:path={runtime_dir}/bus");
-
-    let status = Command::new("sudo")
-        .args(["-u", &target_user, "env"])
-        .arg(format!("XDG_RUNTIME_DIR={runtime_dir}"))
-        .arg(format!("DBUS_SESSION_BUS_ADDRESS={bus_address}"))
-        .args([
-            "notify-send",
-            "-a",
-            "Zenbook Duo Control",
-            "-u",
-            "critical",
-            "-i",
-            "dialog-error",
-            title,
-            message,
-        ])
-        .status()
-        .map_err(|e| format!("Failed to launch runtime notification: {e}"))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("Runtime notification exited with {status}"))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1382,6 +950,43 @@ mod tests {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
     const NIRI_SOCKET_REFUSED: &str = "Error: error connecting to the niri socket\n\nCaused by:\n    Connection refused (os error 111)";
+
+    #[tokio::test]
+    async fn liveness_display_layout_probe_clears_dead_session_agent() {
+        let socket_path = unique_test_socket_path("dead-session-agent");
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.service_active = true;
+        }
+
+        let layout = session_display_layout_for_liveness(state.clone()).await;
+
+        assert!(layout.is_none());
+        let guard = state.read().await;
+        assert!(!guard.session_agent.connected);
+        assert!(guard.session_agent.socket_path.is_none());
+        assert!(!guard.status.service_active);
+    }
+
+    #[tokio::test]
+    async fn get_status_reports_daemon_reachable_without_session_agent() {
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = false;
+            guard.status.service_active = false;
+        }
+
+        let response = dispatch_request(DaemonRequest::GetStatus, state).await;
+
+        match response {
+            DaemonResponse::Status { status } => assert!(status.service_active),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
 
     #[tokio::test]
     async fn apply_orientation_does_not_deadlock_and_updates_state() {
@@ -1427,6 +1032,57 @@ mod tests {
 
         assert!(matches!(response, DaemonResponse::Ack));
         assert_eq!(state.read().await.status.orientation, Orientation::Left);
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn display_replay_from_state_uses_current_attachment_and_scale() {
+        let socket_path = unique_test_socket_path("replay-from-current-state");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read test request")
+                .expect("session request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode session request");
+            match envelope.payload {
+                SessionCommand::SetDockMode {
+                    attached,
+                    scale,
+                    layout,
+                } => {
+                    assert!(!attached);
+                    assert_eq!(scale, 1.25);
+                    assert!(layout.is_none());
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.keyboard_attached = false;
+            guard.settings.default_scale = 1.25;
+        }
+
+        replay_current_display_mode_from_state(&state)
+            .await
+            .expect("replay should succeed");
 
         server.await.expect("join session server");
         let _ = fs::remove_file(&socket_path);
@@ -2372,13 +2028,13 @@ mod tests {
 
     #[test]
     fn retryable_session_disconnect_reasons_are_not_directly_notified() {
-        assert!(!should_notify_session_agent_disconnect(
+        assert!(!session_bridge::should_notify_session_agent_disconnect(
             "Timed out waiting for session response"
         ));
-        assert!(!should_notify_session_agent_disconnect(
+        assert!(!session_bridge::should_notify_session_agent_disconnect(
             "No session agent registered"
         ));
-        assert!(should_notify_session_agent_disconnect(
+        assert!(session_bridge::should_notify_session_agent_disconnect(
             "Failed to decode session response"
         ));
     }
@@ -2684,7 +2340,7 @@ mod tests {
             guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
         }
 
-        notify_runtime_error(
+        notification_sink::notify_runtime_error(
             &state,
             "Zenbook Duo Runtime Error",
             "Dock-mode replay skipped",
@@ -2732,13 +2388,13 @@ mod tests {
             guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
         }
 
-        notify_runtime_error(
+        notification_sink::notify_runtime_error(
             &state,
             "Zenbook Duo Runtime Error",
             "Session agent disconnected",
         )
         .await;
-        notify_runtime_error(
+        notification_sink::notify_runtime_error(
             &state,
             "Zenbook Duo Runtime Error",
             "Session agent disconnected",
@@ -2751,35 +2407,35 @@ mod tests {
 
     #[test]
     fn retryable_display_session_errors_are_not_notifiable() {
-        assert!(!should_notify_runtime_error(
+        assert!(!notification_sink::should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             "Lifecycle dock refresh skipped: No session agent registered",
         ));
-        assert!(!should_notify_runtime_error(
+        assert!(!notification_sink::should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             "Display-mode policy action failed: No session agent registered",
         ));
-        assert!(!should_notify_runtime_error(
+        assert!(!notification_sink::should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             "Lifecycle dock refresh skipped: Timed out waiting for session response",
         ));
-        assert!(!should_notify_runtime_error(
+        assert!(!notification_sink::should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             "Display-mode policy action failed: Timed out waiting for session response",
         ));
-        assert!(!should_notify_runtime_error(
+        assert!(!notification_sink::should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             &format!("Lifecycle dock refresh skipped: {NIRI_SOCKET_REFUSED}"),
         ));
-        assert!(!should_notify_runtime_error(
+        assert!(!notification_sink::should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             &format!("Display-mode policy action failed: {NIRI_SOCKET_REFUSED}"),
         ));
-        assert!(!should_notify_runtime_error(
+        assert!(!notification_sink::should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             &format!("Session registration dock replay skipped: {NIRI_SOCKET_REFUSED}"),
         ));
-        assert!(!should_notify_runtime_error(
+        assert!(!notification_sink::should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             &format!("Lid state display update failed: {NIRI_SOCKET_REFUSED}"),
         ));
@@ -2787,7 +2443,7 @@ mod tests {
 
     #[test]
     fn real_runtime_errors_remain_notifiable() {
-        assert!(should_notify_runtime_error(
+        assert!(notification_sink::should_notify_runtime_error(
             "Zenbook Duo Runtime Error",
             "Display-mode policy action failed: gdctl set failed",
         ));

@@ -1,4 +1,4 @@
-use crate::hardware::{display_config, sysfs};
+use crate::hardware::{display_layout, sysfs};
 use crate::runtime::host::{CommandRunner, ProcessCommandRunner};
 use crate::models::{ConnectionType, DisplayLayout, DuoStatus, Orientation};
 
@@ -12,7 +12,7 @@ pub fn current_status() -> DuoStatus {
     status.bluetooth_enabled = bluetooth_enabled_with(&host);
     apply_layout_to_status(
         &mut status,
-        display_config::get_display_layout().ok().as_ref(),
+        display_layout::get_display_layout().ok().as_ref(),
     );
     status
 }

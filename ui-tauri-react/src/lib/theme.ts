@@ -1,5 +1,5 @@
 import { getCurrentWindow, type Theme } from "@tauri-apps/api/window";
-import { getSystemTheme } from "@/lib/tauri";
+import { settingsApi } from "@/lib/tauri-adapters";
 import type { ThemePreference } from "@/types/duo";
 
 export const THEME_PREFERENCES = ["system", "light", "dark"] as const satisfies readonly ThemePreference[];
@@ -34,7 +34,7 @@ export function isExplicitThemePreference(value: unknown): value is ExplicitThem
 
 export async function getBackendSystemTheme(): Promise<ExplicitThemePreference | null> {
   try {
-    const theme = await getSystemTheme();
+    const theme = await settingsApi.getSystemTheme();
     return isExplicitThemePreference(theme) ? theme : null;
   } catch (err) {
     console.warn("Failed to read backend system theme:", err);

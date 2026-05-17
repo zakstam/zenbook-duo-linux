@@ -8,7 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import * as api from "@/lib/tauri";
+import { diagnosticsApi } from "@/lib/tauri-adapters";
 import type {
   EvdevDevice,
   EvdevEvent,
@@ -74,7 +74,7 @@ export default function Diagnostics() {
   async function refreshEvdev() {
     setEvdevLoading(true);
     try {
-      const devices = await api.diagListEvdev();
+      const devices = await diagnosticsApi.diagListEvdev();
       setEvdev(devices);
       setEvdevError(null);
       const firstDevice = devices[0];
@@ -91,7 +91,7 @@ export default function Diagnostics() {
   async function refreshHid() {
     setHidLoading(true);
     try {
-      const devices = await api.diagListHid(vid, pid);
+      const devices = await diagnosticsApi.diagListHid(vid, pid);
       setHid(devices);
       const firstDevice = devices[0];
       if (!devices.some((d) => d.id === selectedHidId)) setSelectedHidId(firstDevice?.id ?? "");
@@ -123,7 +123,7 @@ export default function Diagnostics() {
     setEvdevEvents([]);
     setEvdevEventsMulti([]);
     try {
-      const events = await api.diagCaptureEvdev(selectedEvdev, evdevSeconds);
+      const events = await diagnosticsApi.diagCaptureEvdev(selectedEvdev, evdevSeconds);
       setEvdevEvents(events);
     } catch (e) {
       setEvdevError(String(e));
@@ -142,7 +142,7 @@ export default function Diagnostics() {
           (d.product ?? "").toLowerCase() === pid.toLowerCase()
         )
         .map((d) => d.eventPath);
-      const events = await api.diagCaptureEvdevMulti(paths, evdevSeconds);
+      const events = await diagnosticsApi.diagCaptureEvdevMulti(paths, evdevSeconds);
       setEvdevEventsMulti(events);
     } catch (e) {
       setEvdevError(String(e));
@@ -155,7 +155,7 @@ export default function Diagnostics() {
     setDescriptor(null);
     setDescriptorError(null);
     try {
-      const d = await api.diagReadReportDescriptor(selectedHidId);
+      const d = await diagnosticsApi.diagReadReportDescriptor(selectedHidId);
       setDescriptor(d);
     } catch (e) {
       setDescriptorError(String(e));
@@ -170,7 +170,7 @@ export default function Diagnostics() {
     setHidrawCapture(null);
     setHidrawError(null);
     try {
-      const cap = await api.diagCaptureHidrawPkexec(selectedHidraw, hidrawSeconds);
+      const cap = await diagnosticsApi.diagCaptureHidrawPkexec(selectedHidraw, hidrawSeconds);
       setHidrawCapture(cap);
     } catch (e) {
       setHidrawError(String(e));

@@ -34,7 +34,7 @@ pub fn apply_transition_policy(
     if is_attached {
         if let Some(wifi_enabled) = state.remembered_wifi_enabled {
             actions.push(PolicyAction::SetWifi(wifi_enabled));
-            state.recent_events.push(HardwareEvent::info(
+            state.push_recent_event(HardwareEvent::info(
                 EventCategory::Network,
                 if wifi_enabled {
                     "Restoring Wi-Fi on attach"
@@ -48,7 +48,7 @@ pub fn apply_transition_policy(
 
         if let Some(bluetooth_enabled) = state.remembered_bluetooth_enabled {
             actions.push(PolicyAction::SetBluetooth(bluetooth_enabled));
-            state.recent_events.push(HardwareEvent::info(
+            state.push_recent_event(HardwareEvent::info(
                 EventCategory::Bluetooth,
                 if bluetooth_enabled {
                     "Restoring Bluetooth on attach"
@@ -72,16 +72,11 @@ pub fn apply_transition_policy(
             scale: state.settings.default_scale,
         });
         state.status.bluetooth_enabled = true;
-        state.recent_events.push(HardwareEvent::info(
+        state.push_recent_event(HardwareEvent::info(
             EventCategory::Bluetooth,
             "Enabled Bluetooth on detach",
             "rust-daemon",
         ));
-    }
-
-    if state.recent_events.len() > 500 {
-        let overflow = state.recent_events.len() - 500;
-        state.recent_events.drain(0..overflow);
     }
 
     actions

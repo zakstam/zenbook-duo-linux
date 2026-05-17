@@ -8,7 +8,7 @@ use crate::runtime::client;
 
 const AUTOSTART_FILE_NAME: &str = "zenbook-duo-control.desktop";
 
-fn config_base_dir() -> PathBuf {
+pub(crate) fn config_base_dir() -> PathBuf {
     if let Ok(home_override) = env::var("ZENBOOK_DUO_HOME") {
         PathBuf::from(home_override).join(".config")
     } else {

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import BacklightSlider from "@/components/BacklightSlider";
 import OrientationButtons from "@/components/OrientationButtons";
-import { restartService } from "@/lib/tauri";
+import { controlsApi } from "@/lib/tauri-adapters";
 import { useTouchscreens } from "@/hooks/use-touchscreens";
 import { Switch } from "@/components/ui/switch";
 import { refreshStatus, useDispatch, useStore } from "@/lib/store";
@@ -30,7 +30,7 @@ export default function Controls() {
     setRestarted(false);
     setRestartError(null);
     try {
-      await restartService();
+      await controlsApi.restartService();
       setTimeout(async () => {
         await refreshStatus(dispatch);
         setRestarting(false);

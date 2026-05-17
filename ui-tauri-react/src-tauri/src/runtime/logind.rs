@@ -47,15 +47,11 @@ async fn watch_logind(state: Arc<RwLock<RuntimeState>>) -> Result<(), zbus::Erro
                 };
 
                 let mut guard = state.write().await;
-                guard.recent_events.push(HardwareEvent::info(
+                guard.push_recent_event(HardwareEvent::info(
                     EventCategory::Display,
                     message,
                     "rust-daemon",
                 ));
-                if guard.recent_events.len() > 500 {
-                    let overflow = guard.recent_events.len() - 500;
-                    guard.recent_events.drain(0..overflow);
-                }
                 guard.touch();
                 if let Err(err) = guard.save() {
                     log::warn!("failed to save logind runtime state: {err}");

@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import DisplayCanvas from "@/components/DisplayCanvas";
 import {
-  getDisplayLayout,
-  applyDisplayLayout,
-  saveDisplayLayoutPreference,
-} from "@/lib/tauri";
+  DYNAMIC_REFRESH_VALUE,
+  applyAndPersistDisplayLayout,
+  loadDisplayLayout,
+  updateDisplayRefreshMode,
+  updateDisplayScale,
+} from "@/lib/display-layout-controller";
 import { useTouchscreens } from "@/hooks/use-touchscreens";
 import { modesForResolution, refreshSelectValue } from "@/lib/display-layout";
 import type { DisplayLayout as LayoutType } from "@/types/duo";
@@ -24,8 +26,6 @@ import {
   IconAlertTriangle,
 } from "@tabler/icons-react";
 
-const DYNAMIC_REFRESH_VALUE = "dynamic";
-
 function formatRefreshRate(refreshRate: number) {
   return `${refreshRate.toFixed(1)}Hz`;
 }
@@ -37,7 +37,7 @@ export default function DisplayLayout() {
   const { touchscreens, pendingConnector, setEnabled: setTouchscreenEnabled } = useTouchscreens();
 
   useEffect(() => {
-    getDisplayLayout()
+    loadDisplayLayout()
       .then(setLayout)
       .catch((err) => setError(`Failed to get display layout: ${err}`));
   }, []);
@@ -46,9 +46,7 @@ export default function DisplayLayout() {
     setApplying(true);
     setError("");
     try {
-      await applyDisplayLayout(layout);
-
-      await saveDisplayLayoutPreference(layout);
+      await applyAndPersistDisplayLayout(layout);
     } catch (err) {
       setError(`Failed to apply or save layout: ${err}`);
     } finally {
@@ -58,7 +56,7 @@ export default function DisplayLayout() {
 
   const handleRefresh = async () => {
     try {
-      const l = await getDisplayLayout();
+      const l = await loadDisplayLayout();
       setLayout(l);
       setError("");
     } catch (err) {
@@ -67,27 +65,7 @@ export default function DisplayLayout() {
   };
 
   const handleRefreshModeChange = (connector: string, value: string) => {
-    setLayout((current) => ({
-      displays: current.displays.map((display) => {
-        if (display.connector !== connector) return display;
-
-        if (value === DYNAMIC_REFRESH_VALUE) {
-          return { ...display, refreshPolicy: "dynamic" };
-        }
-
-        const mode = display.availableModes.find((candidate) => candidate.modeId === value);
-        if (!mode) return display;
-
-        return {
-          ...display,
-          width: mode.width,
-          height: mode.height,
-          refreshRate: mode.refreshRate,
-          currentMode: mode,
-          refreshPolicy: "fixed",
-        };
-      }),
-    }));
+    setLayout((current) => updateDisplayRefreshMode(current, connector, value));
   };
 
   return (
@@ -184,13 +162,7 @@ export default function DisplayLayout() {
                   value={String(d.scale)}
                   onValueChange={(v) => {
                     const scale = parseFloat(v);
-                    setLayout((current) => ({
-                      displays: current.displays.map((display) =>
-                        display.connector === d.connector
-                          ? { ...display, scale }
-                          : display
-                      ),
-                    }));
+                    setLayout((current) => updateDisplayScale(current, d.connector, scale));
                   }}
                 >
                   <SelectTrigger className="w-40">

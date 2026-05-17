@@ -8,7 +8,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { refreshSettings, useDispatch, useStore } from "@/lib/store";
-import { saveSettings } from "@/lib/tauri";
+import { settingsApi } from "@/lib/tauri-adapters";
 import { normalizeThemePreference, resolveThemeForPreference } from "@/lib/theme";
 import type { ThemePreference } from "@/types/duo";
 import { cn } from "@/lib/utils";
@@ -45,7 +45,7 @@ export default function ThemeToggle() {
 
     try {
       setTheme(await resolveThemeForPreference(theme));
-      await saveSettings({ ...store.settings, theme });
+      await settingsApi.saveSettings({ ...store.settings, theme });
       await refreshSettings(dispatch);
     } catch (err) {
       console.error("Failed to save theme preference:", err);

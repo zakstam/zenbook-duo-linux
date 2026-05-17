@@ -65,9 +65,23 @@ pub struct RuntimeNotificationState {
     pub emitted_at: DateTime<Utc>,
 }
 
+pub const MAX_RECENT_EVENTS: usize = 500;
+
 impl RuntimeState {
     pub fn touch(&mut self) {
         self.last_updated = Utc::now();
+    }
+
+    pub fn push_recent_event(&mut self, event: HardwareEvent) {
+        self.recent_events.push(event);
+        self.trim_recent_events();
+    }
+
+    pub fn trim_recent_events(&mut self) {
+        if self.recent_events.len() > MAX_RECENT_EVENTS {
+            let overflow = self.recent_events.len() - MAX_RECENT_EVENTS;
+            self.recent_events.drain(0..overflow);
+        }
     }
 
     pub fn load() -> Self {

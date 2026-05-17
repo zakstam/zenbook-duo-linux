@@ -24,7 +24,7 @@ pub fn start(state: Arc<RwLock<RuntimeState>>) {
             next_status.service_active = session_connected;
 
             if let Some(layout) =
-                crate::runtime::daemon::session_display_layout(state.clone()).await
+                crate::runtime::daemon::session_display_layout_for_liveness(state.clone()).await
             {
                 crate::runtime::probe::apply_layout_to_status(&mut next_status, Some(&layout));
                 next_status.service_active = true;
@@ -255,7 +255,7 @@ async fn apply_policy_actions(state: Arc<RwLock<RuntimeState>>, actions: Vec<Pol
                     {
                         let mut guard = state.write().await;
                         guard.status.backlight_level = level;
-                        guard.recent_events.push(HardwareEvent::info(
+                        guard.push_recent_event(HardwareEvent::info(
                             EventCategory::Keyboard,
                             format!("Backlight set to {}", level),
                             "rust-daemon",
@@ -304,7 +304,7 @@ fn push_status_events(
     new: &crate::models::DuoStatus,
 ) {
     if old.keyboard_attached != new.keyboard_attached {
-        state.recent_events.push(HardwareEvent::info(
+        state.push_recent_event(HardwareEvent::info(
             EventCategory::Usb,
             if new.keyboard_attached {
                 "Keyboard attached"
@@ -316,7 +316,7 @@ fn push_status_events(
     }
 
     if old.connection_type != new.connection_type {
-        state.recent_events.push(HardwareEvent::info(
+        state.push_recent_event(HardwareEvent::info(
             EventCategory::Keyboard,
             format!(
                 "Connection type changed to {}",
@@ -327,7 +327,7 @@ fn push_status_events(
     }
 
     if old.wifi_enabled != new.wifi_enabled {
-        state.recent_events.push(HardwareEvent::info(
+        state.push_recent_event(HardwareEvent::info(
             EventCategory::Network,
             if new.wifi_enabled {
                 "Wi-Fi enabled"
@@ -339,7 +339,7 @@ fn push_status_events(
     }
 
     if old.bluetooth_enabled != new.bluetooth_enabled {
-        state.recent_events.push(HardwareEvent::info(
+        state.push_recent_event(HardwareEvent::info(
             EventCategory::Bluetooth,
             if new.bluetooth_enabled {
                 "Bluetooth enabled"
@@ -351,7 +351,7 @@ fn push_status_events(
     }
 
     if old.monitor_count != new.monitor_count {
-        state.recent_events.push(HardwareEvent::info(
+        state.push_recent_event(HardwareEvent::info(
             EventCategory::Display,
             format!("Monitor count changed to {}", new.monitor_count),
             "rust-daemon",
@@ -359,7 +359,7 @@ fn push_status_events(
     }
 
     if old.orientation != new.orientation {
-        state.recent_events.push(HardwareEvent::info(
+        state.push_recent_event(HardwareEvent::info(
             EventCategory::Rotation,
             format!(
                 "Orientation changed to {}",
@@ -370,17 +370,13 @@ fn push_status_events(
     }
 
     if old.backlight_level != new.backlight_level {
-        state.recent_events.push(HardwareEvent::info(
+        state.push_recent_event(HardwareEvent::info(
             EventCategory::Keyboard,
             format!("Backlight level changed to {}", new.backlight_level),
             "rust-daemon",
         ));
     }
 
-    if state.recent_events.len() > 500 {
-        let overflow = state.recent_events.len() - 500;
-        state.recent_events.drain(0..overflow);
-    }
 }
 
 fn connection_label(connection_type: &ConnectionType) -> &'static str {

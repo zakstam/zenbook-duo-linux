@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { setOrientation } from "@/lib/tauri";
+import { displayApi } from "@/lib/tauri-adapters";
 import { useStore, useDispatch, refreshStatus } from "@/lib/store";
 import type { Orientation } from "@/types/duo";
 import { cn } from "@/lib/utils";
@@ -25,7 +25,7 @@ export default function OrientationButtons() {
   const handleClick = async (orientation: Orientation) => {
     setPending(true);
     try {
-      await setOrientation(orientation);
+      await displayApi.setOrientation(orientation);
       await refreshStatus(dispatch);
     } catch (err) {
       console.error("Failed to set orientation:", err);

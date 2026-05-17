@@ -4,7 +4,7 @@ import {
   useDispatch,
   refreshProfiles,
 } from "@/lib/store";
-import { saveProfile } from "@/lib/tauri";
+import { profilesApi } from "@/lib/tauri-adapters";
 import ProfileCard from "@/components/ProfileCard";
 import type { Profile } from "@/types/duo";
 import { Button } from "@/components/ui/button";
@@ -37,7 +37,7 @@ export default function Profiles() {
     };
 
     try {
-      await saveProfile(profile);
+      await profilesApi.saveProfile(profile);
       await refreshProfiles(dispatch);
       setNewName("");
       setShowCreate(false);

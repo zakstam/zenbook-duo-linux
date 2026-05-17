@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { setBacklight } from "@/lib/tauri";
+import { controlsApi } from "@/lib/tauri-adapters";
 import { useStore, useDispatch } from "@/lib/store";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
@@ -29,7 +29,7 @@ export default function BacklightSlider() {
     setLocalLevel(level);
     setPending(true);
     try {
-      await setBacklight(level);
+      await controlsApi.setBacklight(level);
       dispatch({
         type: "SET_STATUS",
         payload: { ...store.status, backlightLevel: level },

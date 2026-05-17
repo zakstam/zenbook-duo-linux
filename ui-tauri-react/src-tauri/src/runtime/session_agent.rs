@@ -6,6 +6,10 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+pub(crate) mod brightness_sync;
+pub(crate) mod hotkeys;
+pub(crate) mod rotation;
+
 use crate::hardware::duo::{
     is_internal_connector, PRIMARY_INTERNAL_CONNECTOR, SECONDARY_INTERNAL_CONNECTOR,
 };
@@ -18,7 +22,7 @@ use crate::ipc::protocol::{
     DaemonRequest, DaemonResponse, Envelope, SessionBackend, SessionCommand, SessionResponse,
 };
 use crate::models::{DisplayInfo, DisplayLayout, Orientation};
-use crate::runtime::{client, compositor, paths, session, state::RuntimeState};
+use crate::runtime::{compositor, paths, session, session_display_planner::DockModePlanner, session_ipc, session_watchers, state::RuntimeState};
 
 pub async fn run() -> Result<(), String> {
     ensure_user_runtime_dir()?;
@@ -26,27 +30,7 @@ pub async fn run() -> Result<(), String> {
 
     let backend = BackendReadiness::wait_for_ready_backend().await;
     register_with_daemon(backend).await?;
-    tokio::spawn(RotationWatcherSupervisor::supervise());
-    tokio::spawn(async {
-        if let Err(err) = BrightnessSync::watch().await {
-            log::warn!("session-agent brightness watcher failed: {err}");
-            let _ = send_runtime_notification(
-                "Zenbook Duo Runtime Error",
-                &format!("Brightness sync watcher failed: {err}"),
-                true,
-            );
-        }
-    });
-    tokio::task::spawn_blocking(|| {
-        if let Err(err) = HotkeyWatcher::watch() {
-            log::warn!("session-agent keyboard hotkey watcher failed: {err}");
-            let _ = send_runtime_notification(
-                "Zenbook Duo Runtime Error",
-                &format!("Keyboard hotkey watcher failed: {err}"),
-                true,
-            );
-        }
-    });
+    session_watchers::start_all();
 
     loop {
         let (stream, _) = listener
@@ -54,7 +38,7 @@ pub async fn run() -> Result<(), String> {
             .await
             .map_err(|e| format!("Failed to accept session-agent client: {e}"))?;
         tokio::spawn(async move {
-            if let Err(err) = handle_session_command(stream).await {
+            if let Err(err) = session_ipc::handle_session_command(stream).await {
                 log::warn!("session-agent client error: {err}");
             }
         });
@@ -103,67 +87,44 @@ async fn register_with_daemon(backend: SessionBackend) -> Result<(), String> {
     }
 }
 
-async fn handle_session_command(stream: UnixStream) -> Result<(), String> {
-    let (reader, mut writer) = stream.into_split();
-    let mut lines = BufReader::new(reader).lines();
-
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .map_err(|e| format!("Failed to read session command: {e}"))?
-    {
-        let envelope: Envelope<SessionCommand> = serde_json::from_str(&line)
-            .map_err(|e| format!("Invalid session command JSON: {e}"))?;
-        let response = match envelope.payload {
-            SessionCommand::GetDisplayLayout => {
-                match crate::hardware::display_config::get_display_layout() {
-                    Ok(layout) => SessionResponse::DisplayLayout { layout },
-                    Err(message) => SessionResponse::Error { message },
-                }
+pub(crate) fn dispatch_session_command(payload: SessionCommand) -> SessionResponse {
+    match payload {
+        SessionCommand::GetDisplayLayout => {
+            match crate::hardware::display_layout::get_display_layout() {
+                Ok(layout) => SessionResponse::DisplayLayout { layout },
+                Err(message) => SessionResponse::Error { message },
             }
-            SessionCommand::SetDockMode {
-                attached,
-                scale,
-                layout,
-            } => match DockModePlanner::apply(attached, scale, layout) {
+        }
+        SessionCommand::SetDockMode {
+            attached,
+            scale,
+            layout,
+        } => match DockModePlanner::apply(attached, scale, layout) {
+            Ok(()) => SessionResponse::Ack,
+            Err(message) => SessionResponse::Error { message },
+        },
+        SessionCommand::ApplyDisplayLayout { layout } => {
+            match crate::hardware::display_layout::apply_display_layout(&layout) {
                 Ok(()) => SessionResponse::Ack,
                 Err(message) => SessionResponse::Error { message },
-            },
-            SessionCommand::ApplyDisplayLayout { layout } => {
-                match crate::hardware::display_config::apply_display_layout(&layout) {
-                    Ok(()) => SessionResponse::Ack,
-                    Err(message) => SessionResponse::Error { message },
-                }
             }
-            SessionCommand::SetOrientation { orientation } => {
-                match crate::hardware::display_config::set_orientation(&orientation) {
-                    Ok(()) => SessionResponse::Ack,
-                    Err(message) => SessionResponse::Error { message },
-                }
-            }
-            SessionCommand::ShowNotification {
-                title,
-                message,
-                urgent,
-            } => match send_runtime_notification(&title, &message, urgent) {
+        }
+        SessionCommand::SetOrientation { orientation } => {
+            match crate::hardware::display_layout::set_orientation(&orientation) {
                 Ok(()) => SessionResponse::Ack,
                 Err(message) => SessionResponse::Error { message },
-            },
-            SessionCommand::OpenEmojiPicker => SessionResponse::Ack,
-        };
-        let line = serde_json::to_string(&Envelope::new(response))
-            .map_err(|e| format!("Failed to encode session response: {e}"))?;
-        writer
-            .write_all(line.as_bytes())
-            .await
-            .map_err(|e| format!("Failed to write session response: {e}"))?;
-        writer
-            .write_all(b"\n")
-            .await
-            .map_err(|e| format!("Failed to terminate session response: {e}"))?;
+            }
+        }
+        SessionCommand::ShowNotification {
+            title,
+            message,
+            urgent,
+        } => match send_runtime_notification(&title, &message, urgent) {
+            Ok(()) => SessionResponse::Ack,
+            Err(message) => SessionResponse::Error { message },
+        },
+        SessionCommand::OpenEmojiPicker => SessionResponse::Ack,
     }
-
-    Ok(())
 }
 
 fn bind_session_listener(path: &Path) -> Result<UnixListener, String> {
@@ -286,31 +247,18 @@ where
     }
 }
 
-pub(crate) struct DockModePlanner;
-
-impl DockModePlanner {
-    fn apply(attached: bool, scale: f64, layout: Option<DisplayLayout>) -> Result<(), String> {
-        apply_dock_mode(attached, scale, layout)
-    }
-
-    #[cfg(test)]
-    fn layout_from_base(layout: &DisplayLayout, attached: bool, scale: f64) -> Option<DisplayLayout> {
-        dock_layout_from_base(layout, attached, scale)
-    }
-}
-
-fn apply_dock_mode(
+pub(crate) fn apply_dock_mode(
     attached: bool,
     scale: f64,
     layout: Option<DisplayLayout>,
 ) -> Result<(), String> {
-    let base_layout = layout.or_else(|| crate::hardware::display_config::get_display_layout().ok());
+    let base_layout = layout.or_else(|| crate::hardware::display_layout::get_display_layout().ok());
 
     if let Some(layout) = base_layout
         .as_ref()
         .and_then(|layout| dock_layout_from_base(layout, attached, scale))
     {
-        crate::hardware::display_config::apply_display_layout(&layout)?;
+        crate::hardware::display_layout::apply_display_layout(&layout)?;
     } else {
         log::warn!(
             "No saved or current display layout available for dock replay; using degraded mode-less dock fallback"
@@ -341,7 +289,7 @@ fn stacked_logical_height(display: &DisplayInfo) -> i32 {
     (physical_height as f64 / scale).ceil() as i32
 }
 
-fn dock_layout_from_base(
+pub(crate) fn dock_layout_from_base(
     layout: &DisplayLayout,
     attached: bool,
     scale: f64,
@@ -452,9 +400,7 @@ fn apply_kde_dock_mode(attached: bool) -> Result<(), String> {
     let primary_logical_height = if attached {
         0
     } else {
-        kde_output_logical_size(PRIMARY_INTERNAL_CONNECTOR)
-            .unwrap_or((0, 0))
-            .1
+        kde_output_logical_size(PRIMARY_INTERNAL_CONNECTOR)?.1
     };
     run_command(
         "kscreen-doctor",
@@ -502,9 +448,7 @@ fn apply_niri_dock_mode(attached: bool) -> Result<(), String> {
     let primary_logical_height = if attached {
         0
     } else {
-        niri_output_logical_size(PRIMARY_INTERNAL_CONNECTOR)
-            .unwrap_or((0, 0))
-            .1
+        niri_output_logical_size(PRIMARY_INTERNAL_CONNECTOR)?.1
     };
     for args in niri_dock_mode_commands(attached, primary_logical_height) {
         run_niri_command_args(&args)?;
@@ -560,7 +504,7 @@ fn send_dock_mode_notification(attached: bool) -> Result<(), String> {
     )
 }
 
-fn send_runtime_notification(title: &str, message: &str, urgent: bool) -> Result<(), String> {
+pub(crate) fn send_runtime_notification(title: &str, message: &str, urgent: bool) -> Result<(), String> {
     let runtime_dir = env::var("XDG_RUNTIME_DIR")
         .map_err(|_| "XDG_RUNTIME_DIR is not set for runtime notifications".to_string())?;
     let bus_address = env::var("DBUS_SESSION_BUS_ADDRESS")
@@ -587,525 +531,6 @@ fn send_runtime_notification(title: &str, message: &str, urgent: bool) -> Result
         .map_err(|e| format!("Failed to launch runtime notification: {e}"))
 }
 
-pub(crate) struct BrightnessSync;
-
-impl BrightnessSync {
-    async fn watch() -> Result<(), String> {
-        watch_brightness_sync().await
-    }
-}
-
-async fn watch_brightness_sync() -> Result<(), String> {
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-    let mut last_seen: Option<u32> = None;
-
-    loop {
-        interval.tick().await;
-
-        if !brightness_sync_enabled() || keyboard_attached_from_runtime() {
-            continue;
-        }
-
-        let level = crate::hardware::sysfs::read_display_brightness();
-        if last_seen == Some(level) {
-            continue;
-        }
-
-        sync_secondary_brightness(level)?;
-        last_seen = Some(level);
-    }
-}
-
-fn brightness_sync_enabled() -> bool {
-    crate::commands::settings::load_settings_local().sync_brightness
-}
-
-fn keyboard_attached_from_runtime() -> bool {
-    let Ok(raw) = fs::read_to_string(paths::state_file_path()) else {
-        return false;
-    };
-    let Ok(state) = serde_json::from_str::<RuntimeState>(&raw) else {
-        return false;
-    };
-    state.status.keyboard_attached
-}
-
-fn sync_secondary_brightness(level: u32) -> Result<(), String> {
-    let Some(secondary) = crate::hardware::sysfs::secondary_backlight_dir() else {
-        return Ok(());
-    };
-    let secondary_path = secondary.join("brightness");
-
-    if fs::write(&secondary_path, level.to_string()).is_ok() {
-        return Ok(());
-    }
-
-    let secondary_path_string = secondary_path.to_string_lossy().into_owned();
-    let mut child = Command::new("sudo")
-        .args(["/usr/bin/tee", secondary_path_string.as_str()])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to run sudo tee for brightness sync: {e}"))?;
-
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(level.to_string().as_bytes())
-            .and_then(|_| stdin.write_all(b"\n"))
-            .map_err(|e| format!("Failed to write brightness sync value: {e}"))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed waiting for brightness sync helper: {e}"))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Brightness sync failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
-}
-
-pub(crate) struct HotkeyWatcher;
-
-impl HotkeyWatcher {
-    fn watch() -> Result<(), String> {
-        watch_keyboard_hotkeys()
-    }
-}
-
-fn watch_keyboard_hotkeys() -> Result<(), String> {
-    loop {
-        let device_paths = find_keyboard_abs_devices()?;
-        if device_paths.is_empty() {
-            std::thread::sleep(Duration::from_secs(5));
-            continue;
-        }
-
-        let mut opened = Vec::new();
-        for path in &device_paths {
-            match Device::open(path) {
-                Ok(device) => opened.push((path.clone(), device)),
-                Err(err) => {
-                    log::warn!("failed to open {}: {err}", path.display());
-                }
-            }
-        }
-
-        if opened.is_empty() {
-            std::thread::sleep(Duration::from_secs(2));
-            continue;
-        }
-
-        loop {
-            let mut lost_device = false;
-            for (path, device) in &mut opened {
-                match device.fetch_events() {
-                    Ok(events) => {
-                        for event in events {
-                            if event.event_type() == EventType::ABSOLUTE
-                                && is_hotkey_abs_code(event.code())
-                            {
-                                let value = event.value();
-                                if let Err(err) = handle_abs_misc_value(value) {
-                                    log::warn!(
-                                        "failed to handle hotkey ABS value {} (code {}) from {}: {}",
-                                        value,
-                                        event.code(),
-                                        path.display(),
-                                        err
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        log::warn!("keyboard hotkey device lost ({}): {err}", path.display());
-                        lost_device = true;
-                        break;
-                    }
-                }
-            }
-
-            if lost_device {
-                break;
-            }
-
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        std::thread::sleep(Duration::from_secs(2));
-    }
-}
-
-fn find_keyboard_abs_devices() -> Result<Vec<std::path::PathBuf>, String> {
-    let mut devices = Vec::new();
-    let entries =
-        fs::read_dir("/dev/input").map_err(|e| format!("Failed to read /dev/input: {e}"))?;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if !name.starts_with("event") {
-            continue;
-        }
-
-        let Ok(device) = Device::open(&path) else {
-            continue;
-        };
-        let device_name = device
-            .name()
-            .map(str::to_string)
-            .unwrap_or_default()
-            .to_lowercase();
-        if !device_name.contains("zenbook duo keyboard") && !device_name.contains("asus_duo") {
-            continue;
-        }
-
-        let Some(abs_axes) = device.supported_absolute_axes() else {
-            continue;
-        };
-        if supported_hotkey_abs_codes()
-            .into_iter()
-            .any(|axis| abs_axes.contains(axis))
-        {
-            devices.push(path);
-        }
-    }
-
-    Ok(devices)
-}
-
-fn supported_hotkey_abs_codes() -> [AbsoluteAxisType; 2] {
-    [AbsoluteAxisType(0x28), AbsoluteAxisType::ABS_VOLUME]
-}
-
-fn is_hotkey_abs_code(code: u16) -> bool {
-    supported_hotkey_abs_codes()
-        .into_iter()
-        .any(|axis| axis.0 == code)
-}
-
-fn handle_abs_misc_value(value: i32) -> Result<(), String> {
-    match value {
-        199 => cycle_backlight(),
-        16 => step_brightness("down"),
-        32 => step_brightness("up"),
-        _ => Ok(()),
-    }
-}
-
-fn cycle_backlight() -> Result<(), String> {
-    let current = crate::hardware::sysfs::read_backlight_level();
-    let next = match current {
-        0 => 1,
-        1 => 2,
-        2 => 3,
-        _ => 0,
-    };
-    crate::commands::backlight::set_backlight_daemon_first(next)
-}
-
-fn step_brightness(direction: &str) -> Result<(), String> {
-    if let Ok(output) = Command::new("brightnessctl")
-        .args(["set", if direction == "up" { "5%+" } else { "5%-" }])
-        .output()
-    {
-        if output.status.success() {
-            return Ok(());
-        }
-    }
-
-    let bl = crate::hardware::sysfs::primary_backlight_dir()
-        .ok_or_else(|| "no primary backlight device found".to_string())?;
-
-    let max = fs::read_to_string(bl.join("max_brightness"))
-        .ok()
-        .and_then(|value| value.trim().parse::<i32>().ok())
-        .unwrap_or(0);
-    let current = fs::read_to_string(bl.join("brightness"))
-        .ok()
-        .and_then(|value| value.trim().parse::<i32>().ok())
-        .unwrap_or(0);
-    let step = (max / 20).max(1);
-    let next = if direction == "up" {
-        (current + step).min(max)
-    } else {
-        (current - step).max(0)
-    };
-
-    if fs::write(bl.join("brightness"), next.to_string()).is_ok() {
-        return Ok(());
-    }
-
-    let brightness_path = bl.join("brightness");
-    let brightness_path_string = brightness_path.to_string_lossy().into_owned();
-    let output = Command::new("sudo")
-        .args(["/usr/bin/tee", brightness_path_string.as_str()])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to run sudo tee for brightness step: {e}"))?;
-
-    let mut child = output;
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(next.to_string().as_bytes())
-            .and_then(|_| stdin.write_all(b"\n"))
-            .map_err(|e| format!("Failed to write brightness value: {e}"))?;
-    }
-    let result = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed waiting for brightness helper: {e}"))?;
-    if result.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "brightness step failed: {}",
-            String::from_utf8_lossy(&result.stderr).trim()
-        ))
-    }
-}
-
-fn runtime_log_info(message: impl AsRef<str>) {
-    let message = message.as_ref();
-    log::info!("{message}");
-    append_runtime_log(format!("session-agent: {message}"));
-}
-
-fn runtime_log_warn(message: impl AsRef<str>) {
-    let message = message.as_ref();
-    log::warn!("{message}");
-    append_runtime_log(format!("session-agent: warn: {message}"));
-}
-
-fn append_runtime_log(line: String) {
-    if let Err(err) = client::request(DaemonRequest::AppendLog { line }) {
-        log::warn!("failed to append session-agent log to runtime log: {err}");
-    }
-}
-
-pub(crate) struct RotationWatcherSupervisor;
-
-impl RotationWatcherSupervisor {
-    async fn supervise() {
-        supervise_rotation_watcher().await;
-    }
-}
-
-async fn supervise_rotation_watcher() {
-    let mut notified_failure = false;
-    let mut consecutive_accelerometer_timeouts = 0;
-
-    loop {
-        let restart_delay = match watch_rotation().await {
-            Ok(RotationWatchExit::Clean) => {
-                consecutive_accelerometer_timeouts = 0;
-                runtime_log_warn(format!(
-                    "rotation watcher exited cleanly; restarting in {}s",
-                    rotation_watcher_restart_delay().as_secs()
-                ));
-                rotation_watcher_restart_delay()
-            }
-            Ok(RotationWatchExit::AccelerometerClaimTimeout) => {
-                consecutive_accelerometer_timeouts += 1;
-                let delay = rotation_watcher_accelerometer_timeout_delay(
-                    consecutive_accelerometer_timeouts,
-                );
-                runtime_log_warn(format!(
-                    "monitor-sensor could not claim accelerometer; retrying in {}s",
-                    delay.as_secs()
-                ));
-                delay
-            }
-            Err(err) => {
-                consecutive_accelerometer_timeouts = 0;
-                runtime_log_warn(format!(
-                    "rotation watcher failed: {err}; restarting in {}s",
-                    rotation_watcher_restart_delay().as_secs()
-                ));
-                if !notified_failure {
-                    let _ = send_runtime_notification(
-                        "Zenbook Duo Runtime Error",
-                        &format!("Rotation watcher failed and will restart: {err}"),
-                        true,
-                    );
-                    notified_failure = true;
-                }
-                rotation_watcher_restart_delay()
-            }
-        };
-
-        tokio::time::sleep(restart_delay).await;
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RotationWatchExit {
-    Clean,
-    AccelerometerClaimTimeout,
-}
-
-#[derive(Debug, Default)]
-struct MonitorSensorStderrSummary {
-    accelerometer_claim_timeout: bool,
-}
-
-fn rotation_watcher_restart_delay() -> Duration {
-    Duration::from_secs(2)
-}
-
-fn rotation_watcher_accelerometer_timeout_delay(consecutive_timeouts: u32) -> Duration {
-    let exponent = consecutive_timeouts.saturating_sub(1).min(4);
-    Duration::from_secs(30 * 2_u64.pow(exponent))
-}
-
-async fn watch_rotation() -> Result<RotationWatchExit, String> {
-    let mut child = TokioCommand::new("monitor-sensor")
-        .arg("--accel")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to start monitor-sensor: {e}"))?;
-
-    runtime_log_info("rotation watcher started monitor-sensor --accel");
-
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "monitor-sensor stderr unavailable".to_string())?;
-    let stderr_task = tokio::spawn(log_monitor_sensor_stderr(stderr));
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "monitor-sensor stdout unavailable".to_string())?;
-    let mut lines = BufReader::new(stdout).lines();
-
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .map_err(|e| format!("Failed reading monitor-sensor output: {e}"))?
-    {
-        if let Some(sensor_orientation) = sensor_orientation_value(&line) {
-            let invert_sensor_rotation =
-                crate::commands::settings::load_settings_local().invert_sensor_rotation;
-            match display_orientation_from_sensor_value(sensor_orientation, invert_sensor_rotation)
-            {
-                Some(orientation) => {
-                    runtime_log_info(format!(
-                        "monitor-sensor orientation changed: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}"
-                    ));
-                    if let Err(err) = crate::hardware::display_config::set_orientation(&orientation)
-                    {
-                        runtime_log_warn(format!(
-                            "failed to apply accelerometer orientation: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}: {err}"
-                        ));
-                    } else {
-                        runtime_log_info(format!(
-                            "applied accelerometer orientation: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}"
-                        ));
-                    }
-                }
-                None => {
-                    runtime_log_warn(format!(
-                        "monitor-sensor reported unsupported accelerometer orientation: {sensor_orientation}"
-                    ));
-                }
-            }
-        }
-    }
-
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("Failed waiting for monitor-sensor: {e}"))?;
-    let stderr_summary = match stderr_task.await {
-        Ok(summary) => summary,
-        Err(err) => {
-            runtime_log_warn(format!("monitor-sensor stderr logger task failed: {err}"));
-            MonitorSensorStderrSummary::default()
-        }
-    };
-
-    if status.success() {
-        if stderr_summary.accelerometer_claim_timeout {
-            Ok(RotationWatchExit::AccelerometerClaimTimeout)
-        } else {
-            Ok(RotationWatchExit::Clean)
-        }
-    } else {
-        Err(format!("monitor-sensor exited with status {status}"))
-    }
-}
-
-async fn log_monitor_sensor_stderr(
-    stderr: tokio::process::ChildStderr,
-) -> MonitorSensorStderrSummary {
-    let mut lines = BufReader::new(stderr).lines();
-    let mut summary = MonitorSensorStderrSummary::default();
-    loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-
-                if monitor_sensor_accelerometer_claim_timeout(line) {
-                    summary.accelerometer_claim_timeout = true;
-                    continue;
-                }
-
-                runtime_log_warn(format!("monitor-sensor stderr: {line}"));
-            }
-            Ok(None) => break,
-            Err(err) => {
-                runtime_log_warn(format!("failed reading monitor-sensor stderr: {err}"));
-                break;
-            }
-        }
-    }
-    summary
-}
-
-fn monitor_sensor_accelerometer_claim_timeout(line: &str) -> bool {
-    line.contains("Failed to claim accelerometer") && line.contains("Timeout was reached")
-}
-
-fn parse_rotation_line(line: &str) -> Option<Orientation> {
-    sensor_orientation_value(line)
-        .and_then(|value| display_orientation_from_sensor_value(value, false))
-}
-
-fn sensor_orientation_value(line: &str) -> Option<&str> {
-    line.split("Accelerometer orientation changed:")
-        .nth(1)
-        .map(str::trim)
-}
-
-fn display_orientation_from_sensor_value(
-    value: &str,
-    invert_sensor_rotation: bool,
-) -> Option<Orientation> {
-    match (value, invert_sensor_rotation) {
-        ("left-up", false) => Some(Orientation::Left),
-        ("left-up", true) => Some(Orientation::Right),
-        ("right-up", false) => Some(Orientation::Right),
-        ("right-up", true) => Some(Orientation::Left),
-        ("bottom-up", _) => Some(Orientation::Inverted),
-        ("normal", _) => Some(Orientation::Normal),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1118,9 +543,9 @@ mod tests {
 
     #[test]
     fn watches_both_known_hotkey_abs_codes() {
-        assert!(is_hotkey_abs_code(0x28));
-        assert!(is_hotkey_abs_code(AbsoluteAxisType::ABS_VOLUME.0));
-        assert!(!is_hotkey_abs_code(0x27));
+        assert!(hotkeys::is_hotkey_abs_code(0x28));
+        assert!(hotkeys::is_hotkey_abs_code(AbsoluteAxisType::ABS_VOLUME.0));
+        assert!(!hotkeys::is_hotkey_abs_code(0x27));
     }
 
     #[test]
@@ -1141,7 +566,7 @@ mod tests {
 
     #[test]
     fn rotation_watcher_restart_delay_is_short_and_nonzero() {
-        let delay = rotation_watcher_restart_delay();
+        let delay = rotation::rotation_watcher_restart_delay();
         assert!(delay >= Duration::from_secs(1));
         assert!(delay <= Duration::from_secs(5));
     }
@@ -1149,32 +574,32 @@ mod tests {
     #[test]
     fn accelerometer_claim_timeouts_use_bounded_backoff() {
         assert_eq!(
-            rotation_watcher_accelerometer_timeout_delay(1),
+            rotation::rotation_watcher_accelerometer_timeout_delay(1),
             Duration::from_secs(30)
         );
         assert_eq!(
-            rotation_watcher_accelerometer_timeout_delay(2),
+            rotation::rotation_watcher_accelerometer_timeout_delay(2),
             Duration::from_secs(60)
         );
         assert_eq!(
-            rotation_watcher_accelerometer_timeout_delay(5),
+            rotation::rotation_watcher_accelerometer_timeout_delay(5),
             Duration::from_secs(480)
         );
         assert_eq!(
-            rotation_watcher_accelerometer_timeout_delay(20),
+            rotation::rotation_watcher_accelerometer_timeout_delay(20),
             Duration::from_secs(480)
         );
     }
 
     #[test]
     fn recognizes_monitor_sensor_accelerometer_claim_timeout() {
-        assert!(monitor_sensor_accelerometer_claim_timeout(
+        assert!(rotation::monitor_sensor_accelerometer_claim_timeout(
             "** (monitor-sensor:3388909): WARNING **: Failed to claim accelerometer: Timeout was reached"
         ));
-        assert!(!monitor_sensor_accelerometer_claim_timeout(
+        assert!(!rotation::monitor_sensor_accelerometer_claim_timeout(
             "** (monitor-sensor:3388909): WARNING **: Failed to claim light sensor: Timeout was reached"
         ));
-        assert!(!monitor_sensor_accelerometer_claim_timeout(
+        assert!(!rotation::monitor_sensor_accelerometer_claim_timeout(
             "Accelerometer orientation changed: normal"
         ));
     }
@@ -1182,19 +607,19 @@ mod tests {
     #[test]
     fn parses_sensor_edge_orientation_as_display_transform() {
         assert_eq!(
-            parse_rotation_line("    Accelerometer orientation changed: left-up"),
+            rotation::parse_rotation_line("    Accelerometer orientation changed: left-up"),
             Some(Orientation::Left)
         );
         assert_eq!(
-            parse_rotation_line("    Accelerometer orientation changed: right-up"),
+            rotation::parse_rotation_line("    Accelerometer orientation changed: right-up"),
             Some(Orientation::Right)
         );
         assert_eq!(
-            parse_rotation_line("    Accelerometer orientation changed: bottom-up"),
+            rotation::parse_rotation_line("    Accelerometer orientation changed: bottom-up"),
             Some(Orientation::Inverted)
         );
         assert_eq!(
-            parse_rotation_line("    Accelerometer orientation changed: normal"),
+            rotation::parse_rotation_line("    Accelerometer orientation changed: normal"),
             Some(Orientation::Normal)
         );
     }
@@ -1202,19 +627,19 @@ mod tests {
     #[test]
     fn inverted_sensor_rotation_swaps_only_left_and_right() {
         assert_eq!(
-            display_orientation_from_sensor_value("left-up", true),
+            rotation::display_orientation_from_sensor_value("left-up", true),
             Some(Orientation::Right)
         );
         assert_eq!(
-            display_orientation_from_sensor_value("right-up", true),
+            rotation::display_orientation_from_sensor_value("right-up", true),
             Some(Orientation::Left)
         );
         assert_eq!(
-            display_orientation_from_sensor_value("bottom-up", true),
+            rotation::display_orientation_from_sensor_value("bottom-up", true),
             Some(Orientation::Inverted)
         );
         assert_eq!(
-            display_orientation_from_sensor_value("normal", true),
+            rotation::display_orientation_from_sensor_value("normal", true),
             Some(Orientation::Normal)
         );
     }

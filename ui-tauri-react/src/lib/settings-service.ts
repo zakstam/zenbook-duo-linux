@@ -1,11 +1,9 @@
-import { refreshSettings, type AppState } from "@/lib/store";
-import { loadSettings, saveSettings } from "@/lib/tauri";
+import { refreshSettings, type AppState, type StoreAction } from "@/lib/store";
+import { settingsApi } from "@/lib/tauri-adapters";
 import { withDuoSettingsDefaults } from "@/lib/defaults";
 import { resolveThemeForPreference } from "@/lib/theme";
 import type { DuoSettings } from "@/types/duo";
 import type { Dispatch } from "react";
-
-type StoreAction = Parameters<typeof refreshSettings>[0] extends Dispatch<infer Action> ? Action : never;
 
 export function createSettingsDraft(settings: DuoSettings): DuoSettings {
   return { ...withDuoSettingsDefaults(settings) };
@@ -24,7 +22,7 @@ export async function saveSettingsDraft(
   dispatch: Dispatch<StoreAction>,
   setTheme: (theme: string) => void,
 ) {
-  await saveSettings(draft);
+  await settingsApi.saveSettings(draft);
   await refreshSettings(dispatch);
   setTheme(await resolveThemeForPreference(draft.theme));
 }
@@ -34,9 +32,9 @@ export async function autosavePersistedSetting<K extends keyof DuoSettings>(
   value: DuoSettings[K],
   dispatch: Dispatch<StoreAction>,
 ) {
-  const persisted = await loadSettings();
+  const persisted = await settingsApi.loadSettings();
   const next = patchSettingsDraft(withDuoSettingsDefaults(persisted), key, value);
-  await saveSettings(next);
+  await settingsApi.saveSettings(next);
   await refreshSettings(dispatch);
   return next;
 }

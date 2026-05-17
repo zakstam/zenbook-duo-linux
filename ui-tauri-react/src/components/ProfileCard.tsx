@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Profile } from "@/types/duo";
-import { activateProfile, deleteProfile } from "@/lib/tauri";
+import { profilesApi } from "@/lib/tauri-adapters";
 import { refreshProfiles, refreshStatus, useDispatch } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -24,7 +24,7 @@ export default function ProfileCard({ profile }: ProfileCardProps) {
   const handleActivate = async () => {
     setActivating(true);
     try {
-      await activateProfile(profile.id);
+      await profilesApi.activateProfile(profile.id);
       await refreshStatus(dispatch);
     } catch (err) {
       console.error("Failed to activate profile:", err);
@@ -35,7 +35,7 @@ export default function ProfileCard({ profile }: ProfileCardProps) {
 
   const handleDelete = async () => {
     try {
-      await deleteProfile(profile.id);
+      await profilesApi.deleteProfile(profile.id);
       await refreshProfiles(dispatch);
     } catch (err) {
       console.error("Failed to delete profile:", err);

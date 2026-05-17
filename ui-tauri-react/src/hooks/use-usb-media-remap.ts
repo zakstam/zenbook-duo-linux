@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { refreshSettings, useDispatch, useStore } from "@/lib/store";
-import { saveSettings } from "@/lib/tauri";
+import { settingsApi } from "@/lib/tauri-adapters";
 import {
   defaultUsbMediaRemapStatus,
   readUsbMediaRemapStatus,
@@ -52,7 +52,7 @@ export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
     };
 
     options.onSettingsSaved?.(nextSettings);
-    await saveSettings(nextSettings);
+    await settingsApi.saveSettings(nextSettings);
     await refreshSettings(dispatch);
   };
 

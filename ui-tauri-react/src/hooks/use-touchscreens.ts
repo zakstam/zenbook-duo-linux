@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { listTouchscreens, saveTouchscreenPreference, setTouchscreenEnabled } from "@/lib/tauri";
+import { controlsApi } from "@/lib/tauri-adapters";
 import type { TouchscreenDevice } from "@/types/duo";
 
 export function useTouchscreens() {
@@ -10,7 +10,7 @@ export function useTouchscreens() {
   const refresh = useCallback(async () => {
     try {
       setError(null);
-      setTouchscreens(await listTouchscreens());
+      setTouchscreens(await controlsApi.listTouchscreens());
     } catch (err) {
       console.error("Failed to list touchscreens:", err);
       setError("Failed to list touchscreens");
@@ -28,8 +28,8 @@ export function useTouchscreens() {
     );
 
     try {
-      await setTouchscreenEnabled(connector, enabled);
-      await saveTouchscreenPreference(connector, enabled);
+      await controlsApi.setTouchscreenEnabled(connector, enabled);
+      await controlsApi.saveTouchscreenPreference(connector, enabled);
     } catch (err) {
       console.error("Failed to toggle touchscreen:", err);
       setTouchscreens(previous);

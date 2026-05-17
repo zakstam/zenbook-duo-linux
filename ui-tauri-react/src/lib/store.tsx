@@ -13,8 +13,17 @@ import type {
   HardwareEvent,
   VersionInfo,
 } from "@/types/duo";
-import { DEFAULT_DUO_SETTINGS, DEFAULT_DUO_STATUS, withDuoSettingsDefaults } from "@/lib/defaults";
-import * as api from "@/lib/tauri";
+import { DEFAULT_DUO_SETTINGS, DEFAULT_DUO_STATUS } from "@/lib/defaults";
+import { loadInitialStoreState, subscribeStoreEvents } from "@/lib/store-effects";
+export {
+  clearLogs,
+  refreshEvents,
+  refreshLogs,
+  refreshProfiles,
+  refreshSettings,
+  refreshStatus,
+  refreshVersionInfo,
+} from "@/lib/store-effects";
 import { APP_VERSION } from "@/lib/version";
 
 export interface AppState {
@@ -27,7 +36,7 @@ export interface AppState {
   loading: boolean;
 }
 
-type Action =
+export type StoreAction =
   | { type: "SET_STATUS"; payload: DuoStatus }
   | { type: "SET_SETTINGS"; payload: DuoSettings }
   | { type: "SET_PROFILES"; payload: Profile[] }
@@ -52,7 +61,7 @@ const initialState: AppState = {
   loading: true,
 };
 
-function reducer(state: AppState, action: Action): AppState {
+function reducer(state: AppState, action: StoreAction): AppState {
   switch (action.type) {
     case "SET_STATUS":
       return { ...state, status: action.payload };
@@ -72,7 +81,7 @@ function reducer(state: AppState, action: Action): AppState {
 }
 
 const StoreContext = createContext<AppState>(initialState);
-const DispatchContext = createContext<Dispatch<Action>>(() => {});
+const DispatchContext = createContext<Dispatch<StoreAction>>(() => {});
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -94,69 +103,6 @@ export function useDispatch() {
   return useContext(DispatchContext);
 }
 
-export async function refreshStatus(dispatch: Dispatch<Action>) {
-  try {
-    const status = await api.getStatus();
-    dispatch({ type: "SET_STATUS", payload: status });
-  } catch (e) {
-    console.error("Failed to fetch status:", e);
-  }
-}
-
-export async function refreshSettings(dispatch: Dispatch<Action>) {
-  try {
-    const settings = await api.loadSettings();
-    dispatch({ type: "SET_SETTINGS", payload: withDuoSettingsDefaults(settings) });
-  } catch (e) {
-    console.error("Failed to load settings:", e);
-  }
-}
-
-export async function refreshProfiles(dispatch: Dispatch<Action>) {
-  try {
-    const profiles = await api.listProfiles();
-    dispatch({ type: "SET_PROFILES", payload: profiles });
-  } catch (e) {
-    console.error("Failed to load profiles:", e);
-  }
-}
-
-export async function refreshLogs(dispatch: Dispatch<Action>) {
-  try {
-    const logs = await api.readLog(500);
-    dispatch({ type: "SET_LOGS", payload: logs });
-  } catch (e) {
-    console.error("Failed to read logs:", e);
-  }
-}
-
-export async function clearLogs(dispatch: Dispatch<Action>) {
-  try {
-    await api.clearLog();
-    dispatch({ type: "SET_LOGS", payload: [] });
-  } catch (e) {
-    console.error("Failed to clear logs:", e);
-  }
-}
-
-export async function refreshEvents(dispatch: Dispatch<Action>) {
-  try {
-    const events = await api.getRecentEvents(100);
-    dispatch({ type: "SET_EVENTS", payload: events });
-  } catch (e) {
-    console.error("Failed to get events:", e);
-  }
-}
-
-export async function refreshVersionInfo(dispatch: Dispatch<Action>) {
-  try {
-    const versionInfo = await api.getVersionInfo();
-    dispatch({ type: "SET_VERSION_INFO", payload: versionInfo });
-  } catch (e) {
-    console.error("Failed to get version info:", e);
-  }
-}
-
 export function useStoreInit() {
   const dispatch = useDispatch();
 
@@ -166,23 +112,11 @@ export function useStoreInit() {
     async function init() {
       dispatch({ type: "SET_LOADING", payload: true });
 
-      await Promise.all([
-        refreshStatus(dispatch),
-        refreshSettings(dispatch),
-        refreshProfiles(dispatch),
-        refreshLogs(dispatch),
-        refreshEvents(dispatch),
-        refreshVersionInfo(dispatch),
-      ]);
+      await loadInitialStoreState(dispatch);
 
       dispatch({ type: "SET_LOADING", payload: false });
 
-      unlisteners.push(api.onStatusChanged(() => {
-        refreshStatus(dispatch);
-        refreshVersionInfo(dispatch);
-      }));
-      unlisteners.push(api.onLogUpdated(() => refreshLogs(dispatch)));
-      unlisteners.push(api.onHardwareEvent(() => refreshEvents(dispatch)));
+      unlisteners.push(...subscribeStoreEvents(dispatch));
     }
 
     init();

@@ -123,3 +123,65 @@ export const onKeyboardChanged = (cb: () => void): Promise<UnlistenFn> =>
 
 export const onHardwareEvent = (cb: () => void): Promise<UnlistenFn> =>
   listen("duo://hardware-event", cb);
+
+export const statusApi = {
+  getStatus,
+  getVersionInfo,
+  onStatusChanged,
+  onKeyboardChanged,
+};
+
+export const settingsApi = {
+  loadSettings,
+  saveSettings,
+  getSystemTheme,
+  updateSettings,
+};
+
+export const displayApi = {
+  getDisplayLayout,
+  applyDisplayLayout,
+  setOrientation,
+  saveDisplayLayoutPreference,
+};
+
+export const diagnosticsApi = {
+  diagListEvdev,
+  diagCaptureEvdev,
+  diagCaptureEvdevMulti,
+  diagListHid,
+  diagReadReportDescriptor,
+  diagCaptureHidrawPkexec,
+};
+
+export const eventsApi = {
+  getRecentEvents,
+  onHardwareEvent,
+};
+
+export const logsApi = {
+  readLog,
+  clearLog,
+  onLogUpdated,
+};
+
+export const profilesApi = {
+  listProfiles,
+  saveProfile,
+  deleteProfile,
+  activateProfile,
+};
+
+export const controlsApi = {
+  getBacklight,
+  setBacklight,
+  isServiceActive,
+  restartService,
+  listTouchscreens,
+  setTouchscreenEnabled,
+  saveTouchscreenPreference,
+  usbMediaRemapStatus,
+  usbMediaRemapStart,
+  usbMediaRemapStop,
+  usbMediaRemapTogglePause,
+};
