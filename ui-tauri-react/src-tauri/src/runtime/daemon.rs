@@ -772,17 +772,23 @@ async fn saved_layout_base(state: &Arc<RwLock<RuntimeState>>) -> Option<DisplayL
 }
 
 fn saved_layout_matches_display_mode(layout: &DisplayLayout, attached: bool) -> bool {
-    let display_count = layout.displays.len();
-
-    if display_count == 0 {
-        return false;
-    }
-
     if attached {
-        display_count == 1
-    } else {
-        display_count > 1
+        return layout.displays.len() == 1
+            && layout
+                .displays
+                .iter()
+                .any(|display| display.connector == hardware::duo::PRIMARY_INTERNAL_CONNECTOR);
     }
+
+    let has_primary = layout
+        .displays
+        .iter()
+        .any(|display| display.connector == hardware::duo::PRIMARY_INTERNAL_CONNECTOR);
+    let has_secondary = layout
+        .displays
+        .iter()
+        .any(|display| display.connector == hardware::duo::SECONDARY_INTERNAL_CONNECTOR);
+    has_primary && has_secondary
 }
 
 fn layout_manages_only_internal_displays(layout: &DisplayLayout) -> bool {
@@ -950,6 +956,61 @@ mod tests {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
     const NIRI_SOCKET_REFUSED: &str = "Error: error connecting to the niri socket\n\nCaused by:\n    Connection refused (os error 111)";
+
+    async fn state_with_connected_session_agent(socket_path: &std::path::Path) -> Arc<RwLock<RuntimeState>> {
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.service_active = true;
+        }
+        state
+    }
+
+    #[tokio::test]
+    async fn command_write_timeout_clears_dead_session_agent() {
+        let socket_path = unique_test_socket_path("write-timeout-command");
+        let state = state_with_connected_session_agent(&socket_path).await;
+
+        let result: Result<(), String> = session_bridge::handle_session_write_timeout(
+            &state,
+            "Timed out writing session command",
+            true,
+        )
+        .await;
+
+        assert_eq!(
+            result.expect_err("write timeout should fail"),
+            "Timed out writing session command"
+        );
+        let guard = state.read().await;
+        assert!(!guard.session_agent.connected);
+        assert!(guard.session_agent.socket_path.is_none());
+        assert!(!guard.status.service_active);
+    }
+
+    #[tokio::test]
+    async fn newline_write_timeout_clears_dead_session_agent() {
+        let socket_path = unique_test_socket_path("write-timeout-newline");
+        let state = state_with_connected_session_agent(&socket_path).await;
+
+        let result: Result<(), String> = session_bridge::handle_session_write_timeout(
+            &state,
+            "Timed out terminating session command",
+            true,
+        )
+        .await;
+
+        assert_eq!(
+            result.expect_err("newline write timeout should fail"),
+            "Timed out terminating session command"
+        );
+        let guard = state.read().await;
+        assert!(!guard.session_agent.connected);
+        assert!(guard.session_agent.socket_path.is_none());
+        assert!(!guard.status.service_active);
+    }
 
     #[tokio::test]
     async fn liveness_display_layout_probe_clears_dead_session_agent() {
@@ -1145,6 +1206,115 @@ mod tests {
             Some("test-session")
         );
         drop(guard);
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn attached_replay_does_not_apply_single_external_saved_layout_as_exact_match() {
+        let socket_path = unique_test_socket_path("attached-single-external-saved");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read test request")
+                .expect("session request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode session request");
+            match envelope.payload {
+                SessionCommand::SetDockMode {
+                    attached,
+                    layout,
+                    ..
+                } => {
+                    assert!(attached);
+                    assert_eq!(layout.expect("saved layout forwarded as dock base").displays[0].connector, "HDMI-A-1");
+                }
+                SessionCommand::ApplyDisplayLayout { layout } => {
+                    panic!("single external layout should not be exact-applied: {layout:?}")
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.keyboard_attached = true;
+            guard.settings.saved_display_layout = Some(DisplayLayout {
+                displays: vec![display("HDMI-A-1", 0, 0, true)],
+            });
+        }
+
+        replay_current_display_mode(&state, true, 1.66)
+            .await
+            .expect("replay should succeed");
+
+        server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn attached_replay_does_not_apply_secondary_only_saved_layout_as_exact_match() {
+        let socket_path = unique_test_socket_path("attached-secondary-only-saved");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept test session client");
+            let (reader, mut writer) = stream.into_split();
+            let mut lines = BufReader::new(reader).lines();
+            let line = lines
+                .next_line()
+                .await
+                .expect("read test request")
+                .expect("session request line");
+            let envelope: Envelope<SessionCommand> =
+                serde_json::from_str(&line).expect("decode session request");
+            match envelope.payload {
+                SessionCommand::SetDockMode { attached, layout, .. } => {
+                    assert!(attached);
+                    assert_eq!(
+                        layout.expect("saved layout forwarded as dock base").displays[0].connector,
+                        SECONDARY_INTERNAL_CONNECTOR
+                    );
+                }
+                SessionCommand::ApplyDisplayLayout { layout } => {
+                    panic!("secondary-only layout should not be exact-applied: {layout:?}")
+                }
+                other => panic!("unexpected session command: {other:?}"),
+            }
+            let reply =
+                serde_json::to_string(&Envelope::new(SessionResponse::Ack)).expect("encode ack");
+            writer.write_all(reply.as_bytes()).await.expect("write ack");
+            writer.write_all(b"\n").await.expect("terminate ack");
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.keyboard_attached = true;
+            guard.settings.saved_display_layout = Some(DisplayLayout {
+                displays: vec![display(SECONDARY_INTERNAL_CONNECTOR, 0, 0, true)],
+            });
+        }
+
+        replay_current_display_mode(&state, true, 1.66)
+            .await
+            .expect("replay should succeed");
 
         server.await.expect("join session server");
         let _ = fs::remove_file(&socket_path);
@@ -2492,14 +2662,29 @@ mod tests {
     }
 
     #[test]
-    fn saved_layout_matching_respects_attached_display_count() {
+    fn saved_layout_matching_respects_internal_dock_connectors() {
         let single = single_display_layout();
         let dual = dual_display_layout();
+        let single_external = DisplayLayout {
+            displays: vec![display("HDMI-A-1", 0, 0, true)],
+        };
+        let single_secondary = DisplayLayout {
+            displays: vec![display(SECONDARY_INTERNAL_CONNECTOR, 0, 0, true)],
+        };
+        let primary_with_external = DisplayLayout {
+            displays: vec![
+                display(PRIMARY_INTERNAL_CONNECTOR, 0, 0, true),
+                display("HDMI-A-1", 1920, 0, false),
+            ],
+        };
 
         assert!(saved_layout_matches_display_mode(&single, true));
         assert!(!saved_layout_matches_display_mode(&single, false));
+        assert!(!saved_layout_matches_display_mode(&single_external, true));
+        assert!(!saved_layout_matches_display_mode(&single_secondary, true));
         assert!(!saved_layout_matches_display_mode(&dual, true));
         assert!(saved_layout_matches_display_mode(&dual, false));
+        assert!(!saved_layout_matches_display_mode(&primary_with_external, false));
     }
 
     #[test]

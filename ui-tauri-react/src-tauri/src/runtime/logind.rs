@@ -29,6 +29,15 @@ async fn watch_logind(state: Arc<RwLock<RuntimeState>>) -> Result<(), zbus::Erro
         .build()
         .await?;
 
+    let login_manager_interface = "org.freedesktop.login1.Manager"
+        .try_into()
+        .expect("login1 manager interface name should be valid");
+    if let Ok(value) = manager.get(login_manager_interface, "LidClosed").await {
+        if let Ok(lid_closed) = value.downcast_ref::<bool>() {
+            sync_initial_lid_closed_state(&state, lid_closed).await;
+        }
+    }
+
     let mut stream = manager.receive_properties_changed().await?;
 
     use futures_util::StreamExt;
@@ -93,4 +102,40 @@ async fn watch_logind(state: Arc<RwLock<RuntimeState>>) -> Result<(), zbus::Erro
     }
 
     Ok(())
+}
+
+async fn sync_initial_lid_closed_state(state: &Arc<RwLock<RuntimeState>>, lid_closed: bool) {
+    if let Err(err) = crate::runtime::daemon::handle_lid_closed_change(state, lid_closed).await {
+        if crate::runtime::daemon::is_display_session_deferral(&err) {
+            let _ = logger::append_line(format!(
+                "rust-daemon: initial lid state display update deferred: {err}"
+            ));
+            return;
+        }
+
+        log::warn!("failed to sync initial lid state: {err}");
+        crate::runtime::daemon::notify_runtime_error(
+            state,
+            "Zenbook Duo Runtime Error",
+            &format!("Initial lid state display update failed: {err}"),
+        )
+        .await;
+        let _ = logger::append_line(format!(
+            "rust-daemon: initial lid state display update failed: {err}"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn initial_lid_closed_true_records_runtime_state_even_when_display_defers() {
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+
+        sync_initial_lid_closed_state(&state, true).await;
+
+        assert!(state.read().await.lid_closed);
+    }
 }

@@ -8,6 +8,12 @@ use crate::runtime::client;
 
 const AUTOSTART_FILE_NAME: &str = "zenbook-duo-control.desktop";
 
+#[cfg(test)]
+pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 pub(crate) fn config_base_dir() -> PathBuf {
     if let Ok(home_override) = env::var("ZENBOOK_DUO_HOME") {
         PathBuf::from(home_override).join(".config")
@@ -113,26 +119,29 @@ pub fn load_settings() -> DuoSettings {
     settings
 }
 
+fn save_settings_daemon_result(response: Result<DaemonResponse, String>) -> Result<(), String> {
+    match response {
+        Ok(DaemonResponse::Ack) => Ok(()),
+        Ok(DaemonResponse::Error { message }) => Err(message),
+        Ok(other) => Err(format!(
+            "Unexpected daemon response while saving settings: {other:?}"
+        )),
+        Err(_) => Ok(()),
+    }
+}
+
 #[tauri::command]
 pub fn save_settings(settings: DuoSettings) -> Result<(), String> {
     sync_autostart_entry(&settings)?;
     save_settings_local(settings.clone())?;
 
-    match client::request(DaemonRequest::SaveSettings { settings }) {
-        Ok(DaemonResponse::Ack) | Ok(DaemonResponse::Error { .. }) | Ok(_) | Err(_) => Ok(()),
-    }
+    save_settings_daemon_result(client::request(DaemonRequest::SaveSettings { settings }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     struct TestHome {
         path: PathBuf,
@@ -171,8 +180,28 @@ mod tests {
     }
 
     #[test]
+    fn save_settings_daemon_result_surfaces_error_and_unexpected_response() {
+        assert!(save_settings_daemon_result(Ok(DaemonResponse::Ack)).is_ok());
+        assert_eq!(
+            save_settings_daemon_result(Ok(DaemonResponse::Error {
+                message: "daemon rejected".into(),
+            }))
+            .expect_err("daemon error should fail"),
+            "daemon rejected"
+        );
+        assert!(save_settings_daemon_result(Ok(DaemonResponse::Pong))
+            .expect_err("unexpected response should fail")
+            .contains("Unexpected daemon response"));
+    }
+
+    #[test]
+    fn save_settings_daemon_result_allows_transport_failure_after_local_save() {
+        assert!(save_settings_daemon_result(Err("socket missing".into())).is_ok());
+    }
+
+    #[test]
     fn local_settings_roundtrip_preserves_issue_17_switch_fields() {
-        let _guard = env_lock().lock().expect("settings env lock");
+        let _guard = test_env_lock().lock().expect("settings env lock");
         let _home = TestHome::new();
         let mut settings = DuoSettings::default();
         settings.start_on_boot_minimized = true;
@@ -189,7 +218,7 @@ mod tests {
 
     #[test]
     fn load_settings_uses_autostart_file_as_start_on_boot_source_of_truth() {
-        let _guard = env_lock().lock().expect("settings env lock");
+        let _guard = test_env_lock().lock().expect("settings env lock");
         let _home = TestHome::new();
         let mut settings = DuoSettings::default();
         settings.start_on_boot_minimized = true;

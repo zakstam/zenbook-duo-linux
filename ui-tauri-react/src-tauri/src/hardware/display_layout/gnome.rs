@@ -224,6 +224,10 @@ pub(super) fn parse_gdctl_output(output: &str) -> Result<DisplayLayout, String> 
 
     for connector in monitor_order {
         let had_logical = connector_to_logical.contains_key(&connector);
+        if !had_logical && !is_internal_connector(&connector) {
+            continue;
+        }
+
         let current_mode = monitor_current_mode
             .get(&connector)
             .cloned()

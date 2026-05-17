@@ -50,31 +50,47 @@ pub(super) async fn request_session(
 
     let line = serde_json::to_string(&Envelope::new(command))
         .map_err(|e| format!("Failed to encode session command: {e}"))?;
-    if let Err(e) = timeout(Duration::from_secs(3), writer.write_all(line.as_bytes()))
-        .await
-        .map_err(|_| "Timed out writing session command".to_string())?
-    {
-        if disconnect_on_failure {
-            mark_session_agent_disconnected(
+    match timeout(Duration::from_secs(3), writer.write_all(line.as_bytes())).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            if disconnect_on_failure {
+                mark_session_agent_disconnected(
+                    &state,
+                    &format!("Failed to write session command: {e}"),
+                )
+                .await;
+            }
+            return Err(format!("Failed to write session command: {e}"));
+        }
+        Err(_) => {
+            return handle_session_write_timeout(
                 &state,
-                &format!("Failed to write session command: {e}"),
+                "Timed out writing session command",
+                disconnect_on_failure,
             )
             .await;
         }
-        return Err(format!("Failed to write session command: {e}"));
     }
-    if let Err(e) = timeout(Duration::from_secs(3), writer.write_all(b"\n"))
-        .await
-        .map_err(|_| "Timed out terminating session command".to_string())?
-    {
-        if disconnect_on_failure {
-            mark_session_agent_disconnected(
+    match timeout(Duration::from_secs(3), writer.write_all(b"\n")).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            if disconnect_on_failure {
+                mark_session_agent_disconnected(
+                    &state,
+                    &format!("Failed to terminate session command: {e}"),
+                )
+                .await;
+            }
+            return Err(format!("Failed to terminate session command: {e}"));
+        }
+        Err(_) => {
+            return handle_session_write_timeout(
                 &state,
-                &format!("Failed to terminate session command: {e}"),
+                "Timed out terminating session command",
+                disconnect_on_failure,
             )
             .await;
         }
-        return Err(format!("Failed to terminate session command: {e}"));
     }
 
     let mut lines = BufReader::new(reader).lines();
@@ -110,6 +126,17 @@ pub(super) async fn request_session(
         serde_json::from_str(&reply).map_err(|e| format!("Invalid session response JSON: {e}"))?;
 
     Ok(envelope.payload)
+}
+
+pub(super) async fn handle_session_write_timeout<T>(
+    state: &Arc<RwLock<RuntimeState>>,
+    reason: &str,
+    disconnect_on_failure: bool,
+) -> Result<T, String> {
+    if disconnect_on_failure {
+        mark_session_agent_disconnected(state, reason).await;
+    }
+    Err(reason.to_string())
 }
 
 async fn mark_session_agent_disconnected(state: &Arc<RwLock<RuntimeState>>, reason: &str) {

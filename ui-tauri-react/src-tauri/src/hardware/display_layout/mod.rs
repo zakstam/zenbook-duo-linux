@@ -69,7 +69,6 @@ fn omitted_output_names(layout: &DisplayLayout, available_outputs: &[String]) ->
 
     available_outputs
         .iter()
-        .filter(|name| is_internal_connector(name.as_str()))
         .filter(|name| !desired.contains(name.as_str()))
         .cloned()
         .collect()
@@ -244,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_outputs_omitted_from_saved_layout() {
+    fn finds_all_outputs_omitted_from_requested_layout() {
         let layout = DisplayLayout {
             displays: vec![test_display(PRIMARY_INTERNAL_CONNECTOR)],
         };
@@ -256,7 +255,24 @@ mod tests {
 
         assert_eq!(
             omitted_output_names(&layout, &available),
-            vec![SECONDARY_INTERNAL_CONNECTOR]
+            vec![SECONDARY_INTERNAL_CONNECTOR, "HDMI-A-1"]
+        );
+    }
+
+    #[test]
+    fn external_only_layout_omits_internal_outputs_for_clamshell() {
+        let layout = DisplayLayout {
+            displays: vec![test_display("HDMI-A-1")],
+        };
+        let available = vec![
+            PRIMARY_INTERNAL_CONNECTOR.to_string(),
+            SECONDARY_INTERNAL_CONNECTOR.to_string(),
+            "HDMI-A-1".to_string(),
+        ];
+
+        assert_eq!(
+            omitted_output_names(&layout, &available),
+            vec![PRIMARY_INTERNAL_CONNECTOR, SECONDARY_INTERNAL_CONNECTOR]
         );
     }
 
@@ -327,6 +343,73 @@ Logical monitors:
             Some("2880x1800@60.000")
         );
         assert_eq!(display.refresh_policy, RefreshPolicy::Fixed);
+    }
+
+    #[test]
+    fn gnome_parser_skips_non_logical_external_monitors_but_keeps_internal_panels() {
+        let output = r#"Monitors:
+├──Monitor eDP-1 (Built-in display)
+│  └──Current mode
+│      └──2880x1800@120.000
+├──Monitor eDP-2 (Built-in display)
+│  └──Preferences
+│      └──2880x1800@120.000
+└──Monitor HDMI-A-1 (External display)
+   └──Preferences
+       └──1920x1080@60.000
+Logical monitors:
+└──Logical monitor #1
+    ├──Position: 0, 0
+    ├──Scale: 1.000000
+    ├──Transform: normal
+    ├──Primary: yes
+    └──eDP-1 (Built-in display)
+"#;
+
+        let layout = gnome::parse_gdctl_output(output).expect("gdctl output should parse");
+        let connectors = layout
+            .displays
+            .iter()
+            .map(|display| display.connector.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(connectors, vec!["eDP-1", "eDP-2"]);
+        assert_eq!(layout.displays[1].y, 1800);
+    }
+
+    #[test]
+    fn gnome_parser_keeps_external_monitors_that_have_logical_entries() {
+        let output = r#"Monitors:
+├──Monitor eDP-1 (Built-in display)
+│  └──Current mode
+│      └──2880x1800@120.000
+└──Monitor HDMI-A-1 (External display)
+   └──Current mode
+       └──1920x1080@60.000
+Logical monitors:
+├──Logical monitor #1
+│   ├──Position: 0, 0
+│   ├──Scale: 1.000000
+│   ├──Transform: normal
+│   ├──Primary: yes
+│   └──eDP-1 (Built-in display)
+└──Logical monitor #2
+    ├──Position: 2880, 0
+    ├──Scale: 1.000000
+    ├──Transform: normal
+    ├──Primary: no
+    └──HDMI-A-1 (External display)
+"#;
+
+        let layout = gnome::parse_gdctl_output(output).expect("gdctl output should parse");
+        let external = layout
+            .displays
+            .iter()
+            .find(|display| display.connector == "HDMI-A-1")
+            .expect("active external should be included");
+
+        assert_eq!(external.x, 2880);
+        assert!(!external.primary);
     }
 
     #[test]

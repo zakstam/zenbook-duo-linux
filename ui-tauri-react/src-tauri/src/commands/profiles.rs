@@ -108,13 +108,7 @@ mod tests {
     use crate::models::Orientation;
     use std::env;
     use std::path::PathBuf;
-    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     struct TestHome {
         path: PathBuf,
@@ -166,7 +160,9 @@ mod tests {
 
     #[test]
     fn profile_storage_roundtrip_uses_zenbook_duo_home() {
-        let _guard = env_lock().lock().expect("profiles env lock");
+        let _guard = crate::commands::settings::test_env_lock()
+            .lock()
+            .expect("profiles env lock");
         let home = TestHome::new();
         let profile = test_profile("custom");
 
@@ -182,7 +178,9 @@ mod tests {
 
     #[test]
     fn profile_storage_loads_defaults_when_no_file_exists() {
-        let _guard = env_lock().lock().expect("profiles env lock");
+        let _guard = crate::commands::settings::test_env_lock()
+            .lock()
+            .expect("profiles env lock");
         let _home = TestHome::new();
 
         let profiles = list_profiles();
