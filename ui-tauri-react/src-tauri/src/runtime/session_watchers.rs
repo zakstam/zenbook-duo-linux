@@ -1,6 +1,5 @@
 use crate::runtime::session_agent::{
-    brightness_sync::BrightnessSync, hotkeys::HotkeyWatcher, rotation::RotationWatcherSupervisor,
-    send_runtime_notification,
+    brightness_sync::BrightnessSync, rotation::RotationWatcherSupervisor, send_runtime_notification,
 };
 
 /// Supervises session-agent watcher lifecycles.
@@ -15,16 +14,6 @@ pub(crate) fn start_all() {
             let _ = send_runtime_notification(
                 "Zenbook Duo Runtime Error",
                 &format!("Brightness sync watcher failed: {err}"),
-                true,
-            );
-        }
-    });
-    tokio::task::spawn_blocking(|| {
-        if let Err(err) = HotkeyWatcher::watch() {
-            log::warn!("session-agent keyboard hotkey watcher failed: {err}");
-            let _ = send_runtime_notification(
-                "Zenbook Duo Runtime Error",
-                &format!("Keyboard hotkey watcher failed: {err}"),
                 true,
             );
         }

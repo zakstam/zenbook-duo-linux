@@ -1,3 +1,4 @@
+pub(crate) mod bluetooth_hotkeys;
 pub mod client;
 pub mod compositor;
 pub mod daemon;

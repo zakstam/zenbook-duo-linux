@@ -7,13 +7,11 @@ use std::process::Command;
 use std::time::Duration;
 
 pub(crate) mod brightness_sync;
-pub(crate) mod hotkeys;
 pub(crate) mod rotation;
 
 use crate::hardware::duo::{
     is_internal_connector, PRIMARY_INTERNAL_CONNECTOR, SECONDARY_INTERNAL_CONNECTOR,
 };
-use evdev::{AbsoluteAxisType, Device, EventType};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command as TokioCommand;
@@ -540,13 +538,6 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-
-    #[test]
-    fn watches_both_known_hotkey_abs_codes() {
-        assert!(hotkeys::is_hotkey_abs_code(0x28));
-        assert!(hotkeys::is_hotkey_abs_code(AbsoluteAxisType::ABS_VOLUME.0));
-        assert!(!hotkeys::is_hotkey_abs_code(0x27));
-    }
 
     #[test]
     fn dock_mode_notification_mentions_bottom_screen_enabled_on_detach() {
