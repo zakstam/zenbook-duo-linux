@@ -12,6 +12,7 @@ This is intentionally device-specific. The goal is a dependable Zenbook Duo expe
 - Provides USB media remapping for Zenbook Duo top-row keys, including mute/volume, brightness, keyboard backlight cycling, and emoji launcher behavior where supported.
 - Handles Bluetooth backlight and brightness hotkeys through the daemon.
 - Supports per-display touchscreen enable/disable for the built-in ELAN panels, persisted across reboot/resume.
+- On GNOME, maps Duo touch and stylus input to the matching internal panel so touch targets the correct screen.
 - Provides a Control Panel for status, display layout, controls, profiles, settings, logs, events, and diagnostics.
 
 Known boundaries:
@@ -20,6 +21,7 @@ Known boundaries:
 - Supported desktop backends: GNOME Wayland, KDE Plasma Wayland, Hyprland, and Niri.
 - X11 and other compositors are not first-class targets.
 - Some vendor-specific keys, such as airplane mode and ASUS software keys, are not implemented by this project.
+- Per-panel touch-to-output mapping is currently automatic on GNOME only; KDE and Niri need backend-specific support before this can be enabled safely.
 
 ## Quick start
 
@@ -118,7 +120,7 @@ The installer/setup scripts make system-level changes because the project contro
 
 - Installs common dependencies: `usbutils`, `iio-sensor-proxy`, and `systemd`.
 - Installs backend dependencies:
-  - GNOME: `mutter` / `gdctl`
+  - GNOME: `mutter` / `gdctl` and `dconf` for touch/stylus output mapping
   - KDE Plasma: `kscreen` / `kscreen-doctor`
   - Hyprland: `hyprland` (provides `hyprctl`)
   - Niri: `niri`

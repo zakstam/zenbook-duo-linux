@@ -6,10 +6,10 @@ set -euo pipefail
 
 DUO_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-${0}}")" && pwd)"
 SETUP_SCRIPT_NAME="setup-gnome.sh"
-DNF_DESKTOP_PACKAGES=(mutter)
-APT_DESKTOP_PACKAGES=(mutter-common-bin)
-PACMAN_DESKTOP_PACKAGES=(mutter)
-MANUAL_DESKTOP_DEPENDENCIES_HINT="mutter/gdctl"
+DNF_DESKTOP_PACKAGES=(mutter dconf)
+APT_DESKTOP_PACKAGES=(mutter-common-bin dconf-cli)
+PACMAN_DESKTOP_PACKAGES=(mutter dconf)
+MANUAL_DESKTOP_DEPENDENCIES_HINT="mutter/gdctl, dconf"
 
 # shellcheck source=setup-common.sh
 source "${DUO_SETUP_DIR}/setup-common.sh"

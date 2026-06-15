@@ -8,6 +8,7 @@ use std::time::Duration;
 
 pub(crate) mod brightness_sync;
 pub(crate) mod rotation;
+pub(crate) mod touch_mapping;
 
 use crate::hardware::duo::{
     is_internal_connector, PRIMARY_INTERNAL_CONNECTOR, SECONDARY_INTERNAL_CONNECTOR,
@@ -31,6 +32,7 @@ pub async fn run() -> Result<(), String> {
 
     let backend = BackendReadiness::wait_for_ready_backend().await;
     register_with_daemon(backend).await?;
+    apply_touch_mapping_best_effort("session startup", backend);
     session_watchers::start_all();
 
     loop {
@@ -101,12 +103,21 @@ pub(crate) fn dispatch_session_command(payload: SessionCommand) -> SessionRespon
             scale,
             layout,
         } => match DockModePlanner::apply(attached, scale, layout) {
-            Ok(()) => SessionResponse::Ack,
+            Ok(()) => {
+                apply_touch_mapping_best_effort("dock mode", session::detect_backend_from_env());
+                SessionResponse::Ack
+            }
             Err(message) => SessionResponse::Error { message },
         },
         SessionCommand::ApplyDisplayLayout { layout } => {
             match crate::hardware::display_layout::apply_display_layout(&layout) {
-                Ok(()) => SessionResponse::Ack,
+                Ok(()) => {
+                    apply_touch_mapping_best_effort(
+                        "display layout",
+                        session::detect_backend_from_env(),
+                    );
+                    SessionResponse::Ack
+                }
                 Err(message) => SessionResponse::Error { message },
             }
         }
@@ -147,6 +158,34 @@ fn remove_stale_socket(path: &Path) {
 
 fn detect_session_id() -> String {
     env::var("XDG_SESSION_ID").unwrap_or_else(|_| "unknown-session".to_string())
+}
+
+fn apply_touch_mapping_best_effort(context: &str, backend: SessionBackend) {
+    if backend != SessionBackend::Gnome {
+        return;
+    }
+
+    match touch_mapping::apply_for_backend(backend) {
+        Ok(0) => {}
+        Ok(count) => session_agent_log_info(format!(
+            "applied {count} GNOME touch/tablet output mappings after {context}"
+        )),
+        Err(err) => session_agent_log_warn(format!(
+            "failed to apply GNOME touch/tablet output mappings after {context}: {err}"
+        )),
+    }
+}
+
+fn session_agent_log_info(message: impl AsRef<str>) {
+    let text = message.as_ref();
+    let _ = crate::runtime::logger::append_line(format!("session-agent: {text}"));
+    log::info!("{text}");
+}
+
+fn session_agent_log_warn(message: impl AsRef<str>) {
+    let text = message.as_ref();
+    let _ = crate::runtime::logger::append_line(format!("session-agent: {text}"));
+    log::warn!("{text}");
 }
 
 pub(crate) struct BackendReadiness;

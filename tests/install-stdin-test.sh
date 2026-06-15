@@ -114,7 +114,7 @@ assert_setup_packages() {
   fi
 }
 
-assert_setup_packages gnome mutter mutter-common-bin mutter mutter/gdctl
+assert_setup_packages gnome 'mutter dconf' 'mutter-common-bin dconf-cli' 'mutter dconf' 'mutter/gdctl, dconf'
 assert_setup_packages kde kscreen kscreen kscreen kscreen/kscreen-doctor
 assert_setup_packages niri niri niri niri niri
 
