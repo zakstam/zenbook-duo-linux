@@ -158,19 +158,33 @@ pub fn set_backlight(level: u8) -> Result<(), String> {
 /// A missing keyboard is a normal, recoverable dock state; failures remain visible
 /// when USB or Bluetooth detection says the keyboard is attached.
 pub fn set_backlight_if_keyboard_present(level: u8) -> Result<(), String> {
-    set_backlight_if_connection_present(crate::hardware::sysfs::detect_connection_type(), || {
+    set_backlight_for_lifecycle(crate::hardware::sysfs::detect_connection_type, || {
         set_backlight(level)
     })
 }
 
-fn set_backlight_if_connection_present<F>(connection: ConnectionType, set: F) -> Result<(), String>
+fn set_backlight_for_lifecycle<D, F>(mut detect: D, set: F) -> Result<(), String>
 where
+    D: FnMut() -> ConnectionType,
     F: FnOnce() -> Result<(), String>,
 {
-    if connection == ConnectionType::None {
+    if detect() == ConnectionType::None {
+        log::warn!(
+            "keyboard backlight unavailable during lifecycle: detachable keyboard is absent"
+        );
         return Ok(());
     }
-    set()
+
+    match set() {
+        Ok(()) => Ok(()),
+        Err(err) if detect() == ConnectionType::None => {
+            log::warn!(
+                "keyboard backlight became unavailable during lifecycle; continuing because the detachable keyboard is absent: {err}"
+            );
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(test)]
@@ -179,25 +193,90 @@ mod tests {
     use std::cell::Cell;
 
     #[test]
-    fn detached_keyboard_skips_lifecycle_backlight_without_error() {
+    fn attached_usb_keyboard_applies_lifecycle_backlight() {
         let called = Cell::new(false);
-        let result = set_backlight_if_connection_present(ConnectionType::None, || {
-            called.set(true);
-            Err("keyboard missing".into())
-        });
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::Usb,
+            || {
+                called.set(true);
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert!(called.get());
+    }
+
+    #[test]
+    fn attached_bluetooth_keyboard_applies_lifecycle_backlight() {
+        let called = Cell::new(false);
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::Bluetooth,
+            || {
+                called.set(true);
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert!(called.get());
+    }
+
+    #[test]
+    fn entirely_absent_keyboard_is_recoverable() {
+        let called = Cell::new(false);
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::None,
+            || {
+                called.set(true);
+                Err("keyboard missing".into())
+            },
+        );
 
         assert_eq!(result, Ok(()));
         assert!(!called.get());
     }
 
     #[test]
-    fn attached_keyboard_preserves_lifecycle_backlight_failure() {
-        for connection in [ConnectionType::Usb, ConnectionType::Bluetooth] {
-            let result = set_backlight_if_connection_present(connection, || {
-                Err("backlight write failed".into())
-            });
+    fn keyboard_disappearing_during_suspend_is_recoverable() {
+        let detections = Cell::new(0);
+        let result = set_backlight_for_lifecycle(
+            || {
+                let count = detections.get();
+                detections.set(count + 1);
+                if count == 0 {
+                    ConnectionType::Usb
+                } else {
+                    ConnectionType::None
+                }
+            },
+            || Err("USB device disappeared".into()),
+        );
 
-            assert_eq!(result, Err("backlight write failed".into()));
-        }
+        assert_eq!(result, Ok(()));
+        assert_eq!(detections.get(), 2);
+    }
+
+    #[test]
+    fn unavailable_backlight_is_recoverable_when_keyboard_is_absent() {
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::None,
+            || Err("backlight unavailable".into()),
+        );
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn unrelated_fatal_lifecycle_error_is_not_suppressed() {
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::Usb,
+            || Err("permission denied while writing attached keyboard".into()),
+        );
+
+        assert_eq!(
+            result,
+            Err("permission denied while writing attached keyboard".into())
+        );
     }
 }
