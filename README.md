@@ -155,6 +155,7 @@ Supported matrix covered by the installer smoke tests:
 |-----------------|---------------|-----------------|
 | GNOME on Wayland | `setup-gnome.sh` | `gdctl` |
 | KDE Plasma on Wayland | `setup-kde.sh` | `kscreen-doctor` |
+| Hyprland | `setup-hyprland.sh` | `hyprctl` |
 | Niri | `setup-niri.sh` | `niri msg` |
 
 | Distro family | Package manager |
@@ -168,7 +169,7 @@ Compatibility checklist for maintainers:
 - Keep common setup behavior in `setup-common.sh`; keep desktop wrappers limited to backend-specific packages and manual dependency hints.
 - Keep settings defaults aligned across `setup-common.sh`, the Rust `DuoSettings` defaults, and the frontend default settings helper. The installer writes `setupCompleted=true`; a missing settings file should still show first-run setup.
 - Preserve GNOME, KDE, and Niri command arguments when refactoring display code unless a backend-specific behavior change is intentional and tested.
-- Keep desktop readiness probes centralized in the Rust session helpers so GNOME, KDE, and Niri fallback behavior stays consistent.
+- Keep desktop readiness probes centralized in the Rust session helpers so GNOME, KDE, Hyprland, and Niri fallback behavior stays consistent.
 - Update `tests/install-stdin-test.sh` whenever supported desktops, package managers, service units, defaults, or installer entrypoints change.
 - Run the narrow `./check.sh` target for the area you touched; run `./check.sh all` before handing off broad cross-area changes.
 
@@ -180,7 +181,7 @@ Compatibility checklist for maintainers:
 - Reboot/login or resume comes up in the wrong layout:
   - After login or resume, the lifecycle handler and session agent re-sync the current attached/detached state without a manual restart
   - Check `systemctl --user status zenbook-duo-session-agent.service`; an early `No supported session backend became ready before timeout; continuing to wait` warning is OK if the service remains active
-  - Confirm your user manager has the desktop-session environment: `systemctl --user show-environment | grep -E 'DISPLAY|WAYLAND_DISPLAY|NIRI_SOCKET|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|DESKTOP_SESSION|XDG_SESSION_TYPE'`
+  - Confirm your user manager has the desktop-session environment: `systemctl --user show-environment | grep -E 'DISPLAY|WAYLAND_DISPLAY|NIRI_SOCKET|HYPRLAND_INSTANCE_SIGNATURE|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|DESKTOP_SESSION|XDG_SESSION_TYPE'`
   - If those variables are missing after reinstalling, rerun `./install.sh` from an active desktop session, then log out and back in once
 - Keyboard media/Fn keys stop working after suspend or reattaching the keyboard:
   - The optional USB media remap helper is stopped before sleep and retried automatically after resume, so a manual service restart should not be needed.
@@ -207,7 +208,7 @@ sudo udevadm trigger
 | Debian / Ubuntu-based | `apt` |
 | Arch / CachyOS | `pacman` |
 
-Other distros: install dependencies manually and run `./setup-gnome.sh`, `./setup-kde.sh`, or `./setup-niri.sh` (it exits if it cannot detect your package manager).
+Other distros: install dependencies manually and run the setup wrapper for GNOME, KDE, Hyprland, or Niri (it exits if it cannot detect your package manager).
 
 ### Control Panel UI (Tauri + React)
 

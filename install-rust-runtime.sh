@@ -124,18 +124,18 @@ ensure_user_manager_available() {
 }
 
 import_user_environment() {
-  run_user_systemctl import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
+  run_user_systemctl import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
 
   if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     if [ "${TARGET_USER}" = "${USER:-}" ] && [ "${EUID}" != "0" ]; then
       XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
-        dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
+        dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY NIRI_SOCKET HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
     else
       sudo -u "${TARGET_USER}" \
         XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
-        dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
+        dbus-update-activation-environment --systemd DISPLAY WAYLAND_DISPLAY NIRI_SOCKET HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE >/dev/null 2>&1 || true
     fi
   fi
 }

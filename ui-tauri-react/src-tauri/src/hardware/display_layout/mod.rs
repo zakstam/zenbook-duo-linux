@@ -4,6 +4,7 @@ use crate::hardware::duo::{
 };
 mod adapters;
 mod gnome;
+mod hyprland;
 mod kde;
 mod niri;
 
@@ -80,6 +81,10 @@ fn kde_output_names() -> Result<Vec<String>, String> {
 
 fn niri_output_names() -> Result<Vec<String>, String> {
     compositor::niri_output_names_from_value(&compositor::niri_outputs_json()?)
+}
+
+fn hyprland_output_names() -> Result<Vec<String>, String> {
+    compositor::hyprland_output_names_from_value(&compositor::hyprland_monitors_json()?)
 }
 
 fn stacked_logical_height(display: &DisplayInfo) -> i32 {

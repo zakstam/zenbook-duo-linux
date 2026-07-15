@@ -13,6 +13,7 @@ const DESKTOP_ENV_VARS: [&str; 3] = [
 const GNOME_READINESS_ARGS: &[&str] = &["show"];
 const KDE_READINESS_ARGS: &[&str] = &["-j"];
 const NIRI_READINESS_ARGS: &[&str] = &["msg", "--json", "outputs"];
+const HYPRLAND_READINESS_ARGS: &[&str] = &["monitors", "-j"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendCommandRunner {
@@ -29,7 +30,8 @@ pub struct BackendProbe {
     pub requires_gui_session: bool,
 }
 
-pub const SUPPORTED_BACKENDS: [SessionBackend; 3] = [
+pub const SUPPORTED_BACKENDS: [SessionBackend; 4] = [
+    SessionBackend::Hyprland,
     SessionBackend::Niri,
     SessionBackend::Gnome,
     SessionBackend::Kde,
@@ -41,7 +43,9 @@ pub fn detect_backend_from_env() -> SessionBackend {
 
 pub fn detect_backend_from_hint(current: &str, has_niri_socket: bool) -> SessionBackend {
     let current = current.to_ascii_lowercase().replace(':', " ");
-    if contains_desktop_token(&current, "gnome") {
+    if contains_desktop_token(&current, "hyprland") || contains_desktop_token(&current, "hypr") {
+        SessionBackend::Hyprland
+    } else if contains_desktop_token(&current, "gnome") {
         SessionBackend::Gnome
     } else if contains_desktop_token(&current, "plasma") || contains_desktop_token(&current, "kde")
     {
@@ -116,6 +120,13 @@ pub fn backend_probe(backend: &SessionBackend) -> Option<BackendProbe> {
             readiness_args: NIRI_READINESS_ARGS,
             readiness_runner: BackendCommandRunner::Niri,
             requires_gui_session: false,
+        }),
+        SessionBackend::Hyprland => Some(BackendProbe {
+            backend: SessionBackend::Hyprland,
+            readiness_program: "hyprctl",
+            readiness_args: HYPRLAND_READINESS_ARGS,
+            readiness_runner: BackendCommandRunner::Compositor,
+            requires_gui_session: true,
         }),
         SessionBackend::Unknown => None,
     }
@@ -207,6 +218,14 @@ mod tests {
     }
 
     #[test]
+    fn detects_hyprland_from_current_desktop_hint() {
+        assert_eq!(
+            detect_backend_from_hint("Hyprland", false),
+            SessionBackend::Hyprland
+        );
+    }
+
+    #[test]
     fn detects_niri_from_socket_without_desktop_hint() {
         assert_eq!(detect_backend_from_hint("", true), SessionBackend::Niri);
     }
@@ -222,6 +241,7 @@ mod tests {
             backend_probe_order(&SessionBackend::Kde),
             vec![
                 SessionBackend::Kde,
+                SessionBackend::Hyprland,
                 SessionBackend::Niri,
                 SessionBackend::Gnome,
             ]

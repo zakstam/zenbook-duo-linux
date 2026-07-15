@@ -1,6 +1,6 @@
 #!/bin/bash
 # Uninstallation script for ASUS Zenbook Duo Linux dual-screen management.
-# Reverses everything installed by setup-gnome.sh/setup-kde.sh/setup-niri.sh
+# Reverses everything installed by setup-gnome.sh/setup-kde.sh/setup-niri.sh/setup-hyprland.sh
 # and (optionally) the UI app.
 
 echo "Uninstalling Zenbook Duo Linux..."
@@ -186,6 +186,14 @@ fi
 
 if [ "$KEEP_CONFIG" = false ]; then
     rm -rf "$TARGET_HOME/.config/zenbook-duo" 2>/dev/null || true
+    HYPR_MAIN="$TARGET_HOME/.config/hypr/hyprland.conf"
+    HYPR_SNIPPET="$TARGET_HOME/.config/hypr/zenbook-duo.conf"
+    HYPR_INCLUDE='source = ~/.config/hypr/zenbook-duo.conf'
+    if [ -f "$HYPR_MAIN" ] && grep -Fqx "$HYPR_INCLUDE" "$HYPR_MAIN"; then
+        cp -a "$HYPR_MAIN" "$HYPR_MAIN.bak.$(date +%Y%m%d%H%M%S)"
+        sed -i "\|^${HYPR_INCLUDE}$|d" "$HYPR_MAIN"
+    fi
+    rm -f "$HYPR_SNIPPET"
 fi
 
 # ============================================================================
