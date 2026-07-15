@@ -74,14 +74,6 @@ pub fn hyprland_outputs_from_value(value: &Value) -> Result<Vec<Value>, String> 
         .ok_or_else(|| "Unexpected Hyprland monitors shape".into())
 }
 
-pub fn hyprland_output_names_from_value(value: &Value) -> Result<Vec<String>, String> {
-    Ok(hyprland_outputs_from_value(value)?
-        .iter()
-        .filter_map(|output| output.get("name").and_then(Value::as_str))
-        .map(ToString::to_string)
-        .collect())
-}
-
 pub fn kde_outputs_from_value(value: &Value) -> Result<Vec<Value>, String> {
     value
         .get("outputs")

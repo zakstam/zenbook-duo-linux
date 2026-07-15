@@ -1,4 +1,89 @@
 use super::*;
+use std::path::Path;
+
+const UPPER_CONNECTOR_ENV: &str = "ZENBOOK_DUO_UPPER_CONNECTOR";
+const LOWER_CONNECTOR_ENV: &str = "ZENBOOK_DUO_LOWER_CONNECTOR";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnedConnectors {
+    upper: String,
+    lower: String,
+}
+
+impl OwnedConnectors {
+    fn contains(&self, connector: &str) -> bool {
+        connector == self.upper || connector == self.lower
+    }
+}
+
+fn connected_edp_connectors(root: &Path) -> Vec<String> {
+    let mut connectors = std::fs::read_dir(root)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.flatten())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let status = std::fs::read_to_string(path.join("status")).ok()?;
+            if status.trim() != "connected" {
+                return None;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let connector = name
+                .split_once("-eDP-")
+                .map(|(_, suffix)| format!("eDP-{suffix}"))?;
+            Some(connector)
+        })
+        .collect::<Vec<_>>();
+    connectors.sort();
+    connectors.dedup();
+    connectors
+}
+
+fn owned_connectors_from(
+    upper_override: Option<String>,
+    lower_override: Option<String>,
+    connected_edp: &[String],
+) -> Result<OwnedConnectors, String> {
+    let upper = upper_override.unwrap_or_else(|| {
+        if connected_edp
+            .iter()
+            .any(|name| name == PRIMARY_INTERNAL_CONNECTOR)
+        {
+            PRIMARY_INTERNAL_CONNECTOR.to_string()
+        } else {
+            connected_edp
+                .first()
+                .cloned()
+                .unwrap_or_else(|| PRIMARY_INTERNAL_CONNECTOR.to_string())
+        }
+    });
+    let lower = lower_override.unwrap_or_else(|| {
+        if connected_edp
+            .iter()
+            .any(|name| name == SECONDARY_INTERNAL_CONNECTOR)
+        {
+            SECONDARY_INTERNAL_CONNECTOR.to_string()
+        } else {
+            connected_edp
+                .iter()
+                .find(|name| **name != upper)
+                .cloned()
+                .unwrap_or_else(|| SECONDARY_INTERNAL_CONNECTOR.to_string())
+        }
+    });
+    if upper.is_empty() || lower.is_empty() || upper == lower {
+        return Err("Hyprland internal connector overrides must name two distinct outputs".into());
+    }
+    Ok(OwnedConnectors { upper, lower })
+}
+
+fn owned_connectors() -> Result<OwnedConnectors, String> {
+    owned_connectors_from(
+        std::env::var(UPPER_CONNECTOR_ENV).ok(),
+        std::env::var(LOWER_CONNECTOR_ENV).ok(),
+        &connected_edp_connectors(Path::new("/sys/class/drm")),
+    )
+}
 
 fn transform_degrees(value: i64) -> u32 {
     match value {
@@ -110,53 +195,93 @@ fn monitor_rule(display: &DisplayInfo) -> String {
     )
 }
 
-fn migrate_workspaces_from(connectors: &[String], target: &str) -> Result<(), String> {
+fn workspace_moves_from_value(
+    value: &serde_json::Value,
+    lower: &str,
+    target: &str,
+) -> Result<Vec<String>, String> {
+    let workspaces = value
+        .as_array()
+        .ok_or_else(|| "Unexpected Hyprland workspaces shape".to_string())?;
+    Ok(workspaces
+        .iter()
+        .filter_map(|workspace| {
+            let monitor = workspace.get("monitor").and_then(|v| v.as_str())?;
+            let id = workspace.get("id").and_then(|v| v.as_i64())?;
+            (monitor == lower).then(|| format!("{id} {target}"))
+        })
+        .collect())
+}
+
+fn migrate_lower_workspaces(lower: &str, target: &str) -> Result<(), String> {
     let output = compositor::command_output("hyprctl", &["workspaces", "-j"])?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().into());
     }
     let value: serde_json::Value = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Invalid Hyprland workspace JSON: {e}"))?;
-    for workspace in value.as_array().into_iter().flatten() {
-        let monitor = workspace
-            .get("monitor")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if connectors.iter().any(|name| name == monitor) {
-            if let Some(id) = workspace.get("id").and_then(|v| v.as_i64()) {
-                run_command(
-                    "hyprctl",
-                    &[
-                        "dispatch",
-                        "moveworkspacetomonitor",
-                        &format!("{id} {target}"),
-                    ],
-                )?;
-            }
-        }
+    for move_arg in workspace_moves_from_value(&value, lower, target)? {
+        run_command(
+            "hyprctl",
+            &["dispatch", "moveworkspacetomonitor", &move_arg],
+        )?;
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct MutationPlan<'a> {
+    configure: Vec<&'a DisplayInfo>,
+    disable_lower: bool,
+}
+
+fn mutation_plan<'a>(
+    layout: &'a DisplayLayout,
+    owned: &OwnedConnectors,
+) -> Result<MutationPlan<'a>, String> {
+    let configure = layout
+        .displays
+        .iter()
+        .filter(|display| owned.contains(&display.connector))
+        .collect::<Vec<_>>();
+    if configure.is_empty() {
+        return Err("Refusing Hyprland layout with no owned internal display enabled".into());
+    }
+    let upper_enabled = configure
+        .iter()
+        .any(|display| display.connector == owned.upper);
+    if !upper_enabled {
+        return Err("Refusing to disable the upper internal display".into());
+    }
+    let lower_enabled = configure
+        .iter()
+        .any(|display| display.connector == owned.lower);
+    Ok(MutationPlan {
+        configure,
+        disable_lower: !lower_enabled,
+    })
 }
 
 pub(super) fn apply_hyprland_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     if layout.displays.is_empty() {
         return Err("Refusing to disable every display".into());
     }
-    let available = hyprland_output_names()?;
-    let omitted = omitted_output_names(layout, &available);
-    let target = layout
-        .displays
+    let owned = owned_connectors()?;
+    let plan = mutation_plan(layout, &owned)?;
+    let target = plan
+        .configure
         .iter()
-        .find(|d| d.primary)
-        .unwrap_or(&layout.displays[0]);
-    for display in &layout.displays {
+        .find(|display| display.connector == owned.upper)
+        .copied()
+        .unwrap_or(plan.configure[0]);
+    for display in plan.configure {
         run_command("hyprctl", &["keyword", "monitor", &monitor_rule(display)])?;
     }
-    migrate_workspaces_from(&omitted, &target.connector)?;
-    for connector in omitted {
+    if plan.disable_lower {
+        migrate_lower_workspaces(&owned.lower, &target.connector)?;
         run_command(
             "hyprctl",
-            &["keyword", "monitor", &format!("{connector},disable")],
+            &["keyword", "monitor", &format!("{},disable", owned.lower)],
         )?;
     }
     Ok(())
@@ -180,6 +305,45 @@ pub(super) fn set_hyprland_orientation(orientation: &Orientation) -> Result<(), 
 mod tests {
     use super::*;
 
+    fn display(connector: &str, primary: bool) -> DisplayInfo {
+        let mode = make_display_mode(2880, 1800, 120.0);
+        DisplayInfo {
+            connector: connector.into(),
+            width: mode.width,
+            height: mode.height,
+            refresh_rate: mode.refresh_rate,
+            scale: 1.67,
+            x: 0,
+            y: 0,
+            transform: 0,
+            primary,
+            current_mode: mode.clone(),
+            available_modes: vec![mode],
+            refresh_policy: RefreshPolicy::Fixed,
+            supports_dynamic_refresh: false,
+        }
+    }
+
+    fn owned() -> OwnedConnectors {
+        OwnedConnectors {
+            upper: "eDP-1".into(),
+            lower: "eDP-2".into(),
+        }
+    }
+
+    fn mutation_connectors(layout: &DisplayLayout) -> Vec<String> {
+        let plan = mutation_plan(layout, &owned()).expect("owned plan");
+        let mut connectors = plan
+            .configure
+            .iter()
+            .map(|display| display.connector.clone())
+            .collect::<Vec<_>>();
+        if plan.disable_lower {
+            connectors.push(owned().lower);
+        }
+        connectors
+    }
+
     #[test]
     fn parses_unusual_connector_names_and_two_monitors() {
         let value = serde_json::json!([
@@ -195,5 +359,135 @@ mod tests {
     #[test]
     fn rejects_zero_monitor_state() {
         assert!(layout_from_value(&serde_json::json!([])).is_err());
+    }
+
+    #[test]
+    fn internal_only_attached_and_detached_plans_preserve_duo_behavior() {
+        let attached = DisplayLayout {
+            displays: vec![display("eDP-1", true)],
+        };
+        let detached = DisplayLayout {
+            displays: vec![display("eDP-1", true), display("eDP-2", false)],
+        };
+
+        assert_eq!(mutation_connectors(&attached), vec!["eDP-1", "eDP-2"]);
+        assert_eq!(mutation_connectors(&detached), vec!["eDP-1", "eDP-2"]);
+        assert!(mutation_plan(&attached, &owned()).unwrap().disable_lower);
+        assert!(!mutation_plan(&detached, &owned()).unwrap().disable_lower);
+    }
+
+    #[test]
+    fn physical_hdmi_topology_mutates_only_owned_internal_panels() {
+        let layout = DisplayLayout {
+            displays: vec![display("eDP-1", true), display("HDMI-A-1", false)],
+        };
+
+        assert_eq!(mutation_connectors(&layout), vec!["eDP-1", "eDP-2"]);
+        assert!(!monitor_rule(&display("eDP-1", true)).contains("HDMI-A-1"));
+    }
+
+    #[test]
+    fn all_external_topologies_are_discovery_only() {
+        for external in [
+            "HDMI-A-1",
+            "DP-1",
+            "DP-USB-C-7",
+            "Thunderbolt Dock 42",
+            "DisplayLink-9",
+            "WL-virtual:odd/name",
+        ] {
+            for detached in [false, true] {
+                let mut displays = vec![display("eDP-1", true), display(external, false)];
+                if detached {
+                    displays.push(display("eDP-2", false));
+                }
+                let mutations = mutation_connectors(&DisplayLayout { displays });
+                assert!(mutations
+                    .iter()
+                    .all(|name| name == "eDP-1" || name == "eDP-2"));
+                assert!(!mutations.iter().any(|name| name == external));
+            }
+        }
+    }
+
+    #[test]
+    fn multiple_active_or_user_disabled_externals_never_enter_mutation_plan() {
+        let active = DisplayLayout {
+            displays: vec![
+                display("eDP-1", true),
+                display("HDMI-A-1", false),
+                display("DP-4", false),
+            ],
+        };
+        let user_disabled_external_omitted = DisplayLayout {
+            displays: vec![display("eDP-1", true)],
+        };
+
+        assert_eq!(mutation_connectors(&active), vec!["eDP-1", "eDP-2"]);
+        assert_eq!(
+            mutation_connectors(&user_disabled_external_omitted),
+            vec!["eDP-1", "eDP-2"]
+        );
+    }
+
+    #[test]
+    fn startup_hotplug_unplug_lock_and_lifecycle_replays_share_owned_scope() {
+        let before_startup = DisplayLayout {
+            displays: vec![display("eDP-1", true), display("HDMI-A-1", false)],
+        };
+        let after_hotplug = DisplayLayout {
+            displays: vec![display("eDP-1", true), display("DP-2", false)],
+        };
+        let after_unplug = DisplayLayout {
+            displays: vec![display("eDP-1", true)],
+        };
+
+        for replay in [&before_startup, &after_hotplug, &after_unplug] {
+            assert_eq!(mutation_connectors(replay), vec!["eDP-1", "eDP-2"]);
+        }
+    }
+
+    #[test]
+    fn only_lower_internal_workspaces_migrate() {
+        let workspaces = serde_json::json!([
+            {"id": 1, "monitor": "eDP-1"},
+            {"id": 2, "monitor": "eDP-2"},
+            {"id": 3, "monitor": "HDMI-A-1"},
+            {"id": 4, "monitor": "DP-1"}
+        ]);
+
+        assert_eq!(
+            workspace_moves_from_value(&workspaces, "eDP-2", "eDP-1").unwrap(),
+            vec!["2 eDP-1"]
+        );
+    }
+
+    #[test]
+    fn explicit_internal_connector_overrides_take_precedence() {
+        let resolved = owned_connectors_from(
+            Some("eDP-upper-custom".into()),
+            Some("eDP-lower-custom".into()),
+            &["eDP-1".into(), "eDP-2".into()],
+        )
+        .unwrap();
+        assert_eq!(resolved.upper, "eDP-upper-custom");
+        assert_eq!(resolved.lower, "eDP-lower-custom");
+    }
+
+    #[test]
+    fn automatic_detection_uses_only_connected_drm_edp_candidates() {
+        let resolved =
+            owned_connectors_from(None, None, &["eDP-3".into(), "eDP-4".into()]).unwrap();
+        assert_eq!(resolved.upper, "eDP-3");
+        assert_eq!(resolved.lower, "eDP-4");
+    }
+
+    #[test]
+    fn all_disabled_guard_rejects_external_only_or_empty_target() {
+        let external_only = DisplayLayout {
+            displays: vec![display("HDMI-A-1", true)],
+        };
+        assert!(mutation_plan(&external_only, &owned()).is_err());
+        assert!(mutation_plan(&DisplayLayout { displays: vec![] }, &owned()).is_err());
     }
 }

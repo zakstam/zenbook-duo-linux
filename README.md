@@ -158,6 +158,11 @@ Supported matrix covered by the installer smoke tests:
 | Hyprland | `setup-hyprland.sh` | `hyprctl` |
 | Niri | `setup-niri.sh` | `niri msg` |
 
+The Hyprland backend owns only the two internal Duo panels discovered through
+DRM eDP metadata. External outputs are inspected but never reconfigured. Systems
+with nonstandard internal connector names can set `ZENBOOK_DUO_UPPER_CONNECTOR`
+and `ZENBOOK_DUO_LOWER_CONNECTOR` in the session-agent service environment.
+
 | Distro family | Package manager |
 |---------------|-----------------|
 | Fedora / RHEL-based | `dnf` |

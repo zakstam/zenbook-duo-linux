@@ -83,10 +83,6 @@ fn niri_output_names() -> Result<Vec<String>, String> {
     compositor::niri_output_names_from_value(&compositor::niri_outputs_json()?)
 }
 
-fn hyprland_output_names() -> Result<Vec<String>, String> {
-    compositor::hyprland_output_names_from_value(&compositor::hyprland_monitors_json()?)
-}
-
 fn stacked_logical_height(display: &DisplayInfo) -> i32 {
     let rotated = display.transform == 90 || display.transform == 270;
     let physical_height = if rotated {
