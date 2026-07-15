@@ -19,8 +19,8 @@ use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
 
 use crate::ipc::protocol::{
-    DaemonRequest, DaemonResponse, Envelope, LifecyclePhase, SessionCommand, SessionResponse,
-    PROTOCOL_VERSION,
+    DaemonRequest, DaemonResponse, Envelope, LifecyclePhase, SessionBackend, SessionCommand,
+    SessionResponse, PROTOCOL_VERSION,
 };
 use crate::models::DaemonVersionInfo;
 use crate::runtime::{logger, paths, router, service_control::ServiceController, state::RuntimeState};
@@ -503,6 +503,11 @@ async fn replay_current_display_mode_with_disconnect(
     scale: f64,
     disconnect_on_failure: bool,
 ) -> Result<(), String> {
+    let backend = state.read().await.session_agent.backend;
+    let _ = logger::append_line(format!(
+        "rust-daemon: display replay requested keyboard_attached={} scale={} backend={:?}",
+        attached, scale, backend
+    ));
     if attached && state.read().await.lid_closed {
         if apply_external_only_clamshell_layout(state, disconnect_on_failure).await? {
             let _ = logger::append_line(
@@ -521,12 +526,12 @@ async fn replay_current_display_mode_with_disconnect(
         .clone()
         .filter(|layout| saved_layout_matches_display_mode(layout, attached));
 
-    if active_external_display_connected(state, attached).await
-        && saved_layout
-            .as_ref()
-            .map(layout_manages_only_internal_displays)
-            .unwrap_or(true)
-    {
+    let external_active = active_external_display_connected(state, attached).await;
+    let saved_internal_only = saved_layout
+        .as_ref()
+        .map(layout_manages_only_internal_displays)
+        .unwrap_or(true);
+    if should_skip_internal_replay_for_external(backend, external_active, saved_internal_only) {
         let _ = logger::append_line(
             "rust-daemon: skipped internal display replay while an external display is active",
         );
@@ -550,6 +555,16 @@ async fn replay_current_display_mode_with_disconnect(
         disconnect_on_failure,
     )
     .await
+}
+
+fn should_skip_internal_replay_for_external(
+    backend: Option<SessionBackend>,
+    external_active: bool,
+    saved_internal_only: bool,
+) -> bool {
+    external_active
+        && saved_internal_only
+        && backend != Some(SessionBackend::Hyprland)
 }
 
 pub(crate) async fn handle_lid_closed_change(
@@ -2742,6 +2757,31 @@ mod tests {
         assert!(!saved_layout_matches_display_mode(&dual, true));
         assert!(saved_layout_matches_display_mode(&dual, false));
         assert!(!saved_layout_matches_display_mode(&primary_with_external, false));
+    }
+
+    #[test]
+    fn hyprland_replay_is_not_skipped_when_external_output_is_active() {
+        assert!(!should_skip_internal_replay_for_external(
+            Some(SessionBackend::Hyprland),
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn full_layout_backends_keep_external_display_replay_guard() {
+        for backend in [SessionBackend::Gnome, SessionBackend::Kde, SessionBackend::Niri] {
+            assert!(should_skip_internal_replay_for_external(
+                Some(backend),
+                true,
+                true,
+            ));
+        }
+        assert!(!should_skip_internal_replay_for_external(
+            Some(SessionBackend::Gnome),
+            false,
+            true,
+        ));
     }
 
     #[test]

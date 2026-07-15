@@ -195,6 +195,13 @@ fn monitor_rule(display: &DisplayInfo) -> String {
     )
 }
 
+fn run_hyprctl(args: &[&str]) -> Result<(), String> {
+    run_command("hyprctl", args).map_err(|err| {
+        log::warn!("Hyprland monitor mutation failed args={args:?}: {err}");
+        err
+    })
+}
+
 fn workspace_moves_from_value(
     value: &serde_json::Value,
     lower: &str,
@@ -216,15 +223,14 @@ fn workspace_moves_from_value(
 fn migrate_lower_workspaces(lower: &str, target: &str) -> Result<(), String> {
     let output = compositor::command_output("hyprctl", &["workspaces", "-j"])?;
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        log::warn!("Hyprland workspace discovery failed: {err}");
+        return Err(err);
     }
     let value: serde_json::Value = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Invalid Hyprland workspace JSON: {e}"))?;
     for move_arg in workspace_moves_from_value(&value, lower, target)? {
-        run_command(
-            "hyprctl",
-            &["dispatch", "moveworkspacetomonitor", &move_arg],
-        )?;
+        run_hyprctl(&["dispatch", "moveworkspacetomonitor", &move_arg])?;
     }
     Ok(())
 }
@@ -233,6 +239,22 @@ fn migrate_lower_workspaces(lower: &str, target: &str) -> Result<(), String> {
 struct MutationPlan<'a> {
     configure: Vec<&'a DisplayInfo>,
     disable_lower: bool,
+}
+
+#[cfg(test)]
+fn mutation_summary(
+    plan: &MutationPlan<'_>,
+    owned: &OwnedConnectors,
+) -> Vec<(String, &'static str)> {
+    let mut mutations = plan
+        .configure
+        .iter()
+        .map(|display| (display.connector.clone(), "configure_enabled"))
+        .collect::<Vec<_>>();
+    if plan.disable_lower {
+        mutations.push((owned.lower.clone(), "disable"));
+    }
+    mutations
 }
 
 fn mutation_plan<'a>(
@@ -268,21 +290,33 @@ pub(super) fn apply_hyprland_display_layout(layout: &DisplayLayout) -> Result<()
     }
     let owned = owned_connectors()?;
     let plan = mutation_plan(layout, &owned)?;
+    log::info!(
+        "Hyprland Duo replay resolved upper={} lower={} requested_layout={layout:?}",
+        owned.upper,
+        owned.lower,
+    );
     let target = plan
         .configure
         .iter()
         .find(|display| display.connector == owned.upper)
         .copied()
         .unwrap_or(plan.configure[0]);
-    for display in plan.configure {
-        run_command("hyprctl", &["keyword", "monitor", &monitor_rule(display)])?;
+    let configure_rules = plan
+        .configure
+        .iter()
+        .map(|display| monitor_rule(display))
+        .collect::<Vec<_>>();
+    log::info!(
+        "Hyprland Duo mutations configure={configure_rules:?} disable_lower={}",
+        plan.disable_lower
+    );
+    for rule in &configure_rules {
+        run_hyprctl(&["keyword", "monitor", rule])?;
     }
     if plan.disable_lower {
         migrate_lower_workspaces(&owned.lower, &target.connector)?;
-        run_command(
-            "hyprctl",
-            &["keyword", "monitor", &format!("{},disable", owned.lower)],
-        )?;
+        let disable_rule = format!("{},disable", owned.lower);
+        run_hyprctl(&["keyword", "monitor", &disable_rule])?;
     }
     Ok(())
 }
@@ -374,6 +408,20 @@ mod tests {
         assert_eq!(mutation_connectors(&detached), vec!["eDP-1", "eDP-2"]);
         assert!(mutation_plan(&attached, &owned()).unwrap().disable_lower);
         assert!(!mutation_plan(&detached, &owned()).unwrap().disable_lower);
+        assert_eq!(
+            mutation_summary(&mutation_plan(&attached, &owned()).unwrap(), &owned()),
+            vec![
+                ("eDP-1".into(), "configure_enabled"),
+                ("eDP-2".into(), "disable"),
+            ]
+        );
+        assert_eq!(
+            mutation_summary(&mutation_plan(&detached, &owned()).unwrap(), &owned()),
+            vec![
+                ("eDP-1".into(), "configure_enabled"),
+                ("eDP-2".into(), "configure_enabled"),
+            ]
+        );
     }
 
     #[test]
