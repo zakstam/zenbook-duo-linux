@@ -4,6 +4,8 @@ use std::path::Path;
 
 use rusb::UsbContext;
 
+use crate::models::ConnectionType;
+
 /// USB HID SET_REPORT for keyboard backlight control using rusb.
 ///
 /// Protocol:
@@ -150,4 +152,52 @@ pub fn set_backlight(level: u8) -> Result<(), String> {
     Err(format!(
         "Failed to set keyboard backlight natively (usb: {usb_err}; bt: {bt_err})"
     ))
+}
+
+/// Apply a lifecycle backlight restore only when the detachable keyboard is present.
+/// A missing keyboard is a normal, recoverable dock state; failures remain visible
+/// when USB or Bluetooth detection says the keyboard is attached.
+pub fn set_backlight_if_keyboard_present(level: u8) -> Result<(), String> {
+    set_backlight_if_connection_present(crate::hardware::sysfs::detect_connection_type(), || {
+        set_backlight(level)
+    })
+}
+
+fn set_backlight_if_connection_present<F>(connection: ConnectionType, set: F) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    if connection == ConnectionType::None {
+        return Ok(());
+    }
+    set()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn detached_keyboard_skips_lifecycle_backlight_without_error() {
+        let called = Cell::new(false);
+        let result = set_backlight_if_connection_present(ConnectionType::None, || {
+            called.set(true);
+            Err("keyboard missing".into())
+        });
+
+        assert_eq!(result, Ok(()));
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn attached_keyboard_preserves_lifecycle_backlight_failure() {
+        for connection in [ConnectionType::Usb, ConnectionType::Bluetooth] {
+            let result = set_backlight_if_connection_present(connection, || {
+                Err("backlight write failed".into())
+            });
+
+            assert_eq!(result, Err("backlight write failed".into()));
+        }
+    }
 }

@@ -316,7 +316,7 @@ async fn handle_lifecycle(
                     .ok();
                 }
             }
-            hardware::hid::set_backlight(0)?;
+            hardware::hid::set_backlight_if_keyboard_present(0)?;
 
             let mut guard = state.write().await;
             guard.push_recent_event(HardwareEvent::info(
@@ -338,7 +338,7 @@ async fn handle_lifecycle(
                 let guard = state.read().await;
                 (guard.status.backlight_level, guard.settings.default_scale)
             };
-            hardware::hid::set_backlight(restore_level)?;
+            hardware::hid::set_backlight_if_keyboard_present(restore_level)?;
 
             let refreshed = crate::runtime::probe::current_status();
             let attached = refreshed.keyboard_attached;
