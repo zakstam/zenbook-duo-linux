@@ -165,37 +165,65 @@ fn kde_rotation_token(orientation: &Orientation) -> &'static str {
     }
 }
 
-fn rotated_secondary_position(
+/// The UX8407AA's primary panel (eDP-1) is physically mounted 180° rotated and
+/// KWin does not compensate for the DRM panel-orientation property, so its
+/// rotation must be offset by 180° relative to the secondary panel.
+fn primary_panel_mounted_inverted() -> bool {
+    static FLIPPED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLIPPED.get_or_init(|| {
+        std::fs::read_to_string("/sys/class/dmi/id/board_name")
+            .map(|name| name.trim() == "UX8407AA")
+            .unwrap_or(false)
+    })
+}
+
+fn kde_primary_rotation_token(orientation: &Orientation, panel_inverted: bool) -> &'static str {
+    if !panel_inverted {
+        return kde_rotation_token(orientation);
+    }
+    match orientation {
+        Orientation::Left => "left",
+        Orientation::Right => "right",
+        Orientation::Inverted => "none",
+        Orientation::Normal => "inverted",
+    }
+}
+
+/// Positions for (primary, secondary) in dual-screen mode. KWin does not
+/// reliably apply layouts with negative coordinates, so the pair is always
+/// anchored with the leftmost/topmost output at 0,0.
+fn dual_screen_positions(
     orientation: &Orientation,
     primary_size: Result<(i64, i64), String>,
-) -> Result<(i64, i64), String> {
+) -> Result<((i64, i64), (i64, i64)), String> {
     let (width, height) = primary_size?;
     let (rot_w, rot_h) = match orientation {
         Orientation::Left | Orientation::Right => (height, width),
         Orientation::Normal | Orientation::Inverted => (width, height),
     };
     Ok(match orientation {
-        Orientation::Left => (-rot_w, 0),
-        Orientation::Right => (rot_w, 0),
-        Orientation::Inverted => (0, -rot_h),
-        Orientation::Normal => (0, rot_h),
+        Orientation::Left => ((rot_w, 0), (0, 0)),
+        Orientation::Right => ((0, 0), (rot_w, 0)),
+        Orientation::Inverted => ((0, rot_h), (0, 0)),
+        Orientation::Normal => ((0, 0), (0, rot_h)),
     })
 }
 
 pub(super) fn set_kde_orientation(orientation: &Orientation) -> Result<(), String> {
     let token = kde_rotation_token(orientation);
+    let primary_token = kde_primary_rotation_token(orientation, primary_panel_mounted_inverted());
     let enabled_count = kde_enabled_output_count().unwrap_or(1);
 
     if enabled_count <= 1 {
         let args = vec![
             format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
             format!("output.{PRIMARY_INTERNAL_CONNECTOR}.position.0,0"),
-            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.rotation.{token}"),
+            format!("output.{PRIMARY_INTERNAL_CONNECTOR}.rotation.{primary_token}"),
         ];
         return run_command("kscreen-doctor", &args);
     }
 
-    let (pos_x, pos_y) = rotated_secondary_position(
+    let ((primary_x, primary_y), (secondary_x, secondary_y)) = dual_screen_positions(
         orientation,
         kde_output_logical_size(PRIMARY_INTERNAL_CONNECTOR),
     )?;
@@ -203,10 +231,10 @@ pub(super) fn set_kde_orientation(orientation: &Orientation) -> Result<(), Strin
     let args = vec![
         format!("output.{PRIMARY_INTERNAL_CONNECTOR}.enable"),
         format!("output.{SECONDARY_INTERNAL_CONNECTOR}.enable"),
-        format!("output.{PRIMARY_INTERNAL_CONNECTOR}.rotation.{token}"),
+        format!("output.{PRIMARY_INTERNAL_CONNECTOR}.rotation.{primary_token}"),
         format!("output.{SECONDARY_INTERNAL_CONNECTOR}.rotation.{token}"),
-        format!("output.{PRIMARY_INTERNAL_CONNECTOR}.position.0,0"),
-        format!("output.{SECONDARY_INTERNAL_CONNECTOR}.position.{pos_x},{pos_y}"),
+        format!("output.{PRIMARY_INTERNAL_CONNECTOR}.position.{primary_x},{primary_y}"),
+        format!("output.{SECONDARY_INTERNAL_CONNECTOR}.position.{secondary_x},{secondary_y}"),
     ];
 
     run_command("kscreen-doctor", &args)
@@ -218,8 +246,7 @@ mod tests {
 
     #[test]
     fn missing_primary_geometry_is_an_error_for_secondary_positioning() {
-        let result =
-            rotated_secondary_position(&Orientation::Normal, Err("missing geometry".into()));
+        let result = dual_screen_positions(&Orientation::Normal, Err("missing geometry".into()));
 
         assert_eq!(
             result.expect_err("missing geometry should fail"),
@@ -228,14 +255,54 @@ mod tests {
     }
 
     #[test]
-    fn secondary_position_uses_rotated_primary_geometry() {
+    fn dual_screen_positions_use_rotated_geometry_without_negative_coordinates() {
         assert_eq!(
-            rotated_secondary_position(&Orientation::Left, Ok((1200, 800))).expect("position"),
-            (-800, 0)
+            dual_screen_positions(&Orientation::Left, Ok((1200, 800))).expect("positions"),
+            ((800, 0), (0, 0))
         );
         assert_eq!(
-            rotated_secondary_position(&Orientation::Normal, Ok((1200, 800))).expect("position"),
-            (0, 800)
+            dual_screen_positions(&Orientation::Right, Ok((1200, 800))).expect("positions"),
+            ((0, 0), (800, 0))
+        );
+        assert_eq!(
+            dual_screen_positions(&Orientation::Inverted, Ok((1200, 800))).expect("positions"),
+            ((0, 800), (0, 0))
+        );
+        assert_eq!(
+            dual_screen_positions(&Orientation::Normal, Ok((1200, 800))).expect("positions"),
+            ((0, 0), (0, 800))
+        );
+    }
+
+    #[test]
+    fn primary_rotation_token_matches_secondary_when_panel_is_not_inverted() {
+        for orientation in [
+            Orientation::Normal,
+            Orientation::Inverted,
+            Orientation::Left,
+            Orientation::Right,
+        ] {
+            assert_eq!(
+                kde_primary_rotation_token(&orientation, false),
+                kde_rotation_token(&orientation)
+            );
+        }
+    }
+
+    #[test]
+    fn primary_rotation_token_is_offset_180_when_panel_is_inverted() {
+        assert_eq!(
+            kde_primary_rotation_token(&Orientation::Normal, true),
+            "inverted"
+        );
+        assert_eq!(
+            kde_primary_rotation_token(&Orientation::Inverted, true),
+            "none"
+        );
+        assert_eq!(kde_primary_rotation_token(&Orientation::Left, true), "left");
+        assert_eq!(
+            kde_primary_rotation_token(&Orientation::Right, true),
+            "right"
         );
     }
 }
