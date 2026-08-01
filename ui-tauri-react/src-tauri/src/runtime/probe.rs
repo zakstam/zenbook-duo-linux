@@ -18,8 +18,23 @@ pub fn current_status() -> DuoStatus {
 }
 
 pub fn apply_layout_to_status(status: &mut DuoStatus, layout: Option<&DisplayLayout>) {
+    apply_layout_to_status_with(
+        status,
+        layout,
+        crate::hardware::duo::primary_panel_mounted_inverted(),
+    );
+}
+
+/// Hardware probing stays at the edge so the mapping itself remains testable
+/// without depending on the DMI of the machine running the tests.
+pub(crate) fn apply_layout_to_status_with(
+    status: &mut DuoStatus,
+    layout: Option<&DisplayLayout>,
+    mounted_inverted: bool,
+) {
     status.monitor_count = monitor_count(layout, status.monitor_count);
-    status.orientation = inferred_orientation(layout).unwrap_or(status.orientation.clone());
+    status.orientation =
+        inferred_orientation(layout, mounted_inverted).unwrap_or(status.orientation.clone());
 }
 
 pub fn keyboard_attached(connection_type: &ConnectionType) -> bool {
@@ -58,7 +73,10 @@ fn monitor_count(layout: Option<&crate::models::DisplayLayout>, current: u32) ->
         .unwrap_or(0)
 }
 
-fn inferred_orientation(layout: Option<&crate::models::DisplayLayout>) -> Option<Orientation> {
+fn inferred_orientation(
+    layout: Option<&crate::models::DisplayLayout>,
+    mounted_inverted: bool,
+) -> Option<Orientation> {
     let layout = layout?;
     let display = layout
         .displays
@@ -66,17 +84,56 @@ fn inferred_orientation(layout: Option<&crate::models::DisplayLayout>) -> Option
         .find(|display| display.primary)
         .or_else(|| layout.displays.first())?;
 
-    Some(match display.transform {
+    let inverted = mounted_inverted
+        && crate::hardware::duo::is_primary_internal_connector(&display.connector);
+
+    Some(orientation_from_transform(display.transform, inverted))
+}
+
+/// Inverse of the rotation tokens the display backends apply. On boards whose
+/// primary panel is mounted 180° rotated its physical transform is offset by
+/// 180° from the logical orientation, so reading it back naively reports an
+/// upright screen as `Inverted`; replaying that value then flips the panel and
+/// the next probe reports `Normal`, which is what makes the rotation oscillate.
+fn orientation_from_transform(transform: u32, mounted_inverted: bool) -> Orientation {
+    if mounted_inverted {
+        return match transform {
+            90 => Orientation::Right,
+            180 => Orientation::Normal,
+            270 => Orientation::Left,
+            _ => Orientation::Inverted,
+        };
+    }
+
+    match transform {
         90 => Orientation::Left,
         180 => Orientation::Inverted,
         270 => Orientation::Right,
         _ => Orientation::Normal,
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inverted_primary_panel_reads_back_as_the_logical_orientation() {
+        // Physical 180 on an inverted-mount primary is logically upright.
+        // Reporting it as Inverted let a replay flip the panel and oscillate.
+        assert_eq!(orientation_from_transform(180, true), Orientation::Normal);
+        assert_eq!(orientation_from_transform(0, true), Orientation::Inverted);
+        assert_eq!(orientation_from_transform(90, true), Orientation::Right);
+        assert_eq!(orientation_from_transform(270, true), Orientation::Left);
+    }
+
+    #[test]
+    fn ordinary_panels_keep_the_existing_orientation_mapping() {
+        assert_eq!(orientation_from_transform(0, false), Orientation::Normal);
+        assert_eq!(orientation_from_transform(90, false), Orientation::Left);
+        assert_eq!(orientation_from_transform(180, false), Orientation::Inverted);
+        assert_eq!(orientation_from_transform(270, false), Orientation::Right);
+    }
 
     #[test]
     fn reads_radio_status_through_host_adapter() {
@@ -181,9 +238,15 @@ mod tests {
             ],
         };
 
-        apply_layout_to_status(&mut status, Some(&layout));
+        apply_layout_to_status_with(&mut status, Some(&layout), false);
 
         assert_eq!(status.orientation, Orientation::Left);
         assert_eq!(status.monitor_count, 2);
+
+        // Same physical transform on an inverted-mount primary is the opposite
+        // logical orientation.
+        apply_layout_to_status_with(&mut status, Some(&layout), true);
+
+        assert_eq!(status.orientation, Orientation::Right);
     }
 }

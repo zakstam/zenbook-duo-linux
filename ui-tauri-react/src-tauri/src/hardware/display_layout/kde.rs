@@ -165,17 +165,7 @@ fn kde_rotation_token(orientation: &Orientation) -> &'static str {
     }
 }
 
-/// The UX8407AA's primary panel (eDP-1) is physically mounted 180° rotated and
-/// KWin does not compensate for the DRM panel-orientation property, so its
-/// rotation must be offset by 180° relative to the secondary panel.
-fn primary_panel_mounted_inverted() -> bool {
-    static FLIPPED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLIPPED.get_or_init(|| {
-        std::fs::read_to_string("/sys/class/dmi/id/board_name")
-            .map(|name| name.trim() == "UX8407AA")
-            .unwrap_or(false)
-    })
-}
+use crate::hardware::duo::primary_panel_mounted_inverted;
 
 fn kde_primary_rotation_token(orientation: &Orientation, panel_inverted: bool) -> &'static str {
     if !panel_inverted {
@@ -192,18 +182,37 @@ fn kde_primary_rotation_token(orientation: &Orientation, panel_inverted: bool) -
 /// Positions for (primary, secondary) in dual-screen mode. KWin does not
 /// reliably apply layouts with negative coordinates, so the pair is always
 /// anchored with the leftmost/topmost output at 0,0.
+///
+/// `primary_size` must be the panel's *unrotated* logical size; the rotation
+/// swap is applied here from the target orientation, so passing an already
+/// rotated size would swap twice and stack the panels along the wrong axis.
+///
+/// When the primary panel is mounted 180° rotated it physically ends up on the
+/// opposite side of the secondary in portrait, so the left/right pair is
+/// mirrored. Stacked (Normal/Inverted) order is unaffected by the mount.
 fn dual_screen_positions(
     orientation: &Orientation,
     primary_size: Result<(i64, i64), String>,
+    panel_inverted: bool,
 ) -> Result<((i64, i64), (i64, i64)), String> {
     let (width, height) = primary_size?;
     let (rot_w, rot_h) = match orientation {
         Orientation::Left | Orientation::Right => (height, width),
         Orientation::Normal | Orientation::Inverted => (width, height),
     };
+    let primary_leads_horizontally = match orientation {
+        Orientation::Left => panel_inverted,
+        Orientation::Right => !panel_inverted,
+        _ => false,
+    };
     Ok(match orientation {
-        Orientation::Left => ((rot_w, 0), (0, 0)),
-        Orientation::Right => ((0, 0), (rot_w, 0)),
+        Orientation::Left | Orientation::Right => {
+            if primary_leads_horizontally {
+                ((0, 0), (rot_w, 0))
+            } else {
+                ((rot_w, 0), (0, 0))
+            }
+        }
         Orientation::Inverted => ((0, rot_h), (0, 0)),
         Orientation::Normal => ((0, 0), (0, rot_h)),
     })
@@ -226,6 +235,7 @@ pub(super) fn set_kde_orientation(orientation: &Orientation) -> Result<(), Strin
     let ((primary_x, primary_y), (secondary_x, secondary_y)) = dual_screen_positions(
         orientation,
         kde_output_logical_size(PRIMARY_INTERNAL_CONNECTOR),
+        primary_panel_mounted_inverted(),
     )?;
 
     let args = vec![
@@ -246,7 +256,8 @@ mod tests {
 
     #[test]
     fn missing_primary_geometry_is_an_error_for_secondary_positioning() {
-        let result = dual_screen_positions(&Orientation::Normal, Err("missing geometry".into()));
+        let result =
+            dual_screen_positions(&Orientation::Normal, Err("missing geometry".into()), false);
 
         assert_eq!(
             result.expect_err("missing geometry should fail"),
@@ -257,21 +268,44 @@ mod tests {
     #[test]
     fn dual_screen_positions_use_rotated_geometry_without_negative_coordinates() {
         assert_eq!(
-            dual_screen_positions(&Orientation::Left, Ok((1200, 800))).expect("positions"),
+            dual_screen_positions(&Orientation::Left, Ok((1200, 800)), false).expect("positions"),
             ((800, 0), (0, 0))
         );
         assert_eq!(
-            dual_screen_positions(&Orientation::Right, Ok((1200, 800))).expect("positions"),
+            dual_screen_positions(&Orientation::Right, Ok((1200, 800)), false).expect("positions"),
             ((0, 0), (800, 0))
         );
         assert_eq!(
-            dual_screen_positions(&Orientation::Inverted, Ok((1200, 800))).expect("positions"),
+            dual_screen_positions(&Orientation::Inverted, Ok((1200, 800)), false)
+                .expect("positions"),
             ((0, 800), (0, 0))
         );
         assert_eq!(
-            dual_screen_positions(&Orientation::Normal, Ok((1200, 800))).expect("positions"),
+            dual_screen_positions(&Orientation::Normal, Ok((1200, 800)), false).expect("positions"),
             ((0, 0), (0, 800))
         );
+    }
+
+    #[test]
+    fn inverted_primary_panel_mirrors_only_the_portrait_pair() {
+        // Measured on UX8407AA: rotating left puts the primary (eDP-1) on the
+        // physical left, the opposite of an ordinarily mounted panel.
+        assert_eq!(
+            dual_screen_positions(&Orientation::Left, Ok((1200, 800)), true).expect("positions"),
+            ((0, 0), (800, 0))
+        );
+        assert_eq!(
+            dual_screen_positions(&Orientation::Right, Ok((1200, 800)), true).expect("positions"),
+            ((800, 0), (0, 0))
+        );
+
+        // Stacked orientations are unaffected by the mount.
+        for orientation in [Orientation::Normal, Orientation::Inverted] {
+            assert_eq!(
+                dual_screen_positions(&orientation, Ok((1200, 800)), true).expect("positions"),
+                dual_screen_positions(&orientation, Ok((1200, 800)), false).expect("positions"),
+            );
+        }
     }
 
     #[test]

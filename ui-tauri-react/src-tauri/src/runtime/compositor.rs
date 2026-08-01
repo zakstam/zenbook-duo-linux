@@ -116,11 +116,25 @@ pub fn kde_output_logical_size_from_value(value: &Value, name: &str) -> Result<(
                 .and_then(|v| v.as_object())
                 .ok_or_else(|| "Missing KDE output size".to_string())?;
             let scale = output.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
-            let width = size.get("width").and_then(|v| v.as_i64()).unwrap_or(0);
-            let height = size.get("height").and_then(|v| v.as_i64()).unwrap_or(0);
+            let mut width = size.get("width").and_then(|v| v.as_i64()).unwrap_or(0);
+            let mut height = size.get("height").and_then(|v| v.as_i64()).unwrap_or(0);
+
+            // KWin reports `size` already rotated (a 2880x1800 panel reads back
+            // as 1800x2880 at 90/270), so undo that here and always return the
+            // panel's unrotated logical size. Callers apply their own rotation
+            // swap from the orientation they are about to set; without this the
+            // swap happens twice and a width is used as a vertical offset.
+            if matches!(output.get("rotation").and_then(|v| v.as_i64()), Some(2) | Some(8)) {
+                std::mem::swap(&mut width, &mut height);
+            }
+
+            // KWin derives logical sizes by rounding up, so mirror ceil here.
+            // Rounding down leaves a one-pixel seam between stacked panels on
+            // fractional scales (1800 / 1.6583 = 1085.43 -> 1085 vs KWin's 1086),
+            // which KDE reports as a gap and blocks pointer movement across it.
             return Ok((
-                (width as f64 / scale).round() as i64,
-                (height as f64 / scale).round() as i64,
+                (width as f64 / scale).ceil() as i64,
+                (height as f64 / scale).ceil() as i64,
             ));
         }
     }
@@ -204,6 +218,44 @@ mod tests {
             Ok((1920, 1200))
         );
         assert_eq!(kde_enabled_output_count_from_value(&value), Ok(1));
+    }
+
+    #[test]
+    fn fractional_scale_logical_size_rounds_up_to_match_kwin() {
+        // UX8407AA panels at the default 1.66 scale: 1800 / 1.6583 = 1085.43.
+        // KWin reports 1086, so rounding down would stack the second panel one
+        // pixel short and leave a gap the pointer cannot cross.
+        let value = serde_json::json!({
+            "outputs": [
+                { "name": "eDP-1", "enabled": true, "size": { "width": 2880, "height": 1800 }, "scale": 1.6583333333333334 }
+            ]
+        });
+
+        assert_eq!(
+            kde_output_logical_size_from_value(&value, "eDP-1"),
+            Ok((1737, 1086))
+        );
+    }
+
+    #[test]
+    fn rotated_outputs_report_their_unrotated_logical_size() {
+        // KWin reports `size` already rotated at 90/270. Returning it as-is made
+        // callers swap a second time and stack panels along the wrong axis.
+        let value = serde_json::json!({
+            "outputs": [
+                { "name": "eDP-1", "enabled": true, "rotation": 8, "size": { "width": 1800, "height": 2880 }, "scale": 1.6583333333333334 },
+                { "name": "eDP-2", "enabled": true, "rotation": 1, "size": { "width": 2880, "height": 1800 }, "scale": 1.6583333333333334 }
+            ]
+        });
+
+        assert_eq!(
+            kde_output_logical_size_from_value(&value, "eDP-1"),
+            Ok((1737, 1086))
+        );
+        assert_eq!(
+            kde_output_logical_size_from_value(&value, "eDP-2"),
+            kde_output_logical_size_from_value(&value, "eDP-1")
+        );
     }
 
     #[test]
