@@ -4,7 +4,7 @@ import { normalizeThemePreference } from "@/lib/theme";
 export const DEFAULT_DUO_STATUS: DuoStatus = {
   keyboardAttached: false,
   connectionType: "none",
-  monitorCount: 0,
+  monitorCount: 1,
   wifiEnabled: false,
   bluetoothEnabled: false,
   backlightLevel: 0,
