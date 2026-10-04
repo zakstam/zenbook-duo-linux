@@ -448,6 +448,73 @@ Logical monitors:
         );
     }
 
+    fn gdctl_logical_monitor_args<'a>(args: &'a [String], connector: &str) -> &'a [String] {
+        let start = args
+            .windows(2)
+            .position(|w| w[0] == "--monitor" && w[1] == connector)
+            .expect("connector should be configured");
+        let start = args[..start]
+            .iter()
+            .rposition(|a| a == "--logical-monitor")
+            .expect("logical monitor should start before its monitor");
+        let end = args[start + 1..]
+            .iter()
+            .position(|a| a == "--logical-monitor")
+            .map(|offset| start + 1 + offset)
+            .unwrap_or(args.len());
+        &args[start..end]
+    }
+
+    #[test]
+    fn gnome_stacks_bottom_panel_below_top_at_fractional_scale() {
+        // Issue #28: at 1.66x gdctl applies mutter's nearest supported scale (5/3 or
+        // 1.7476 for 2880x1800), so the bottom panel must be placed with --below
+        // rather than at y = ceil(1800 / 1.66) = 1085, which mutter rejects with
+        // "Logical monitors are not adjacent".
+        let layout = normalize_display_layout(DisplayLayout {
+            displays: vec![
+                test_display(SECONDARY_INTERNAL_CONNECTOR),
+                test_display(PRIMARY_INTERNAL_CONNECTOR),
+            ],
+        });
+
+        let args = gnome::gnome_set_args(&layout, None).expect("args should build");
+
+        let first_monitor = args
+            .windows(2)
+            .find(|w| w[0] == "--monitor")
+            .map(|w| w[1].as_str());
+        assert_eq!(first_monitor, Some(PRIMARY_INTERNAL_CONNECTOR));
+
+        let bottom = gdctl_logical_monitor_args(&args, SECONDARY_INTERNAL_CONNECTOR);
+        assert!(bottom
+            .windows(2)
+            .any(|w| w[0] == "--below" && w[1] == PRIMARY_INTERNAL_CONNECTOR));
+        assert!(!bottom.iter().any(|a| a == "--y"));
+        assert!(bottom.windows(2).any(|w| w[0] == "--x" && w[1] == "0"));
+
+        let top = gdctl_logical_monitor_args(&args, PRIMARY_INTERNAL_CONNECTOR);
+        assert!(top.windows(2).any(|w| w[0] == "--y" && w[1] == "0"));
+        assert!(top.iter().any(|a| a == "--primary"));
+    }
+
+    #[test]
+    fn gnome_keeps_absolute_position_for_displays_not_stacked_under_top_panel() {
+        let mut external = test_display("HDMI-A-1");
+        external.x = 1735;
+        external.y = 0;
+        let layout = DisplayLayout {
+            displays: vec![test_display(PRIMARY_INTERNAL_CONNECTOR), external],
+        };
+
+        let args = gnome::gnome_set_args(&layout, None).expect("args should build");
+
+        assert!(!args.iter().any(|a| a == "--below"));
+        let external = gdctl_logical_monitor_args(&args, "HDMI-A-1");
+        assert!(external.windows(2).any(|w| w[0] == "--x" && w[1] == "1735"));
+        assert!(external.windows(2).any(|w| w[0] == "--y" && w[1] == "0"));
+    }
+
     #[test]
     fn parses_niri_transform_from_logical_object() {
         let value = serde_json::json!({

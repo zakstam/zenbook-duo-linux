@@ -343,6 +343,50 @@ pub(super) fn apply_gnome_display_layout(layout: &DisplayLayout) -> Result<(), S
     }
 
     let current_layout = get_gnome_display_layout().ok();
+    let args = gnome_set_args(layout, current_layout.as_ref())?;
+
+    let output = compositor::command_output("gdctl", &args)?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "gdctl set failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(())
+}
+
+/// The bottom internal panel when the layout stacks it flush under the top one.
+///
+/// gdctl snaps a requested scale to the nearest one mutter supports (1.66 becomes
+/// 5/3 or 1.7476 on a 2880x1800 panel), so a y offset computed from the requested
+/// scale leaves a gap and mutter rejects the config as "not adjacent". Such a panel
+/// is placed with `--below`, letting gdctl compute the edge from the applied scale.
+fn secondary_stacked_below_primary(layout: &DisplayLayout) -> Option<usize> {
+    let primary = layout
+        .displays
+        .iter()
+        .find(|d| d.connector == PRIMARY_INTERNAL_CONNECTOR)?;
+    layout.displays.iter().position(|d| {
+        d.connector == SECONDARY_INTERNAL_CONNECTOR
+            && d.x == primary.x
+            && d.y == primary.y + stacked_logical_height(primary)
+    })
+}
+
+pub(super) fn gnome_set_args(
+    layout: &DisplayLayout,
+    current_layout: Option<&DisplayLayout>,
+) -> Result<Vec<String>, String> {
+    let stacked_secondary = secondary_stacked_below_primary(layout);
+
+    // gdctl resolves --below against monitors configured earlier on the command
+    // line, so the top panel goes first when the bottom one is placed relative to it.
+    let mut ordered: Vec<&DisplayInfo> = layout.displays.iter().collect();
+    if stacked_secondary.is_some() {
+        ordered.sort_by_key(|d| d.connector != PRIMARY_INTERNAL_CONNECTOR);
+    }
 
     // gdctl rejects negative logical monitor positions.
     // Normalize the layout so the smallest x/y becomes 0.
@@ -370,7 +414,7 @@ pub(super) fn apply_gnome_display_layout(layout: &DisplayLayout) -> Result<(), S
     let mut args: Vec<String> = vec!["set".into(), "--layout-mode".into(), "logical".into()];
     let mut primary_used = false;
 
-    for display in &layout.displays {
+    for display in ordered {
         if display.refresh_policy == RefreshPolicy::Dynamic {
             return Err(format!(
                 "Dynamic refresh is not supported for {} on GNOME",
@@ -389,11 +433,16 @@ pub(super) fn apply_gnome_display_layout(layout: &DisplayLayout) -> Result<(), S
         args.push("--monitor".into());
         args.push(display.connector.clone());
         args.push("--mode".into());
-        args.push(gnome_mode_arg(display, current_layout.as_ref()));
+        args.push(gnome_mode_arg(display, current_layout));
         args.push("--x".into());
         args.push((display.x + shift_x).to_string());
-        args.push("--y".into());
-        args.push((display.y + shift_y).to_string());
+        if stacked_secondary.is_some() && display.connector == SECONDARY_INTERNAL_CONNECTOR {
+            args.push("--below".into());
+            args.push(PRIMARY_INTERNAL_CONNECTOR.into());
+        } else {
+            args.push("--y".into());
+            args.push((display.y + shift_y).to_string());
+        }
         if let Some(t) = transform_arg(display.transform) {
             if t != "normal" {
                 args.push("--transform".into());
@@ -409,16 +458,7 @@ pub(super) fn apply_gnome_display_layout(layout: &DisplayLayout) -> Result<(), S
         }
     }
 
-    let output = compositor::command_output("gdctl", &args)?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "gdctl set failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    Ok(())
+    Ok(args)
 }
 
 fn gnome_scale() -> Result<f64, String> {
