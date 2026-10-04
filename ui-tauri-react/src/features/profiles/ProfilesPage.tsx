@@ -5,7 +5,7 @@ import {
   refreshProfiles,
 } from "@/lib/store";
 import { profilesApi } from "@/lib/tauri-adapters";
-import ProfileCard from "@/components/ProfileCard";
+import ProfileCard from "@/features/profiles/ProfileCard";
 import type { Profile } from "@/types/duo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

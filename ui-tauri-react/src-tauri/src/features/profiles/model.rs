@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{DisplayLayout, Orientation};
+use crate::models::{DisplayLayout, Orientation};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

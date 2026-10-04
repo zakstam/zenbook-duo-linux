@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod features;
 pub mod hardware;
 pub mod ipc;
 pub mod models;
@@ -74,10 +75,10 @@ pub fn run() {
             commands::theme::get_system_theme,
             commands::logs::read_log,
             commands::logs::clear_log,
-            commands::profiles::list_profiles,
-            commands::profiles::save_profile,
-            commands::profiles::delete_profile,
-            commands::profiles::activate_profile,
+            features::profiles::commands::list_profiles,
+            features::profiles::commands::save_profile,
+            features::profiles::commands::delete_profile,
+            features::profiles::commands::activate_profile,
             commands::events::get_recent_events,
             commands::diagnostics::diag_list_evdev,
             commands::diagnostics::diag_capture_evdev,
@@ -173,7 +174,7 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 }
                 "profile_docked" | "profile_tablet" | "profile_presentation" => {
                     let profile_id = id.strip_prefix("profile_").unwrap_or(id);
-                    let _ = commands::profiles::activate_profile(profile_id.to_string());
+                    let _ = features::profiles::commands::activate_profile(profile_id.to_string());
                 }
                 id if id.starts_with("bl_") => {
                     if let Ok(level) = id[3..].parse::<u8>() {

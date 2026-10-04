@@ -7,7 +7,7 @@ import Controls from "@/pages/Controls";
 import Settings from "@/pages/Settings";
 import Logs from "@/pages/Logs";
 import DisplayLayout from "@/pages/DisplayLayout";
-import Profiles from "@/pages/Profiles";
+import Profiles from "@/features/profiles/ProfilesPage";
 import EventMonitor from "@/pages/EventMonitor";
 import Diagnostics from "@/pages/Diagnostics";
 import Setup from "@/pages/Setup";

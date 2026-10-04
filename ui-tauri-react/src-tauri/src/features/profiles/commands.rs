@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use crate::hardware::display_layout;
 use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
-use crate::models::{Profile, ProfileList};
+use super::model::{Profile, ProfileList};
 use crate::runtime::client;
 
 fn profiles_path() -> PathBuf {
