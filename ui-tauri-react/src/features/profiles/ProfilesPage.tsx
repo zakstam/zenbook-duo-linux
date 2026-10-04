@@ -6,7 +6,7 @@ import {
 } from "@/lib/store";
 import { profilesApi } from "@/lib/tauri-adapters";
 import ProfileCard from "@/features/profiles/ProfileCard";
-import type { Profile } from "@/types/duo";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -26,22 +26,14 @@ export default function Profiles() {
     const name = newName.trim();
     if (!name) return;
 
-    const profile: Profile = {
-      id: name.toLowerCase().replace(/\s+/g, "-") + "-" + Date.now(),
-      name,
-      backlightLevel: store.status.backlightLevel,
-      scale: store.settings.defaultScale,
-      orientation: store.status.orientation,
-      dualScreenEnabled: store.status.monitorCount > 1,
-    };
-
     try {
-      await profilesApi.saveProfile(profile);
+      await profilesApi.saveCurrentProfile(name, store.status.backlightLevel);
       await refreshProfiles(dispatch);
       setNewName("");
       setShowCreate(false);
     } catch (err) {
       console.error("Failed to save profile:", err);
+      toast.error(`Could not save profile: ${err}`);
     }
   };
 

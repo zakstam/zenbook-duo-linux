@@ -77,6 +77,7 @@ pub fn run() {
             commands::logs::clear_log,
             features::profiles::commands::list_profiles,
             features::profiles::commands::save_profile,
+            features::profiles::commands::save_current_profile,
             features::profiles::commands::delete_profile,
             features::profiles::commands::activate_profile,
             commands::events::get_recent_events,

@@ -75,6 +75,8 @@ export const clearLog = () => invoke<void>("clear_log");
 export const listProfiles = () => invoke<Profile[]>("list_profiles");
 export const saveProfile = (profile: Profile) =>
   invoke<void>("save_profile", { profile });
+export const saveCurrentProfile = (name: string, backlightLevel: number) =>
+  invoke<Profile>("save_current_profile", { name, backlightLevel });
 export const deleteProfile = (id: string) =>
   invoke<void>("delete_profile", { id });
 export const activateProfile = (id: string) =>
@@ -168,6 +170,7 @@ export const logsApi = {
 export const profilesApi = {
   listProfiles,
   saveProfile,
+  saveCurrentProfile,
   deleteProfile,
   activateProfile,
 };

@@ -5,7 +5,7 @@ use crate::hardware::duo::{
 };
 use crate::models::{DisplayInfo, DisplayLayout, Orientation};
 
-use super::model::{orientation_transform, Profile};
+use super::model::{orientation_transform, transform_orientation, Profile};
 
 /// The layout a profile asks for, built on the screens as they are now.
 ///
@@ -65,6 +65,37 @@ pub fn profile_layout(profile: &Profile, current: &DisplayLayout) -> Result<Disp
     }
 
     Ok(DisplayLayout { displays })
+}
+
+/// A profile holding each built-in screen's scale and rotation as they are now.
+pub fn profile_from_layout(
+    id: String,
+    name: String,
+    backlight_level: u8,
+    current: &DisplayLayout,
+) -> Result<Profile, String> {
+    let find = |connector: &str| {
+        current
+            .displays
+            .iter()
+            .find(|display| display.connector == connector)
+    };
+    let bottom = find(SECONDARY_INTERNAL_CONNECTOR);
+    let top = find(PRIMARY_INTERNAL_CONNECTOR)
+        .or(bottom)
+        .ok_or_else(|| "No built-in screen is on, so there is nothing to save".to_string())?;
+    let bottom_values = bottom.unwrap_or(top);
+
+    Ok(Profile {
+        id,
+        name,
+        backlight_level,
+        scale: top.scale,
+        orientation: transform_orientation(top.transform),
+        dual_screen_enabled: bottom.is_some(),
+        bottom_scale: Some(bottom_values.scale),
+        bottom_orientation: Some(transform_orientation(bottom_values.transform)),
+    })
 }
 
 /// When both screens share a rotation other than normal they sit side by side,
@@ -206,6 +237,43 @@ mod tests {
             displays: vec![display("HDMI-A-1", 1.0, 0)],
         };
         assert!(profile_layout(&profile(true), &current).is_err());
+    }
+
+    #[test]
+    fn saving_the_current_state_records_each_screen() {
+        let current = DisplayLayout {
+            displays: vec![
+                display(PRIMARY_INTERNAL_CONNECTOR, 1.66, 180),
+                display(SECONDARY_INTERNAL_CONNECTOR, 1.25, 0),
+                display("HDMI-A-1", 1.0, 0),
+            ],
+        };
+
+        let saved = profile_from_layout("id".into(), "Saved".into(), 2, &current).expect("saved");
+
+        assert_eq!(saved.scale, 1.66);
+        assert_eq!(saved.orientation, Orientation::Inverted);
+        assert!(saved.dual_screen_enabled);
+        assert_eq!(saved.bottom_scale, Some(1.25));
+        assert_eq!(saved.bottom_orientation, Some(Orientation::Normal));
+        assert_eq!(saved.backlight_level, 2);
+
+        // Applying it back reproduces both screens.
+        let restored = profile_layout(&saved, &current).expect("restored");
+        assert_eq!(restored.displays[0].transform, 180);
+        assert_eq!(restored.displays[1].scale, 1.25);
+    }
+
+    #[test]
+    fn saving_with_the_bottom_screen_off_records_it_off() {
+        let current = DisplayLayout {
+            displays: vec![display(PRIMARY_INTERNAL_CONNECTOR, 1.5, 0)],
+        };
+
+        let saved = profile_from_layout("id".into(), "Saved".into(), 0, &current).expect("saved");
+
+        assert!(!saved.dual_screen_enabled);
+        assert_eq!(saved.scale, 1.5);
     }
 
     #[test]

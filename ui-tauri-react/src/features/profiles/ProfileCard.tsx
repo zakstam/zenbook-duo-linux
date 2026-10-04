@@ -4,6 +4,7 @@ import { profilesApi } from "@/lib/tauri-adapters";
 import { refreshProfiles, refreshStatus, useDispatch } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import {
   IconPlayerPlay,
   IconTrash,
@@ -28,6 +29,7 @@ export default function ProfileCard({ profile }: ProfileCardProps) {
       await refreshStatus(dispatch);
     } catch (err) {
       console.error("Failed to activate profile:", err);
+      toast.error(`Could not apply ${profile.name}: ${err}`);
     } finally {
       setActivating(false);
     }

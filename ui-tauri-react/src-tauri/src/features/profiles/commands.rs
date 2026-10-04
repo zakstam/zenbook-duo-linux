@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use super::layout::{profile_layout, shared_rotation};
+use super::layout::{profile_from_layout, profile_layout, shared_rotation};
 use super::model::{Profile, ProfileList};
 use crate::commands::display;
 use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
@@ -44,6 +44,34 @@ pub fn save_profile(profile: Profile) -> Result<(), String> {
         list.profiles.push(profile);
     }
     save_profile_list(&list)
+}
+
+/// Saves the screens as they are now (each screen's scale and rotation, and
+/// whether the bottom screen is on) as a new profile.
+#[tauri::command]
+pub fn save_current_profile(name: String, backlight_level: u8) -> Result<Profile, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Profile name is empty".into());
+    }
+    let current = display::get_display_layout()
+        .map_err(|message| format!("Read display layout failed: {message}"))?;
+    let profile = profile_from_layout(new_profile_id(&name), name, backlight_level, &current)?;
+    save_profile(profile.clone())?;
+    Ok(profile)
+}
+
+fn new_profile_id(name: &str) -> String {
+    let slug: String = name
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-");
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    format!("{slug}-{millis}")
 }
 
 #[tauri::command]
