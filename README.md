@@ -101,7 +101,8 @@ To remove the optional UI app:
 | Fn layer (top row) | ✅ | ✅ |
 
 Notes:
-- USB top row defaults to media keys; hold `Fn` for `F1`-`F12`.
+- USB (docked): the optional USB media remap turns the top row into media keys (F1-F3 volume, F4 backlight, F5/F6 brightness, F11 emojis). Holding `Fn` sends plain `F1`-`F12` only if the keyboard reports the Fn key over USB. The remap logs which case applies when it starts: look for `Fn key reported by` or `No keyboard node reports the Fn key` in `/run/user/$UID/zenbook-duo/duo.log`.
+- If Fn is not reported, use pause as an Fn-lock: bind `zenbook-duo-control --toggle-remap-pause` to a desktop shortcut (or use the Pause button in the app). While paused the top row sends plain `F1`-`F12`, and you get a notification on each toggle.
 - Do not install hwdb remaps for `KEYBOARD_KEY_7003*` on USB (it overrides the Fn layer).
 
 ### Requirements
