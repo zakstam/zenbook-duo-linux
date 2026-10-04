@@ -88,7 +88,10 @@ export interface Profile {
   scale: number;
   orientation: Orientation;
   dualScreenEnabled: boolean;
-  displayLayout: DisplayLayout | null;
+  /** Bottom screen scale; null means it follows the top screen. */
+  bottomScale?: number | null;
+  /** Bottom screen rotation; null means it follows the top screen. */
+  bottomOrientation?: Orientation | null;
 }
 
 export interface HardwareEvent {

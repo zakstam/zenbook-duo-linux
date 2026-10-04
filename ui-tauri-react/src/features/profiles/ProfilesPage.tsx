@@ -33,7 +33,6 @@ export default function Profiles() {
       scale: store.settings.defaultScale,
       orientation: store.status.orientation,
       dualScreenEnabled: store.status.monitorCount > 1,
-      displayLayout: null,
     };
 
     try {

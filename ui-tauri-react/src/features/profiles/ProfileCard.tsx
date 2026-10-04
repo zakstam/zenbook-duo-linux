@@ -58,14 +58,14 @@ export default function ProfileCard({ profile }: ProfileCardProps) {
 
       <div className="mb-4 grid grid-cols-2 gap-2">
         <ProfileDetail icon={IconSun} label="Backlight" value={`${profile.backlightLevel}/3`} />
-        <ProfileDetail icon={IconArrowsMaximize} label="Scale" value={`${profile.scale}x`} />
-        <ProfileDetail icon={IconRotate} label="Orientation" value={profile.orientation} capitalize />
         <ProfileDetail
           icon={IconScreenShare}
-          label="Dual Screen"
+          label="Bottom Screen"
           value={profile.dualScreenEnabled ? "On" : "Off"}
           highlight={profile.dualScreenEnabled}
         />
+        <ProfileDetail icon={IconArrowsMaximize} label="Scale" value={perScreen(profile, (s) => `${s.scale}x`)} />
+        <ProfileDetail icon={IconRotate} label="Rotation" value={perScreen(profile, (s) => s.orientation)} capitalize />
       </div>
 
       <Button
@@ -79,6 +79,24 @@ export default function ProfileCard({ profile }: ProfileCardProps) {
       </Button>
     </div>
   );
+}
+
+/** One value when both screens agree (or the bottom one is off), else "top / bottom". */
+function perScreen(
+  profile: Profile,
+  format: (screen: { scale: number; orientation: string }) => string,
+): string {
+  const top = format(profile);
+  if (!profile.dualScreenEnabled) return top;
+  const bottom = format(bottomScreen(profile));
+  return top === bottom ? top : `${top} / ${bottom}`;
+}
+
+function bottomScreen(profile: Profile) {
+  return {
+    scale: profile.bottomScale ?? profile.scale,
+    orientation: profile.bottomOrientation ?? profile.orientation,
+  };
 }
 
 function ProfileDetail({

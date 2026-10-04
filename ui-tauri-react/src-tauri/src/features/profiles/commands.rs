@@ -1,8 +1,9 @@
 use std::{fs, path::PathBuf};
 
-use crate::hardware::display_layout;
-use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
+use super::layout::{profile_layout, shared_rotation};
 use super::model::{Profile, ProfileList};
+use crate::commands::display;
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
 use crate::runtime::client;
 
 fn profiles_path() -> PathBuf {
@@ -17,7 +18,9 @@ fn load_profile_list() -> ProfileList {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(|| ProfileList {
-            profiles: Profile::default_profiles(),
+            profiles: Profile::default_profiles(
+                crate::commands::settings::load_settings_local().default_scale,
+            ),
         })
 }
 
@@ -83,22 +86,15 @@ pub fn activate_profile(id: String) -> Result<(), String> {
         || crate::commands::backlight::set_backlight_daemon_first(profile.backlight_level),
     )?;
 
-    daemon_response_result(
-        client::request(DaemonRequest::SetOrientation {
-            orientation: profile.orientation.clone(),
-        }),
-        "Set profile orientation",
-        || display_layout::set_orientation(&profile.orientation),
-    )?;
+    let current = display::get_display_layout()
+        .map_err(|message| format!("Read display layout failed: {message}"))?;
+    let layout = profile_layout(&profile, &current)?;
+    display::apply_display_layout(layout)
+        .map_err(|message| format!("Apply profile display layout failed: {message}"))?;
 
-    if let Some(ref layout) = profile.display_layout {
-        daemon_response_result(
-            client::request(DaemonRequest::ApplyDisplayLayout {
-                layout: layout.clone(),
-            }),
-            "Apply profile display layout",
-            || display_layout::apply_display_layout(layout),
-        )?;
+    if let Some(orientation) = shared_rotation(&profile) {
+        display::set_orientation(orientation)
+            .map_err(|message| format!("Set profile orientation failed: {message}"))?;
     }
 
     Ok(())
@@ -156,8 +152,48 @@ mod tests {
             scale: 1.5,
             orientation: Orientation::Normal,
             dual_screen_enabled: true,
-            display_layout: None,
+            bottom_scale: Some(1.25),
+            bottom_orientation: Some(Orientation::Inverted),
         }
+    }
+
+    #[test]
+    fn profiles_saved_before_per_screen_fields_still_load() {
+        let raw = r#"{"profiles":[{"id":"old","name":"Old","backlightLevel":2,
+            "scale":1.25,"orientation":"left","dualScreenEnabled":true,"displayLayout":null}]}"#;
+        let list: ProfileList = serde_json::from_str(raw).expect("old profiles parse");
+        let old = &list.profiles[0];
+        assert_eq!(old.effective_bottom_scale(), 1.25);
+        assert_eq!(old.effective_bottom_orientation(), Orientation::Left);
+    }
+
+    #[test]
+    fn default_profiles_use_the_setup_scale_and_persist_edits() {
+        let _guard = crate::commands::settings::test_env_lock()
+            .lock()
+            .expect("profiles env lock");
+        let _home = TestHome::new();
+        let mut settings = crate::models::DuoSettings::default();
+        settings.default_scale = 1.25;
+        crate::commands::settings::save_settings_local(settings).expect("save settings");
+
+        let docked = list_profiles()
+            .into_iter()
+            .find(|profile| profile.id == "docked")
+            .expect("docked default");
+        assert_eq!(docked.scale, 1.25);
+        assert!(!docked.dual_screen_enabled);
+
+        save_profile(Profile {
+            scale: 2.0,
+            ..docked
+        })
+        .expect("edit default");
+
+        let profiles = list_profiles();
+        assert_eq!(profiles.len(), 3);
+        let edited = profiles.iter().find(|p| p.id == "docked").expect("docked");
+        assert_eq!(edited.scale, 2.0);
     }
 
     #[test]
