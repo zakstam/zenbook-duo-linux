@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useUsbMediaRemap } from "@/hooks/use-usb-media-remap";
+import { displayScaleOptions, formatDisplayScale } from "@/shared/display-scales";
 import {
   Select,
   SelectContent,
@@ -157,11 +158,11 @@ export default function Settings() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="1">1.0x (100%)</SelectItem>
-                <SelectItem value="1.25">1.25x (125%)</SelectItem>
-                <SelectItem value="1.5">1.5x (150%)</SelectItem>
-                <SelectItem value="1.66">1.66x (166%)</SelectItem>
-                <SelectItem value="2">2.0x (200%)</SelectItem>
+                {displayScaleOptions(localSettings.defaultScale).map((scale) => (
+                  <SelectItem key={scale} value={String(scale)}>
+                    {formatDisplayScale(scale)} ({Math.round(scale * 100)}%)
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </SettingRow>

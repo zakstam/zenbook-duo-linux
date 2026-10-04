@@ -9,6 +9,7 @@ import {
 } from "@/lib/display-layout-controller";
 import { useTouchscreens } from "@/hooks/use-touchscreens";
 import { modesForResolution, refreshSelectValue } from "@/lib/display-layout";
+import { displayScaleOptions, formatDisplayScale } from "@/shared/display-scales";
 import type { DisplayLayout as LayoutType } from "@/types/duo";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -169,12 +170,11 @@ export default function DisplayLayout() {
                     <SelectValue placeholder="Scale" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="1">1.0x</SelectItem>
-                    <SelectItem value="1.25">1.25x</SelectItem>
-                    <SelectItem value="1.5">1.5x</SelectItem>
-                    <SelectItem value="1.75">1.75x</SelectItem>
-                    <SelectItem value="1.66">1.66x</SelectItem>
-                    <SelectItem value="2">2.0x</SelectItem>
+                    {displayScaleOptions(d.scale).map((scale) => (
+                      <SelectItem key={scale} value={String(scale)}>
+                        {formatDisplayScale(scale)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
 
