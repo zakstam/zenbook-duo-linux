@@ -4,6 +4,7 @@ use crate::hardware::duo::{
 };
 mod adapters;
 mod gnome;
+mod hyprland;
 mod kde;
 mod niri;
 

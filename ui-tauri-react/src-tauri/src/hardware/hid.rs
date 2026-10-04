@@ -4,6 +4,8 @@ use std::path::Path;
 
 use rusb::UsbContext;
 
+use crate::models::ConnectionType;
+
 /// USB HID SET_REPORT for keyboard backlight control using rusb.
 ///
 /// Protocol:
@@ -150,4 +152,131 @@ pub fn set_backlight(level: u8) -> Result<(), String> {
     Err(format!(
         "Failed to set keyboard backlight natively (usb: {usb_err}; bt: {bt_err})"
     ))
+}
+
+/// Apply a lifecycle backlight restore only when the detachable keyboard is present.
+/// A missing keyboard is a normal, recoverable dock state; failures remain visible
+/// when USB or Bluetooth detection says the keyboard is attached.
+pub fn set_backlight_if_keyboard_present(level: u8) -> Result<(), String> {
+    set_backlight_for_lifecycle(crate::hardware::sysfs::detect_connection_type, || {
+        set_backlight(level)
+    })
+}
+
+fn set_backlight_for_lifecycle<D, F>(mut detect: D, set: F) -> Result<(), String>
+where
+    D: FnMut() -> ConnectionType,
+    F: FnOnce() -> Result<(), String>,
+{
+    if detect() == ConnectionType::None {
+        log::warn!(
+            "keyboard backlight unavailable during lifecycle: detachable keyboard is absent"
+        );
+        return Ok(());
+    }
+
+    match set() {
+        Ok(()) => Ok(()),
+        Err(err) if detect() == ConnectionType::None => {
+            log::warn!(
+                "keyboard backlight became unavailable during lifecycle; continuing because the detachable keyboard is absent: {err}"
+            );
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn attached_usb_keyboard_applies_lifecycle_backlight() {
+        let called = Cell::new(false);
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::Usb,
+            || {
+                called.set(true);
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert!(called.get());
+    }
+
+    #[test]
+    fn attached_bluetooth_keyboard_applies_lifecycle_backlight() {
+        let called = Cell::new(false);
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::Bluetooth,
+            || {
+                called.set(true);
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert!(called.get());
+    }
+
+    #[test]
+    fn entirely_absent_keyboard_is_recoverable() {
+        let called = Cell::new(false);
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::None,
+            || {
+                called.set(true);
+                Err("keyboard missing".into())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn keyboard_disappearing_during_suspend_is_recoverable() {
+        let detections = Cell::new(0);
+        let result = set_backlight_for_lifecycle(
+            || {
+                let count = detections.get();
+                detections.set(count + 1);
+                if count == 0 {
+                    ConnectionType::Usb
+                } else {
+                    ConnectionType::None
+                }
+            },
+            || Err("USB device disappeared".into()),
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(detections.get(), 2);
+    }
+
+    #[test]
+    fn unavailable_backlight_is_recoverable_when_keyboard_is_absent() {
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::None,
+            || Err("backlight unavailable".into()),
+        );
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn unrelated_fatal_lifecycle_error_is_not_suppressed() {
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::Usb,
+            || Err("permission denied while writing attached keyboard".into()),
+        );
+
+        assert_eq!(
+            result,
+            Err("permission denied while writing attached keyboard".into())
+        );
+    }
 }

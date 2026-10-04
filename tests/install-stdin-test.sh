@@ -44,7 +44,7 @@ chmod +x "${fake_bin}/git"
 checkout_output="$(bash --noprofile --norc -c '
   set -euo pipefail
   export PATH="'"${fake_bin}"':/usr/bin:/bin"
-  source <(sed -n "1,128p" "'"${ROOT_DIR}"'/install.sh")
+  source <(sed -n "1,132p" "'"${ROOT_DIR}"'/install.sh")
   SCRIPT_DIR="'"${temp_root}"'/missing-checkout"
   ensure_repo_checkout
 ' 2>/dev/null)" || {
@@ -64,17 +64,18 @@ fi
 
 desktop_output="$(bash --noprofile --norc -c '
   set -euo pipefail
-  source <(sed -n "1,128p" "'"${ROOT_DIR}"'/install.sh")
+  source <(sed -n "1,132p" "'"${ROOT_DIR}"'/install.sh")
   XDG_CURRENT_DESKTOP=GNOME DESKTOP_SESSION= XDG_SESSION_DESKTOP= pick_desktop
   XDG_CURRENT_DESKTOP="KDE Plasma" DESKTOP_SESSION= XDG_SESSION_DESKTOP= pick_desktop
   XDG_CURRENT_DESKTOP= DESKTOP_SESSION= XDG_SESSION_DESKTOP=niri pick_desktop
+  XDG_CURRENT_DESKTOP=Hyprland DESKTOP_SESSION= XDG_SESSION_DESKTOP= pick_desktop
 ' 2>/dev/null)" || {
   echo "FAIL: pick_desktop should detect all supported desktops" >&2
   exit 1
 }
 
-if [[ "${desktop_output}" != $'gnome\nkde\nniri' ]]; then
-  echo "FAIL: pick_desktop should map GNOME, KDE, and Niri consistently" >&2
+if [[ "${desktop_output}" != $'gnome\nkde\nniri\nhyprland' ]]; then
+  echo "FAIL: pick_desktop should map GNOME, KDE, Niri, and Hyprland consistently" >&2
   exit 1
 fi
 
@@ -147,7 +148,7 @@ if ! grep -q 'RestartSec=2' "${ROOT_DIR}/install-rust-runtime.sh"; then
   exit 1
 fi
 
-if ! grep -q 'import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE' "${ROOT_DIR}/install-rust-runtime.sh"; then
+if ! grep -q 'import-environment DISPLAY WAYLAND_DISPLAY NIRI_SOCKET HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_SESSION_TYPE' "${ROOT_DIR}/install-rust-runtime.sh"; then
   echo "FAIL: installer should import graphical session environment for the user manager" >&2
   exit 1
 fi
@@ -210,7 +211,8 @@ for binary_hook in \
   'src/bin/usb-media-remap.rs:print_and_exit_if_requested("usb-media-remap")'; do
   binary_path="${binary_hook%%:*}"
   hook="${binary_hook#*:}"
-  if ! grep -Fq "${hook}" "${ROOT_DIR}/ui-tauri-react/src-tauri/${binary_path}"; then
+  compact_binary="$(tr -d '[:space:]' < "${ROOT_DIR}/ui-tauri-react/src-tauri/${binary_path}" | sed 's/,);/);/g')"
+  if [[ "${compact_binary}" != *"${hook}"* ]]; then
     echo "FAIL: runtime binary ${binary_path} should support --version" >&2
     exit 1
   fi
@@ -336,7 +338,7 @@ if ! grep -q 'startOnBootMinimized: false,' "${ROOT_DIR}/ui-tauri-react/src/lib/
   exit 1
 fi
 
-for setup_script in setup-gnome.sh setup-kde.sh setup-niri.sh; do
+for setup_script in setup-gnome.sh setup-kde.sh setup-niri.sh setup-hyprland.sh; do
   expected_name="${setup_script}"
   if ! grep -q "SETUP_SCRIPT_NAME=\"${expected_name}\"" "${ROOT_DIR}/${setup_script}"; then
     echo "FAIL: ${setup_script} should declare its setup script name for shared errors" >&2

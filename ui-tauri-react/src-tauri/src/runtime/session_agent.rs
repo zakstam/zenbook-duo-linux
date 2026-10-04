@@ -189,6 +189,11 @@ fn backend_is_ready(probe: &session::BackendProbe) -> bool {
     if probe.requires_gui_session && !gui_session_env_ready() {
         return false;
     }
+    if probe.backend == SessionBackend::Hyprland
+        && env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()
+    {
+        return false;
+    }
 
     match probe.readiness_runner {
         session::BackendCommandRunner::Compositor => {
@@ -267,6 +272,7 @@ pub(crate) fn apply_dock_mode(
         match detect_ready_backend() {
             SessionBackend::Gnome => apply_gnome_dock_mode(attached, scale),
             SessionBackend::Kde => apply_kde_dock_mode(attached),
+            SessionBackend::Hyprland => Err("Hyprland dock fallback requires a monitor layout".into()),
             SessionBackend::Niri => apply_niri_dock_mode(attached),
             SessionBackend::Unknown => Err("Unsupported session backend for dock mode".into()),
         }?;
@@ -843,6 +849,7 @@ mod tests {
             seen,
             vec![
                 SessionBackend::Kde,
+                SessionBackend::Hyprland,
                 SessionBackend::Niri,
                 SessionBackend::Gnome,
             ]

@@ -138,6 +138,7 @@ pub enum DaemonEvent {
 pub enum SessionBackend {
     Gnome,
     Kde,
+    Hyprland,
     Niri,
     Unknown,
 }

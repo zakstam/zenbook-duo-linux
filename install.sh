@@ -24,7 +24,7 @@ Examples:
   ./install.sh -- --no-usb-media-remap
   sudo -E ./install.sh
 
-This script auto-detects GNOME, KDE Plasma, or Niri, runs the matching setup
+This script auto-detects GNOME, KDE Plasma, Hyprland, or Niri, runs the matching setup
 script, then installs the Zenbook Duo Control UI unless --skip-ui is passed.
 EOF
 }
@@ -91,6 +91,9 @@ pick_desktop() {
     if contains_token "${value}" "niri"; then
       detected+=("niri")
     fi
+    if contains_token "${value}" "hyprland" || contains_token "${value}" "hypr"; then
+      detected+=("hyprland")
+    fi
   done
 
   local unique=()
@@ -124,6 +127,7 @@ pick_desktop() {
   echo "  ./setup-gnome.sh" >&2
   echo "  ./setup-kde.sh" >&2
   echo "  ./setup-niri.sh" >&2
+  echo "  ./setup-hyprland.sh" >&2
   return 1
 }
 
@@ -174,6 +178,9 @@ case "${desktop}" in
     ;;
   niri)
     setup_script="${repo_dir}/setup-niri.sh"
+    ;;
+  hyprland)
+    setup_script="${repo_dir}/setup-hyprland.sh"
     ;;
   *)
     echo "ERROR: Unsupported desktop target: ${desktop}" >&2

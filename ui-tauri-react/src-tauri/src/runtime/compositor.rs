@@ -55,6 +55,25 @@ pub fn niri_outputs_json() -> Result<Value, String> {
     serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid niri JSON: {e}"))
 }
 
+pub fn hyprland_monitors_json() -> Result<Value, String> {
+    let output = command_output("hyprctl", &["monitors", "-j"])?;
+    if !output.status.success() {
+        return Err(stderr_trimmed(&output));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let start = raw
+        .find(['[', '{'])
+        .ok_or_else(|| "Invalid hyprctl JSON: missing JSON payload".to_string())?;
+    serde_json::from_str(&raw[start..]).map_err(|e| format!("Invalid hyprctl JSON: {e}"))
+}
+
+pub fn hyprland_outputs_from_value(value: &Value) -> Result<Vec<Value>, String> {
+    value
+        .as_array()
+        .cloned()
+        .ok_or_else(|| "Unexpected Hyprland monitors shape".into())
+}
+
 pub fn kde_outputs_from_value(value: &Value) -> Result<Vec<Value>, String> {
     value
         .get("outputs")

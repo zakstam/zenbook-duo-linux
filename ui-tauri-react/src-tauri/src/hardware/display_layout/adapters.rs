@@ -14,6 +14,7 @@ pub(super) trait CompositorDisplayAdapter {
 
 struct GnomeAdapter;
 struct KdeAdapter;
+struct HyprlandAdapter;
 struct NiriAdapter;
 
 impl CompositorDisplayAdapter for GnomeAdapter {
@@ -58,6 +59,18 @@ impl CompositorDisplayAdapter for NiriAdapter {
     }
 }
 
+impl CompositorDisplayAdapter for HyprlandAdapter {
+    fn layout(&self) -> Result<DisplayLayout, String> {
+        super::hyprland::get_hyprland_display_layout()
+    }
+    fn apply_layout(&self, layout: &DisplayLayout) -> Result<(), String> {
+        super::hyprland::apply_hyprland_display_layout(layout)
+    }
+    fn set_orientation(&self, orientation: &Orientation) -> Result<(), String> {
+        super::hyprland::set_hyprland_orientation(orientation)
+    }
+}
+
 pub(super) fn with_display_adapter<T>(
     backend: SessionBackend,
     f: impl FnOnce(&dyn CompositorDisplayAdapter) -> Result<T, String>,
@@ -66,6 +79,7 @@ pub(super) fn with_display_adapter<T>(
         SessionBackend::Gnome => f(&GnomeAdapter),
         SessionBackend::Kde => f(&KdeAdapter),
         SessionBackend::Niri => f(&NiriAdapter),
+        SessionBackend::Hyprland => f(&HyprlandAdapter),
         SessionBackend::Unknown => Err("Unsupported session backend for display layout".into()),
     }
 }

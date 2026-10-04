@@ -50,10 +50,10 @@ fn parse_phase(raw: &str) -> Result<LifecyclePhase, String> {
 fn fallback_lifecycle(phase: &LifecyclePhase) -> Result<(), String> {
     match phase {
         LifecyclePhase::Pre | LifecyclePhase::Hibernate | LifecyclePhase::Shutdown => {
-            hid::set_backlight(0)
+            hid::set_backlight_if_keyboard_present(0)
         }
         LifecyclePhase::Post | LifecyclePhase::Thaw | LifecyclePhase::Boot => {
-            hid::set_backlight(sysfs::read_backlight_level())
+            hid::set_backlight_if_keyboard_present(sysfs::read_backlight_level())
         }
     }
 }
