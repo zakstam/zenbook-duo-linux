@@ -5,8 +5,10 @@ import { refreshProfiles, refreshStatus, useDispatch } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import ProfileEditor from "@/features/profiles/ProfileEditor";
 import {
   IconPlayerPlay,
+  IconPencil,
   IconTrash,
   IconSun,
   IconArrowsMaximize,
@@ -21,6 +23,7 @@ interface ProfileCardProps {
 export default function ProfileCard({ profile }: ProfileCardProps) {
   const dispatch = useDispatch();
   const [activating, setActivating] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   const handleActivate = async () => {
     setActivating(true);
@@ -48,15 +51,28 @@ export default function ProfileCard({ profile }: ProfileCardProps) {
     <div className="glass-card group rounded-xl p-5 transition-shadow hover:shadow-md hover:shadow-black/5">
       <div className="mb-4 flex items-start justify-between">
         <h4 className="text-[14px] font-semibold tracking-tight">{profile.name}</h4>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleDelete}
-          className="size-7 p-0 text-muted-foreground/50 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
-        >
-          <IconTrash className="size-3.5" stroke={1.5} />
-        </Button>
+        <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setEditing(true)}
+            aria-label={`Edit ${profile.name}`}
+            className="size-7 p-0 text-muted-foreground/60 hover:text-foreground"
+          >
+            <IconPencil className="size-3.5" stroke={1.5} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDelete}
+            aria-label={`Delete ${profile.name}`}
+            className="size-7 p-0 text-muted-foreground/50 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+          >
+            <IconTrash className="size-3.5" stroke={1.5} />
+          </Button>
+        </div>
       </div>
+      <ProfileEditor profile={profile} open={editing} onOpenChange={setEditing} />
 
       <div className="mb-4 grid grid-cols-2 gap-2">
         <ProfileDetail icon={IconSun} label="Backlight" value={`${profile.backlightLevel}/3`} />
