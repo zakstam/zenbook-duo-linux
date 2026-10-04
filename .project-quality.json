@@ -1,0 +1,82 @@
+{
+  "layers": {
+    "layers": {
+      "backend": [
+        "ui-tauri-react/src-tauri/src/**"
+      ],
+      "frontend": [
+        "ui-tauri-react/src/**"
+      ],
+      "install-scripts": [
+        "*.sh",
+        "tests/**"
+      ]
+    },
+    "rules": [
+      {
+        "allow": [
+          "backend"
+        ],
+        "from": "backend"
+      },
+      {
+        "allow": [
+          "frontend"
+        ],
+        "from": "frontend"
+      },
+      {
+        "allow": [
+          "install-scripts"
+        ],
+        "from": "install-scripts"
+      }
+    ]
+  },
+  "structure": {
+    "slices": [
+      {
+        "layer": "backend",
+        "glob": "ui-tauri-react/src-tauri/src/features/*"
+      },
+      {
+        "layer": "frontend",
+        "glob": "ui-tauri-react/src/features/*"
+      }
+    ],
+    "sharedHomes": [
+      "ui-tauri-react/src/components/ui/**",
+      "ui-tauri-react/src/shared/**",
+      "ui-tauri-react/src-tauri/src/platform/**"
+    ],
+    "legacyZones": [
+      "ui-tauri-react/src-tauri/src/commands/**",
+      "ui-tauri-react/src-tauri/src/hardware/**",
+      "ui-tauri-react/src-tauri/src/runtime/**",
+      "ui-tauri-react/src-tauri/src/models/**",
+      "ui-tauri-react/src-tauri/src/ipc/**",
+      "ui-tauri-react/src-tauri/src/watchers/**",
+      "ui-tauri-react/src-tauri/src/usb_media_remap_helper.rs",
+      "ui-tauri-react/src/pages/**",
+      "ui-tauri-react/src/components/*.tsx",
+      "ui-tauri-react/src/lib/**",
+      "ui-tauri-react/src/hooks/**",
+      "ui-tauri-react/src/types/**"
+    ],
+    "registries": [
+      "ui-tauri-react/src/App.tsx",
+      "ui-tauri-react/src/pages/Controls.tsx",
+      "ui-tauri-react/src-tauri/src/lib.rs"
+    ],
+    "bannedFolders": [
+      "utils",
+      "helpers",
+      "misc"
+    ],
+    "scriptDirectories": [
+      "ui-tauri-react/src-tauri/src/bin",
+      "ui-tauri-react/scripts",
+      "tests"
+    ]
+  }
+}
