@@ -5,6 +5,7 @@ use nix::fcntl::{fcntl, FcntlArg, Flock, FlockArg, OFlag};
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use signal_hook::flag;
+use std::collections::HashSet;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -101,28 +102,84 @@ where
 
     let pause_file = base_dir.join("usb_media_remap.paused");
 
+    // Fn may be reported on the grabbed node or on a sibling node of the same
+    // keyboard. Siblings are only read, never grabbed, so the desktop keeps them.
+    let grabbed_reports_fn = reports_fn(&device);
+    let mut fn_watchers = open_fn_watchers(&device_path);
+    if grabbed_reports_fn || !fn_watchers.is_empty() {
+        let mut nodes: Vec<String> = fn_watchers
+            .iter()
+            .map(|(path, _)| path.display().to_string())
+            .collect();
+        if grabbed_reports_fn {
+            nodes.insert(0, device_path.display().to_string());
+        }
+        log_info(&format!(
+            "Fn key reported by {}; F-keys pressed with Fn held pass through unmapped",
+            nodes.join(", ")
+        ));
+    } else {
+        log_info(
+            "No keyboard node reports the Fn key; Fn+F-keys cannot be told apart from F-keys. \
+             Pause the remap (zenbook-duo-control --toggle-remap-pause) to use F1-F12.",
+        );
+    }
+    let mut fn_state = FnPassthrough::default();
+
     while !terminate.load(Ordering::Relaxed) {
-        let events = match device.fetch_events() {
-            Ok(events) => events,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(50));
-                continue;
+        let mut idle = true;
+        fn_watchers.retain_mut(|(path, watcher)| match watcher.fetch_events() {
+            Ok(events) => {
+                for event in events {
+                    idle = false;
+                    if is_fn_event(&event) {
+                        fn_state.observe_fn(event.value());
+                    }
+                }
+                true
             }
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::Interrupted =>
+            {
+                true
+            }
+            Err(e) => {
+                log_info(&format!("Stopped watching {} for Fn: {e}", path.display()));
+                fn_state.observe_fn(0);
+                false
+            }
+        });
+
+        let events: Vec<InputEvent> = match device.fetch_events() {
+            Ok(events) => events.collect(),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Vec::new(),
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(format!("Failed to read events: {e}")),
         };
+        if events.is_empty() {
+            if idle {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            continue;
+        }
         let paused = pause_file.exists();
         for event in events {
             if terminate.load(Ordering::Relaxed) {
                 break;
             }
-            if paused {
-                // Pass through all KEY events without remapping.
-                if event.event_type() == EventType::KEY {
-                    emit_key(&mut uinput, Key::new(event.code()), event.value())?;
-                }
-            } else {
-                handle_event(&mut uinput, &args, event)?;
+            if event.event_type() != EventType::KEY {
+                continue;
+            }
+            let key = Key::new(event.code());
+            if is_fn_event(&event) {
+                fn_state.observe_fn(event.value());
+                emit_key(&mut uinput, key, event.value())?;
+                continue;
+            }
+            match fn_state.route(key, event.value(), paused) {
+                Route::Raw => emit_key(&mut uinput, key, event.value())?,
+                Route::Remap => handle_event(&mut uinput, &args, event)?,
             }
         }
     }
@@ -241,6 +298,90 @@ fn handle_event(
     };
 
     emit_key(uinput, mapped, value)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    /// Send the key exactly as the keyboard reported it.
+    Raw,
+    /// Apply the media remap.
+    Remap,
+}
+
+/// Decides per key press whether the remap applies. A key pressed while Fn is
+/// held (or while the remap is paused) stays raw until it is released, even if
+/// Fn or the pause ends first, so press and release always match.
+#[derive(Debug, Default)]
+struct FnPassthrough {
+    fn_held: bool,
+    raw_keys: HashSet<u16>,
+}
+
+impl FnPassthrough {
+    fn observe_fn(&mut self, value: i32) {
+        self.fn_held = value != 0;
+    }
+
+    fn route(&mut self, key: Key, value: i32, paused: bool) -> Route {
+        let code = key.code();
+        let raw = match value {
+            1 => {
+                if self.fn_held || paused {
+                    self.raw_keys.insert(code);
+                    true
+                } else {
+                    self.raw_keys.remove(&code);
+                    false
+                }
+            }
+            0 => self.raw_keys.remove(&code),
+            _ => self.raw_keys.contains(&code),
+        };
+        if raw {
+            Route::Raw
+        } else {
+            Route::Remap
+        }
+    }
+}
+
+fn is_fn_event(event: &InputEvent) -> bool {
+    event.event_type() == EventType::KEY && Key::new(event.code()) == Key::KEY_FN
+}
+
+fn reports_fn(device: &Device) -> bool {
+    device
+        .supported_keys()
+        .map(|keys| keys.contains(Key::KEY_FN))
+        .unwrap_or(false)
+}
+
+/// Opens the keyboard's other event nodes that can report Fn, without grabbing them.
+fn open_fn_watchers(grabbed: &Path) -> Vec<(PathBuf, Device)> {
+    let grabbed = fs::canonicalize(grabbed).unwrap_or_else(|_| grabbed.to_path_buf());
+    let Ok(entries) = fs::read_dir("/dev/input/by-id") else {
+        return Vec::new();
+    };
+    let mut seen = HashSet::new();
+    let mut watchers = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.contains("Zenbook_Duo_Keyboard") || !name.contains("event") {
+            continue;
+        }
+        let path = entry.path();
+        let real = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if real == grabbed || !seen.insert(real) {
+            continue;
+        }
+        let Ok(watcher) = Device::open(&path) else {
+            continue;
+        };
+        if reports_fn(&watcher) && configure_nonblocking(&watcher).is_ok() {
+            watchers.push((path, watcher));
+        }
+    }
+    watchers
 }
 
 fn brightness_key_mapping(key: Key) -> Option<(Key, &'static str)> {
@@ -573,6 +714,43 @@ mod tests {
             Some((Key::KEY_BRIGHTNESSUP, "up"))
         );
         assert_eq!(brightness_key_mapping(Key::KEY_F4), None);
+    }
+
+    #[test]
+    fn keys_pressed_without_fn_are_remapped() {
+        let mut fn_state = FnPassthrough::default();
+        assert_eq!(fn_state.route(Key::KEY_F2, 1, false), Route::Remap);
+        assert_eq!(fn_state.route(Key::KEY_F2, 2, false), Route::Remap);
+        assert_eq!(fn_state.route(Key::KEY_F2, 0, false), Route::Remap);
+    }
+
+    #[test]
+    fn keys_pressed_with_fn_pass_through_until_released() {
+        let mut fn_state = FnPassthrough::default();
+        fn_state.observe_fn(1);
+        assert_eq!(fn_state.route(Key::KEY_F2, 1, false), Route::Raw);
+        // Fn released before F2: F2 still releases as the raw key.
+        fn_state.observe_fn(0);
+        assert_eq!(fn_state.route(Key::KEY_F2, 2, false), Route::Raw);
+        assert_eq!(fn_state.route(Key::KEY_F2, 0, false), Route::Raw);
+        // Next plain press is remapped again.
+        assert_eq!(fn_state.route(Key::KEY_F2, 1, false), Route::Remap);
+    }
+
+    #[test]
+    fn key_held_before_fn_keeps_its_remap_on_release() {
+        let mut fn_state = FnPassthrough::default();
+        assert_eq!(fn_state.route(Key::KEY_F3, 1, false), Route::Remap);
+        fn_state.observe_fn(1);
+        assert_eq!(fn_state.route(Key::KEY_F3, 0, false), Route::Remap);
+    }
+
+    #[test]
+    fn pause_passes_presses_through_and_keeps_releases_matched() {
+        let mut fn_state = FnPassthrough::default();
+        assert_eq!(fn_state.route(Key::KEY_F1, 1, true), Route::Raw);
+        // Unpaused before release: release still matches the raw press.
+        assert_eq!(fn_state.route(Key::KEY_F1, 0, false), Route::Raw);
     }
 
     #[test]
