@@ -14,3 +14,7 @@ invariants:
 ---
 
 Saves named hardware states (keyboard backlight; top screen scale and rotation; bottom screen on/off, scale and rotation) and applies one with a click from the Profiles page or the tray menu. Save Current captures the screens as they are; any profile, including the built-in Docked, Tablet and Presentation, can be edited.
+
+## Journeys
+
+- Activating Docked switches the bottom screen off at the profile's scale, Tablet switches it back on, Presentation flips the top screen, and an edited profile, even a built-in one, keeps its changes after a restart. (card ec32a902-bdb3-44be-b22f-eb501473e1a5, 2026-10-04)
