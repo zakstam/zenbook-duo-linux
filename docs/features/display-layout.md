@@ -18,3 +18,4 @@ Arranges the two internal screens and any external monitor: the Display Layout p
 ## Journeys
 
 - On GNOME at 1.66x scale, removing the keyboard turns the bottom screen on below the top one instead of showing a 'Logical monitors are not adjacent' error. (card ae019f84-475d-448b-8b67-a9c324046b87, 2026-10-04)
+- Each display's scale dropdown lists scales in ascending order, includes 1.75, and shows the display's current scale even when it is not a preset. (card 9d6f1731-d4f1-4114-a4b2-12f24323f3ef, 2026-10-05)

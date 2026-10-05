@@ -12,3 +12,7 @@ invariants:
 ---
 
 Holds the user's preferences and the Settings page that edits them: default backlight and scale, automatic dual-screen, brightness sync, inverted sensor rotation, USB media remap, start minimized on boot, disabled touchscreens, the saved display layout and the theme preference (the theme itself is applied by the app shell).
+
+## Journeys
+
+- A user whose installer saved a scale of 1.75 opens Settings and sees 1.75 selected in Default Display Scale instead of an empty box. (card 9d6f1731-d4f1-4114-a4b2-12f24323f3ef, 2026-10-05)
