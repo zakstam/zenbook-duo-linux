@@ -688,7 +688,7 @@ fn queue_lid_display_retry(state: Arc<RwLock<RuntimeState>>, lid_closed: bool) {
     });
 }
 
-fn queue_lifecycle_display_retry(state: Arc<RwLock<RuntimeState>>) {
+pub(crate) fn queue_lifecycle_display_retry(state: Arc<RwLock<RuntimeState>>) {
     tokio::spawn(async move {
         const RETRY_ATTEMPTS: usize = 6;
         const RETRY_DELAY: Duration = Duration::from_secs(1);

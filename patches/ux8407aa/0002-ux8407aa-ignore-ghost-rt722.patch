@@ -1,0 +1,16 @@
+--- a/drivers/soundwire/dmi-quirks.c
++++ b/drivers/soundwire/dmi-quirks.c
+@@ -148,6 +148,13 @@ static const struct dmi_system_id adr_remap_quirk_table[] = {
+ 		},
+ 		.driver_data = (void *)ghost_realtek,
+ 	},
++	{
++		.matches = {
++			DMI_MATCH(DMI_SYS_VENDOR, "ASUS"),
++			DMI_MATCH(DMI_BOARD_NAME, "UX8407AA"),
++		},
++		.driver_data = (void *)ghost_realtek,
++	},
+ 	{
+ 		.matches = {
+ 			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),

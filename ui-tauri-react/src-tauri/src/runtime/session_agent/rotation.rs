@@ -218,11 +218,15 @@ pub(super) fn display_orientation_from_sensor_value(
 fn runtime_log_info(message: impl AsRef<str>) {
     let text = message.as_ref();
     let _ = crate::runtime::logger::append_line(format!("session-agent: {text}"));
+    // The daemon log file is often not writable from the user session, so also
+    // emit to stderr where the systemd user journal captures it.
+    eprintln!("session-agent: {text}");
     log::info!("{text}");
 }
 
 fn runtime_log_warn(message: impl AsRef<str>) {
     let text = message.as_ref();
     let _ = crate::runtime::logger::append_line(format!("session-agent: {text}"));
+    eprintln!("session-agent: {text}");
     log::warn!("{text}");
 }

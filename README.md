@@ -107,7 +107,7 @@ Notes:
 
 ### Requirements
 
-- ASUS Zenbook Duo (USB vendor `0B05`, product `1B2C`)
+- ASUS Zenbook Duo (USB vendor `0B05`, product `1B2C`; the 2026 UX8407AA uses product `1CD7` and needs extra setup — see [Zenbook Duo 2026 (UX8407AA)](#asus-zenbook-duo-2026-ux8407aa))
 - Linux with GNOME on Wayland, KDE Plasma on Wayland, or Niri (tested with Fedora)
 - `systemd` for service management
 - GNOME: `gdctl` (part of `mutter`) for display configuration
@@ -227,6 +227,55 @@ cd ui-tauri-react
 npm install
 npm run dev
 ```
+
+## ASUS Zenbook Duo 2026 (UX8407AA)
+
+The 2026 model (Intel Core Ultra "Panther Lake", Intel Arc iGPU on the `xe` driver, keyboard USB ID `0b05:1cd7`) works with this project, but the stock kernel and firmware have several bugs that must be fixed first. Verified on CachyOS + KDE Plasma on Wayland with a patched 7.2-rc5 kernel. The kernel patches come from [zenbook-duo26-Ubuntu26.04](https://github.com/therealarnold666/zenbook-duo26-Ubuntu26.04) (an Ubuntu-targeted derivative of this project) — use its patches, but do not run its installer on non-Ubuntu distros; run this project's installer instead.
+
+This project detects the UX8407AA via DMI (`/sys/class/dmi/id/board_name`) and automatically compensates for its upside-down top panel in the KDE display backend, so no code changes are needed — only the system-level steps below.
+
+### 1. Kernel patches — keyboard-detach freeze and audio
+
+- **Detach freeze / bottom screen never re-enables**: the Port B C20 TCSS PHY loses its power ack when eDP-2 is toggled. Fix: DMI-gated patch `0001` (i915/xe shared display code) from the repo above.
+- **No audio** (`aplay -l` shows no cards): a ghost RT722 SoundWire device makes `sof_sdw` probing fail with `-EEXIST` (duplicate `SDW3-Playback-SimpleJack`). Fix: patch `0002` (adds UX8407AA to the SoundWire DMI ghost-device quirk table).
+
+Both apply cleanly to kernel 7.2-rc5. On Arch-based distros, append the patch files to your kernel PKGBUILD's `source` array (with `SKIP` checksums) and rebuild; then pin the patched kernel (e.g. `IgnorePkg` in `/etc/pacman.conf`) so an update does not replace it before the fixes land upstream.
+
+### 2. Kernel command line
+
+Add to your bootloader's kernel command line:
+
+```
+video=eDP-1:panel_orientation=upside_down xe.enable_psr=0 xe.enable_psr2_sel_fetch=0 xe.enable_panel_replay=0 xe.enable_dpcd_backlight=3
+```
+
+- `video=eDP-1:panel_orientation=upside_down` — the top panel is physically mounted 180° and there is no upstream DRM quirk yet; this fixes the console/LUKS-prompt orientation.
+- `xe.enable_psr=0 xe.enable_psr2_sel_fetch=0 xe.enable_panel_replay=0` — avoids PSR/panel-replay flicker and hangs on Panther Lake.
+- `xe.enable_dpcd_backlight=3` — enables brightness control (the default backlight path does not work on this panel).
+- Do **not** add `xe.enable_dsb=0` on the patched kernel: it forces a slow CPU display path and causes multi-blink flicker on wake from screen-off. It was only ever an interim mitigation for the detach freeze that patch `0001` fixes properly.
+
+### 3. Auto-rotation — ASUS ISH firmware
+
+The accelerometer sits behind the Intel ISH, and the mainline `ish_ptl.bin` firmware fails to load on this machine (`ISH loader: cmd 2 failed` in dmesg, no IIO devices). Fix: extract the ASUS-signed ISH firmware from ASUS's Windows "Intel Integrated Sensor Solution Driver" package and install it (compressed) as `/usr/lib/firmware/intel/ish/ish_ptl.bin.zst`, keeping a backup of the mainline blob. After a reboot, `accel_3d` appears under `/sys/bus/iio/devices/` and `iio-sensor-proxy` works.
+
+Note: linux-firmware package updates will restore the broken mainline blob — re-apply the ASUS blob after firmware updates (a pacman/apt post-transaction hook that compares and restores it automates this).
+
+### 4. Rotation settings (KDE)
+
+- Only the top panel (eDP-1) is mounted upside down; the app applies the per-panel 180° offset automatically on UX8407AA.
+- Set `"invertSensorRotation": true` in `~/.config/zenbook-duo/settings.json` (or toggle it in the Control Panel UI).
+- Set Screen Rotation to **Manual** for both screens in KDE System Settings → Display & Monitor. Otherwise KWin's own tablet-mode auto-rotate (which does not know about the flipped panel) fights this app whenever the keyboard is detached.
+- In the KDE session, eDP-1 showing as "Rotated 180°" in display settings is the correct resting state — KWin ignores the kernel `panel_orientation` quirk, so do not manually reset it to normal.
+
+### 5. Login screen orientation
+
+The greeter runs its own KWin instance, which also ignores the panel-orientation quirk, so the login screen appears upside down. Fix: once your session displays correctly, copy your display config into the greeter's home:
+
+```bash
+sudo install -Dm644 -o sddm -g sddm ~/.config/kwinoutputconfig.json /var/lib/sddm/.config/kwinoutputconfig.json
+```
+
+On installs using `plasmalogin` instead of SDDM (some CachyOS setups), use `/var/lib/plasmalogin/.config/kwinoutputconfig.json` owned by `plasmalogin:plasmalogin`.
 
 ## Fedora: “Nobara-like” setup helper
 

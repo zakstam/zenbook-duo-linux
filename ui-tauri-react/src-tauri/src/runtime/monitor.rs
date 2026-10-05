@@ -276,17 +276,25 @@ async fn apply_policy_actions(state: Arc<RwLock<RuntimeState>>, actions: Vec<Pol
                     crate::runtime::daemon::replay_current_display_mode(&state, attached, scale)
                         .await
                 {
-                    log::warn!("failed to apply display-mode policy action: {err}");
-                    crate::runtime::daemon::notify_runtime_error(
-                        &state,
-                        "Zenbook Duo Runtime Error",
-                        &format!("Display-mode policy action failed: {err}"),
-                    )
-                    .await;
-                    let _ = logger::append_line(format!(
-                        "rust-daemon: display-mode policy action failed (attached={}, scale={}): {}",
-                        attached, scale, err
-                    ));
+                    if crate::runtime::daemon::is_display_session_deferral(&err) {
+                        let _ = logger::append_line(format!(
+                            "rust-daemon: display-mode policy action deferred (attached={}, scale={}): {}",
+                            attached, scale, err
+                        ));
+                        crate::runtime::daemon::queue_lifecycle_display_retry(state.clone());
+                    } else {
+                        log::warn!("failed to apply display-mode policy action: {err}");
+                        crate::runtime::daemon::notify_runtime_error(
+                            &state,
+                            "Zenbook Duo Runtime Error",
+                            &format!("Display-mode policy action failed: {err}"),
+                        )
+                        .await;
+                        let _ = logger::append_line(format!(
+                            "rust-daemon: display-mode policy action failed (attached={}, scale={}): {}",
+                            attached, scale, err
+                        ));
+                    }
                 } else {
                     let _ = logger::append_line(format!(
                         "rust-daemon: applied display-mode policy action (attached={}, scale={})",

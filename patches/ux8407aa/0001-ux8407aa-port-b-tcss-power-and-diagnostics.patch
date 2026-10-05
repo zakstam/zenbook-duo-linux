@@ -1,0 +1,309 @@
+--- a/drivers/gpu/drm/i915/display/intel_display.c
++++ b/drivers/gpu/drm/i915/display/intel_display.c
+@@ -25,6 +25,8 @@
+  */
+ 
+ #include <linux/dma-resv.h>
++#include <linux/delay.h>
++#include <linux/dmi.h>
+ #include <linux/i2c.h>
+ #include <linux/input.h>
+ #include <linux/kernel.h>
+@@ -67,6 +69,7 @@
+ #include "intel_cursor.h"
+ #include "intel_cursor_regs.h"
+ #include "intel_cx0_phy.h"
++#include "intel_cx0_phy_regs.h"
+ #include "intel_ddi.h"
+ #include "intel_de.h"
+ #include "intel_display_driver.h"
+@@ -127,6 +130,7 @@
+ #include "intel_wm.h"
+ #include "skl_scaler.h"
+ #include "skl_universal_plane.h"
++#include "skl_universal_plane_regs.h"
+ #include "skl_watermark.h"
+ #include "vlv_dsi.h"
+ #include "vlv_dsi_pll.h"
+@@ -7279,6 +7283,19 @@
+ 		!intel_crtc_needs_modeset(new_crtc_state) &&
+ 		!intel_crtc_needs_fastset(new_crtc_state);
+ 
++	/*
++	 * Pipe B's DSB engine on the UX8407AA reaches the final cacheline but
++	 * never signals completion. The resulting 10 second atomic commit
++	 * timeout corrupts the eDP-2 teardown/re-enable sequence during the
++	 * GDM-to-user-session handoff. Keep the generic MMIO update path for
++	 * this pipe until the Panther Lake DSB erratum is understood.
++	 */
++	if (crtc->pipe == PIPE_B &&
++	    dmi_match(DMI_PRODUCT_NAME, "Zenbook Duo UX8407AA")) {
++		new_crtc_state->use_flipq = false;
++		new_crtc_state->use_dsb = false;
++	}
++
+ 	intel_color_prepare_commit(state, crtc);
+ }
+ 
+@@ -7415,11 +7432,150 @@
+ 			intel_pipedmc_dcb_enable(new_crtc_state->dsb_commit, crtc);
+ 
+ 		intel_dsb_interrupt(new_crtc_state->dsb_commit);
++
+ 	}
+ 
+ 	intel_dsb_finish(new_crtc_state->dsb_commit);
+ }
+ 
++/*
++ * Keep the generic flip wait behaviour, but capture the display interrupt
++ * state before the DSB cleanup masks the evidence from a stuck pipe.
++ */
++struct zenbook_pipe_snapshot {
++	u32 dsl;
++	u32 frame;
++	u32 transconf;
++	u32 ddi_func_ctl;
++	u32 plane_ctl;
++	u32 plane_surf;
++	u32 plane_surflive;
++	u32 port_clock_ctl;
++	u32 port_buf_ctl1;
++	u32 port_buf_ctl2;
++	u32 port_buf_ctl3;
++	u32 msgbus_timer_lane0;
++	u32 msgbus_timer_lane1;
++	u32 ddi_clk_valfreq;
++};
++
++static void zenbook_take_pipe_snapshot(struct intel_display *display,
++				       enum pipe pipe,
++				       struct zenbook_pipe_snapshot *snapshot)
++{
++	enum transcoder transcoder = (enum transcoder)pipe;
++	enum port port = pipe == PIPE_A ? PORT_A : PORT_B;
++
++	snapshot->dsl = intel_de_read(display, PIPEDSL(display, pipe));
++	snapshot->frame = intel_de_read(display,
++				       PIPE_FRMCOUNT_G4X(display, pipe));
++	snapshot->transconf = intel_de_read(display,
++					   TRANSCONF(display, transcoder));
++	snapshot->ddi_func_ctl = intel_de_read(display,
++					      TRANS_DDI_FUNC_CTL(display,
++								 transcoder));
++	snapshot->plane_ctl = intel_de_read(display,
++					   PLANE_CTL(pipe, PLANE_PRIMARY));
++	snapshot->plane_surf = intel_de_read(display,
++					    PLANE_SURF(pipe, PLANE_PRIMARY));
++	snapshot->plane_surflive = intel_de_read(display,
++						PLANE_SURFLIVE(pipe,
++							       PLANE_PRIMARY));
++	snapshot->port_clock_ctl = intel_de_read(display,
++						XELPDP_PORT_CLOCK_CTL(display,
++								    port));
++	snapshot->port_buf_ctl1 = intel_de_read(display,
++					       XELPDP_PORT_BUF_CTL1(display,
++								  port));
++	snapshot->port_buf_ctl2 = intel_de_read(display,
++					       XELPDP_PORT_BUF_CTL2(display,
++								  port));
++	snapshot->port_buf_ctl3 = intel_de_read(display,
++					       XELPDP_PORT_BUF_CTL3(display,
++								  port));
++	snapshot->msgbus_timer_lane0 = intel_de_read(display,
++						    XELPDP_PORT_MSGBUS_TIMER(display,
++									   port, 0));
++	snapshot->msgbus_timer_lane1 = intel_de_read(display,
++						    XELPDP_PORT_MSGBUS_TIMER(display,
++									   port, 1));
++	snapshot->ddi_clk_valfreq = intel_de_read(display,
++						 DDI_CLK_VALFREQ(port));
++}
++
++static void zenbook_dump_pipe_progress(struct intel_display *display)
++{
++	struct zenbook_pipe_snapshot a1, a2, b1, b2;
++
++	zenbook_take_pipe_snapshot(display, PIPE_A, &a1);
++	zenbook_take_pipe_snapshot(display, PIPE_B, &b1);
++	msleep(20);
++	zenbook_take_pipe_snapshot(display, PIPE_A, &a2);
++	zenbook_take_pipe_snapshot(display, PIPE_B, &b2);
++
++	drm_err(display->drm,
++		"UX8407AA pipe A progress: dsl %08x->%08x frame %08x->%08x transconf=%08x ddi=%08x plane ctl=%08x surf=%08x live=%08x\n",
++		a1.dsl, a2.dsl, a1.frame, a2.frame, a2.transconf,
++		a2.ddi_func_ctl, a2.plane_ctl, a2.plane_surf,
++		a2.plane_surflive);
++	drm_err(display->drm,
++		"UX8407AA pipe B progress: dsl %08x->%08x frame %08x->%08x transconf=%08x ddi=%08x plane ctl=%08x surf=%08x live=%08x\n",
++		b1.dsl, b2.dsl, b1.frame, b2.frame, b2.transconf,
++		b2.ddi_func_ctl, b2.plane_ctl, b2.plane_surf,
++		b2.plane_surflive);
++	drm_err(display->drm,
++		"UX8407AA PHY A: clock=%08x buf1=%08x buf2=%08x buf3=%08x msg0=%08x msg1=%08x valfreq=%08x\n",
++		a2.port_clock_ctl, a2.port_buf_ctl1, a2.port_buf_ctl2,
++		a2.port_buf_ctl3, a2.msgbus_timer_lane0,
++		a2.msgbus_timer_lane1, a2.ddi_clk_valfreq);
++	drm_err(display->drm,
++		"UX8407AA PHY B: clock=%08x buf1=%08x buf2=%08x buf3=%08x msg0=%08x msg1=%08x valfreq=%08x\n",
++		b2.port_clock_ctl, b2.port_buf_ctl1, b2.port_buf_ctl2,
++		b2.port_buf_ctl3, b2.msgbus_timer_lane0,
++		b2.msgbus_timer_lane1, b2.ddi_clk_valfreq);
++}
++
++static void intel_atomic_wait_for_flip_done(struct intel_atomic_state *state)
++{
++	struct intel_display *display = to_intel_display(state);
++	struct drm_crtc *base_crtc;
++	int i;
++
++	for (i = 0; i < display->drm->mode_config.num_crtc; i++) {
++		struct drm_crtc_commit *commit = state->base.crtcs[i].commit;
++		struct intel_crtc *crtc;
++		struct intel_crtc_state *crtc_state;
++		enum pipe pipe;
++		int ret;
++
++		base_crtc = state->base.crtcs[i].ptr;
++		if (!base_crtc || !commit)
++			continue;
++
++		ret = wait_for_completion_timeout(&commit->flip_done, 10 * HZ);
++		if (ret)
++			continue;
++
++		crtc = to_intel_crtc(base_crtc);
++		crtc_state = intel_atomic_get_new_crtc_state(state, crtc);
++		pipe = crtc->pipe;
++
++		drm_err(display->drm,
++			"[CRTC:%d:%s] flip_done timed out; pipe %c IRQ IIR=0x%08x IMR=0x%08x IER=0x%08x\\n",
++			base_crtc->base.id, base_crtc->name, pipe_name(pipe),
++			intel_de_read(display, GEN8_DE_PIPE_IIR(pipe)),
++			intel_de_read(display, GEN8_DE_PIPE_IMR(pipe)),
++			intel_de_read(display, GEN8_DE_PIPE_IER(pipe)));
++		if (pipe == PIPE_B &&
++		    dmi_match(DMI_PRODUCT_NAME, "Zenbook Duo UX8407AA"))
++			zenbook_dump_pipe_progress(display);
++		intel_crtc_state_dump(crtc_state, state, "flip_done timeout");
++	}
++
++	if (state->base.fake_commit)
++		complete_all(&state->base.fake_commit->flip_done);
++}
++
+ static void intel_atomic_commit_tail(struct intel_atomic_state *state)
+ {
+ 	struct intel_display *display = to_intel_display(state);
+@@ -7550,7 +7706,7 @@
+ 	 * - switch over to the vblank wait helper in the core after that since
+ 	 *   we don't need out special handling any more.
+ 	 */
+-	drm_atomic_helper_wait_for_flip_done(display->drm, &state->base);
++	intel_atomic_wait_for_flip_done(state);
+ 
+ 	for_each_new_intel_crtc_in_state(state, crtc, new_crtc_state) {
+ 		if (new_crtc_state->do_async_flip)
+--- a/drivers/gpu/drm/i915/display/intel_tc.c
++++ b/drivers/gpu/drm/i915/display/intel_tc.c
+@@ -1090,24 +1090,27 @@
+ 	}
+ }
+ 
+-static void __xelpdp_tc_phy_enable_tcss_power(struct intel_tc_port *tc, bool enable)
++void intel_tc_tcss_power_request(struct intel_encoder *encoder, bool enable)
+ {
+-	struct intel_display *display = to_intel_display(tc->dig_port);
+-	enum port port = tc->dig_port->base.port;
++	struct intel_display *display = to_intel_display(encoder);
++	enum port port = encoder->port;
+ 	intel_reg_t reg = XELPDP_PORT_BUF_CTL1(display, port);
+-	u32 val;
++	u32 val = intel_de_read(display, reg);
+ 
+-	assert_tc_cold_blocked(tc);
++	if (!!(val & XELPDP_TCSS_POWER_REQUEST) == enable)
++		return;
+ 
+ 	if (DISPLAY_VER(display) == 30)
+ 		xelpdp_tc_power_request_wa(display, enable);
+ 
+-	val = intel_de_read(display, reg);
+-	if (enable)
+-		val |= XELPDP_TCSS_POWER_REQUEST;
+-	else
+-		val &= ~XELPDP_TCSS_POWER_REQUEST;
+-	intel_de_write(display, reg, val);
++	intel_de_rmw(display, reg, XELPDP_TCSS_POWER_REQUEST,
++		     enable ? XELPDP_TCSS_POWER_REQUEST : 0);
++}
++
++static void __xelpdp_tc_phy_enable_tcss_power(struct intel_tc_port *tc, bool enable)
++{
++	assert_tc_cold_blocked(tc);
++	intel_tc_tcss_power_request(&tc->dig_port->base, enable);
+ }
+ 
+ static bool xelpdp_tc_phy_enable_tcss_power(struct intel_tc_port *tc, bool enable)
+--- a/drivers/gpu/drm/i915/display/intel_tc.h
++++ b/drivers/gpu/drm/i915/display/intel_tc.h
+@@ -88,6 +88,7 @@
+ bool intel_tc_port_handles_hpd_glitches(struct intel_digital_port *dig_port);
+ 
+ bool intel_tc_port_connected(struct intel_encoder *encoder);
++void intel_tc_tcss_power_request(struct intel_encoder *encoder, bool enable);
+ 
+ enum intel_tc_pin_assignment
+ intel_tc_port_get_pin_assignment(struct intel_digital_port *dig_port);
+--- a/drivers/gpu/drm/i915/display/intel_cx0_phy.c
++++ b/drivers/gpu/drm/i915/display/intel_cx0_phy.c
+@@ -5,6 +5,7 @@
+ 
+ #include <linux/log2.h>
+ #include <linux/math64.h>
++#include <linux/dmi.h>
+ 
+ #include <drm/drm_print.h>
+ 
+@@ -34,6 +35,18 @@
+ #define INTEL_CX0_LANE1		BIT(1)
+ #define INTEL_CX0_BOTH_LANES	(INTEL_CX0_LANE1 | INTEL_CX0_LANE0)
+ 
++static bool intel_cx0_is_ux8407aa_c20_edp_port_b(struct intel_encoder *encoder)
++{
++	struct intel_display *display = to_intel_display(encoder);
++
++	return display->platform.pantherlake &&
++	       encoder->type == INTEL_OUTPUT_EDP &&
++	       encoder->port == PORT_B &&
++	       !intel_encoder_is_c10phy(encoder) &&
++	       dmi_match(DMI_SYS_VENDOR, "ASUS") &&
++	       dmi_match(DMI_PRODUCT_NAME, "Zenbook Duo UX8407AA");
++}
++
+ bool intel_encoder_is_c10phy(struct intel_encoder *encoder)
+ {
+ 	struct intel_display *display = to_intel_display(encoder);
+@@ -3183,6 +3196,21 @@
+ 		port_clock = intel_c20pll_calc_port_clock(&pll_state->c20);
+ 
+ 	/*
++	 * UX8407AA wires its second internal panel to PTL Port B's C20
++	 * Type-C PHY. Keep the TCSS PHY power request asserted while this
++	 * dedicated eDP path is in use; otherwise the PLL/refclk ACKs can
++	 * disappear even though the display clock requests remain asserted.
++	 */
++	if (intel_cx0_is_ux8407aa_c20_edp_port_b(encoder)) {
++		intel_tc_tcss_power_request(encoder, true);
++		if (intel_de_wait_for_set_ms(display,
++					 XELPDP_PORT_BUF_CTL1(display, encoder->port),
++					 XELPDP_TCSS_POWER_STATE, 5))
++			drm_warn(display->drm,
++				 "UX8407AA Port B TCSS power request was not acknowledged\n");
++	}
++
++	/*
+ 	 * Lane reversal is never used in DP-alt mode, in that case the
+ 	 * corresponding lane swapping (based on the TypeC cable flip state
+ 	 * for instance) is handled automatically by the HW via a TCSS mux.
