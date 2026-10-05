@@ -386,7 +386,10 @@ fn find_running_helper_pid(pid_path: &str) -> Option<u32> {
         let Ok(pid) = name.to_string_lossy().parse::<u32>() else {
             continue;
         };
-        let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
+        // A process can exit mid-scan; skip it rather than abandoning the scan.
+        let Ok(cmdline) = fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
         if cmdline.is_empty() {
             continue;
         }

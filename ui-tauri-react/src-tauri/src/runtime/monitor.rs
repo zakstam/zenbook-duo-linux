@@ -131,8 +131,9 @@ pub(crate) async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) 
             Ok(()) => {
                 let mut should_log = false;
                 {
+                    // Keep the cooldown until a later tick sees the helper still running,
+                    // so a helper that dies right after starting is not relaunched every second.
                     let mut guard = state.write().await;
-                    clear_usb_media_remap_retry_cooldown(&mut guard);
                     if guard
                         .usb_media_remap_reconcile
                         .last_start_log_at

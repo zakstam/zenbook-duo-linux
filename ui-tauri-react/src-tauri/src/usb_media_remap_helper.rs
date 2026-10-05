@@ -35,6 +35,11 @@ where
 
     ensure_dir(&base_dir)?;
 
+    // Claim the pid file before touching the keyboard, so a duplicate helper
+    // exits without grabbing it or creating a second virtual device.
+    write_pid(&args.pid_file)?;
+    let _pid_guard = PidFileGuard::new(args.pid_file.clone());
+
     let device_path = args
         .device
         .clone()
@@ -90,9 +95,6 @@ where
         .map_err(|e| format!("Failed to set keys for uinput: {e}"))?
         .build()
         .map_err(|e| format!("Failed to create uinput device: {e}"))?;
-
-    write_pid(&args.pid_file)?;
-    let _pid_guard = PidFileGuard::new(args.pid_file.clone());
 
     let terminate = Arc::new(AtomicBool::new(false));
     flag::register(signal_hook::consts::SIGTERM, Arc::clone(&terminate))
@@ -439,10 +441,13 @@ fn emit_key(uinput: &mut evdev::uinput::VirtualDevice, key: Key, value: i32) -> 
         .map_err(|e| format!("Failed to emit key event: {e}"))
 }
 
+/// Writes our pid unless another live process owns the file. The daemon's status
+/// check may already have written our own pid while we were starting; that is us.
 fn write_pid(path: &str) -> Result<(), String> {
+    let own_pid = std::process::id() as i32;
     if let Ok(existing) = fs::read_to_string(path) {
         if let Ok(pid) = existing.trim().parse::<i32>() {
-            if unsafe { libc::kill(pid, 0) } == 0 {
+            if pid != own_pid && unsafe { libc::kill(pid, 0) } == 0 {
                 return Err(format!("Remapper already running (pid {})", pid));
             }
         }
@@ -751,6 +756,46 @@ mod tests {
         assert_eq!(fn_state.route(Key::KEY_F1, 1, true), Route::Raw);
         // Unpaused before release: release still matches the raw press.
         assert_eq!(fn_state.route(Key::KEY_F1, 0, false), Route::Raw);
+    }
+
+    fn temp_pid_file(name: &str) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "zenbook-duo-remap-test-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = fs::create_dir_all(&dir);
+        dir.join("usb_media_remap.pid")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn helper_accepts_its_own_pid_written_by_the_daemon_status_check() {
+        // The daemon's status check finds a starting helper in /proc and writes
+        // its pid before the helper claims the file (GitHub #28, #19).
+        let path = temp_pid_file("own");
+        fs::write(&path, std::process::id().to_string()).unwrap();
+        assert_eq!(write_pid(&path), Ok(()));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            std::process::id().to_string()
+        );
+    }
+
+    #[test]
+    fn helper_refuses_when_another_live_process_owns_the_pid_file() {
+        let path = temp_pid_file("other");
+        let other = std::os::unix::process::parent_id();
+        fs::write(&path, other.to_string()).unwrap();
+        assert!(write_pid(&path).is_err());
+    }
+
+    #[test]
+    fn helper_replaces_a_stale_pid_file() {
+        let path = temp_pid_file("stale");
+        fs::write(&path, i32::MAX.to_string()).unwrap();
+        assert_eq!(write_pid(&path), Ok(()));
     }
 
     #[test]
