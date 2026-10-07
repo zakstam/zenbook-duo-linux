@@ -48,6 +48,7 @@ run_duo_setup() {
   install_duo_dependencies
   configure_duo_sudoers
   configure_duo_input_access
+  configure_duo_libinput_quirks
   write_duo_settings_defaults
   install_duo_rust_runtime
 
@@ -172,6 +173,32 @@ configure_duo_input_access() {
   sudo rm -f /etc/udev/hwdb.d/90-zenbook-duo-keyboard.hwdb
   sudo systemd-hwdb update
   sudo udevadm trigger
+}
+
+DUO_LIBINPUT_QUIRKS_FILE=/etc/libinput/local-overrides.quirks
+DUO_LIBINPUT_QUIRKS_BEGIN="# BEGIN zenbook-duo"
+DUO_LIBINPUT_QUIRKS_END="# END zenbook-duo"
+
+remove_duo_libinput_quirks() {
+  [ -f "${DUO_LIBINPUT_QUIRKS_FILE}" ] || return 0
+  sudo sed -i "\|^${DUO_LIBINPUT_QUIRKS_BEGIN}\$|,\|^${DUO_LIBINPUT_QUIRKS_END}\$|d" "${DUO_LIBINPUT_QUIRKS_FILE}"
+}
+
+configure_duo_libinput_quirks() {
+  # The keyboard touchpad is on USB, so libinput treats it as external and
+  # offers no disable-while-typing. Declaring it a keyboard combo enables DWT,
+  # paired with keyboards sharing its vid/pid (including the USB remap device).
+  # libinput only reads this one file from /etc, so manage a marked block in it.
+  sudo mkdir -p "$(dirname "${DUO_LIBINPUT_QUIRKS_FILE}")"
+  remove_duo_libinput_quirks
+  sudo tee -a "${DUO_LIBINPUT_QUIRKS_FILE}" >/dev/null <<EOF
+${DUO_LIBINPUT_QUIRKS_BEGIN}
+[ASUS Zenbook Duo Keyboard Touchpad]
+MatchUdevType=touchpad
+MatchName=*ASUS Zenbook Duo Keyboard Touchpad*
+AttrTPKComboLayout=below
+${DUO_LIBINPUT_QUIRKS_END}
+EOF
 }
 
 write_duo_settings_defaults() {

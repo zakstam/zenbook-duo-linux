@@ -88,9 +88,13 @@ where
         keys.insert(key);
     }
 
+    // Reuse the keyboard's vendor/product so libinput pairs the virtual device
+    // with the keyboard's touchpad for disable-while-typing (see the
+    // AttrTPKComboLayout quirk installed by setup-common.sh).
     let mut uinput = VirtualDeviceBuilder::new()
         .map_err(|e| format!("Failed to init uinput builder: {e}"))?
         .name("Zenbook Duo USB Remap")
+        .input_id(device.input_id())
         .with_keys(&keys)
         .map_err(|e| format!("Failed to set keys for uinput: {e}"))?
         .build()

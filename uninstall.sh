@@ -126,6 +126,14 @@ sudo systemd-hwdb update
 sudo udevadm trigger
 
 # ============================================================================
+# LIBINPUT QUIRKS
+# ============================================================================
+
+if [ -f /etc/libinput/local-overrides.quirks ]; then
+    sudo sed -i '\|^# BEGIN zenbook-duo$|,\|^# END zenbook-duo$|d' /etc/libinput/local-overrides.quirks
+fi
+
+# ============================================================================
 # SUDOERS ENTRIES
 # ============================================================================
 
