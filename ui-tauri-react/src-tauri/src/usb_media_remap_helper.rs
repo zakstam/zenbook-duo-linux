@@ -8,13 +8,14 @@ use signal_hook::flag;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::runtime::paths;
 
@@ -112,6 +113,7 @@ where
     // keyboard. Siblings are only read, never grabbed, so the desktop keeps them.
     let grabbed_reports_fn = reports_fn(&device);
     let mut fn_watchers = open_fn_watchers(&device_path);
+    let mut fn_tap_readers = Vec::new();
     if grabbed_reports_fn || !fn_watchers.is_empty() {
         let mut nodes: Vec<String> = fn_watchers
             .iter()
@@ -125,10 +127,22 @@ where
             nodes.join(", ")
         ));
     } else {
-        log_info(
-            "No keyboard node reports the Fn key; Fn+F-keys cannot be told apart from F-keys. \
-             Pause the remap (zenbook-duo-control --toggle-remap-pause) to use F1-F12.",
-        );
+        fn_tap_readers = open_fn_tap_readers(&device_path);
+        if fn_tap_readers.is_empty() {
+            log_info(
+                "No keyboard node reports the Fn key; Fn+F-keys cannot be told apart from F-keys. \
+                 Pause the remap (zenbook-duo-control --toggle-remap-pause) to use F1-F12.",
+            );
+        } else {
+            let nodes: Vec<String> = fn_tap_readers
+                .iter()
+                .map(|(path, _)| path.display().to_string())
+                .collect();
+            log_info(&format!(
+                "Watching {} for Fn presses; the key pressed next after Fn passes through unmapped",
+                nodes.join(", ")
+            ));
+        }
     }
     let mut fn_state = FnPassthrough::default();
 
@@ -154,6 +168,28 @@ where
                 log_info(&format!("Stopped watching {} for Fn: {e}", path.display()));
                 fn_state.observe_fn(0);
                 false
+            }
+        });
+
+        // Read Fn taps before the keyboard so a tap is seen before the key it precedes.
+        fn_tap_readers.retain_mut(|(path, reader)| {
+            let mut report = [0u8; 64];
+            loop {
+                match reader.read(&mut report) {
+                    Ok(0) => return false,
+                    Ok(n) => {
+                        idle = false;
+                        if report[..n] == FN_TAP_REPORT {
+                            fn_state.observe_fn_tap(Instant::now());
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return true,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        log_info(&format!("Stopped watching {} for Fn: {e}", path.display()));
+                        return false;
+                    }
+                }
             }
         });
 
@@ -314,12 +350,18 @@ enum Route {
     Remap,
 }
 
+/// How long an Fn tap (a press with no matching release, see FN_TAP_REPORT)
+/// keeps the next key press raw.
+const FN_TAP_WINDOW: Duration = Duration::from_secs(3);
+
 /// Decides per key press whether the remap applies. A key pressed while Fn is
 /// held (or while the remap is paused) stays raw until it is released, even if
-/// Fn or the pause ends first, so press and release always match.
+/// Fn or the pause ends first, so press and release always match. An Fn tap
+/// makes only the next non-modifier key press raw.
 #[derive(Debug, Default)]
 struct FnPassthrough {
     fn_held: bool,
+    fn_tap_at: Option<Instant>,
     raw_keys: HashSet<u16>,
 }
 
@@ -328,11 +370,24 @@ impl FnPassthrough {
         self.fn_held = value != 0;
     }
 
+    fn observe_fn_tap(&mut self, now: Instant) {
+        self.fn_tap_at = Some(now);
+    }
+
     fn route(&mut self, key: Key, value: i32, paused: bool) -> Route {
+        self.route_at(key, value, paused, Instant::now())
+    }
+
+    fn route_at(&mut self, key: Key, value: i32, paused: bool, now: Instant) -> Route {
         let code = key.code();
         let raw = match value {
             1 => {
-                if self.fn_held || paused {
+                let tapped = !is_modifier(key)
+                    && self
+                        .fn_tap_at
+                        .take()
+                        .is_some_and(|at| now.duration_since(at) <= FN_TAP_WINDOW);
+                if self.fn_held || paused || tapped {
                     self.raw_keys.insert(code);
                     true
                 } else {
@@ -349,6 +404,67 @@ impl FnPassthrough {
             Route::Remap
         }
     }
+}
+
+fn is_modifier(key: Key) -> bool {
+    matches!(
+        key,
+        Key::KEY_LEFTCTRL
+            | Key::KEY_RIGHTCTRL
+            | Key::KEY_LEFTSHIFT
+            | Key::KEY_RIGHTSHIFT
+            | Key::KEY_LEFTALT
+            | Key::KEY_RIGHTALT
+            | Key::KEY_LEFTMETA
+            | Key::KEY_RIGHTMETA
+    )
+}
+
+/// The docked keyboard has no Fn key code over USB, and Fn+F2 sends the same
+/// key report as F2. Each Fn press instead sends an empty report on the
+/// keyboard's mouse interface (report ID 1: no buttons, no motion), which evdev
+/// drops because nothing changed. Fn release sends nothing.
+const FN_TAP_REPORT: [u8; 5] = [0x01, 0x00, 0x00, 0x00, 0x00];
+
+/// Opens the hidraw nodes of the grabbed keyboard's USB device, read-only, to
+/// watch for FN_TAP_REPORT. hidraw reads are not affected by the evdev grab.
+fn open_fn_tap_readers(grabbed: &Path) -> Vec<(PathBuf, fs::File)> {
+    let Some(usb_dir) = usb_device_dir(grabbed) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir("/sys/class/hidraw") else {
+        return Vec::new();
+    };
+    let mut readers = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(hid_dir) = fs::canonicalize(entry.path().join("device")) else {
+            continue;
+        };
+        if !hid_dir.starts_with(&usb_dir) {
+            continue;
+        }
+        let path = Path::new("/dev").join(entry.file_name());
+        if let Ok(file) = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+        {
+            readers.push((path, file));
+        }
+    }
+    readers
+}
+
+/// The sysfs directory of the USB device an input event node belongs to.
+fn usb_device_dir(event_node: &Path) -> Option<PathBuf> {
+    let node = fs::canonicalize(event_node).ok()?;
+    let input_dir =
+        fs::canonicalize(Path::new("/sys/class/input").join(node.file_name()?).join("device"))
+            .ok()?;
+    input_dir
+        .ancestors()
+        .find(|dir| dir.join("idVendor").exists())
+        .map(Path::to_path_buf)
 }
 
 fn is_fn_event(event: &InputEvent) -> bool {
@@ -760,6 +876,45 @@ mod tests {
         assert_eq!(fn_state.route(Key::KEY_F1, 1, true), Route::Raw);
         // Unpaused before release: release still matches the raw press.
         assert_eq!(fn_state.route(Key::KEY_F1, 0, false), Route::Raw);
+    }
+
+    #[test]
+    fn fn_tap_passes_only_the_next_key_press_through() {
+        let mut fn_state = FnPassthrough::default();
+        let t0 = Instant::now();
+        fn_state.observe_fn_tap(t0);
+        assert_eq!(fn_state.route_at(Key::KEY_F2, 1, false, t0), Route::Raw);
+        assert_eq!(fn_state.route_at(Key::KEY_F2, 0, false, t0), Route::Raw);
+        // Fn release is never reported, so a second F2 is remapped.
+        assert_eq!(fn_state.route_at(Key::KEY_F2, 1, false, t0), Route::Remap);
+        assert_eq!(fn_state.route_at(Key::KEY_F2, 0, false, t0), Route::Remap);
+    }
+
+    #[test]
+    fn fn_tap_is_kept_across_modifiers() {
+        let mut fn_state = FnPassthrough::default();
+        let t0 = Instant::now();
+        fn_state.observe_fn_tap(t0);
+        assert_eq!(fn_state.route_at(Key::KEY_LEFTALT, 1, false, t0), Route::Remap);
+        assert_eq!(fn_state.route_at(Key::KEY_F4, 1, false, t0), Route::Raw);
+    }
+
+    #[test]
+    fn fn_tap_is_spent_by_any_other_key() {
+        let mut fn_state = FnPassthrough::default();
+        let t0 = Instant::now();
+        fn_state.observe_fn_tap(t0);
+        assert_eq!(fn_state.route_at(Key::KEY_HOME, 1, false, t0), Route::Raw);
+        assert_eq!(fn_state.route_at(Key::KEY_F2, 1, false, t0), Route::Remap);
+    }
+
+    #[test]
+    fn fn_tap_expires() {
+        let mut fn_state = FnPassthrough::default();
+        let t0 = Instant::now();
+        fn_state.observe_fn_tap(t0);
+        let later = t0 + FN_TAP_WINDOW + Duration::from_millis(1);
+        assert_eq!(fn_state.route_at(Key::KEY_F2, 1, false, later), Route::Remap);
     }
 
     fn temp_pid_file(name: &str) -> String {
