@@ -277,7 +277,10 @@ async fn apply_policy_actions(state: Arc<RwLock<RuntimeState>>, actions: Vec<Pol
                     crate::runtime::daemon::replay_current_display_mode(&state, attached, scale)
                         .await
                 {
-                    if crate::runtime::daemon::is_display_session_deferral(&err) {
+                    // Retrying a deferred replay is only verified on the 2026 model.
+                    if crate::hardware::duo::is_duo_2026()
+                        && crate::runtime::daemon::is_display_session_deferral(&err)
+                    {
                         let _ = logger::append_line(format!(
                             "rust-daemon: display-mode policy action deferred (attached={}, scale={}): {}",
                             attached, scale, err

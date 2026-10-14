@@ -109,6 +109,16 @@ pub fn niri_output_names_from_value(value: &Value) -> Result<Vec<String>, String
 }
 
 pub fn kde_output_logical_size_from_value(value: &Value, name: &str) -> Result<(i64, i64), String> {
+    kde_output_logical_size_from_value_with(value, name, crate::hardware::duo::is_duo_2026())
+}
+
+/// `duo_2026` enables the UX8407AA geometry fixes (unrotated size, KWin-style
+/// rounding). Other models keep the original rounding until verified there.
+pub(crate) fn kde_output_logical_size_from_value_with(
+    value: &Value,
+    name: &str,
+    duo_2026: bool,
+) -> Result<(i64, i64), String> {
     for output in kde_outputs_from_value(value)? {
         if output.get("name").and_then(|v| v.as_str()) == Some(name) {
             let size = output
@@ -118,6 +128,13 @@ pub fn kde_output_logical_size_from_value(value: &Value, name: &str) -> Result<(
             let scale = output.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
             let mut width = size.get("width").and_then(|v| v.as_i64()).unwrap_or(0);
             let mut height = size.get("height").and_then(|v| v.as_i64()).unwrap_or(0);
+
+            if !duo_2026 {
+                return Ok((
+                    (width as f64 / scale).round() as i64,
+                    (height as f64 / scale).round() as i64,
+                ));
+            }
 
             // KWin reports `size` already rotated (a 2880x1800 panel reads back
             // as 1800x2880 at 90/270), so undo that here and always return the
@@ -214,7 +231,7 @@ mod tests {
             vec!["eDP-1".to_string(), "eDP-2".to_string()]
         );
         assert_eq!(
-            kde_output_logical_size_from_value(&value, "eDP-1"),
+            kde_output_logical_size_from_value_with(&value, "eDP-1", false),
             Ok((1920, 1200))
         );
         assert_eq!(kde_enabled_output_count_from_value(&value), Ok(1));
@@ -232,8 +249,22 @@ mod tests {
         });
 
         assert_eq!(
-            kde_output_logical_size_from_value(&value, "eDP-1"),
+            kde_output_logical_size_from_value_with(&value, "eDP-1", true),
             Ok((1737, 1086))
+        );
+    }
+
+    #[test]
+    fn other_models_keep_the_original_logical_size_rounding() {
+        let value = serde_json::json!({
+            "outputs": [
+                { "name": "eDP-1", "enabled": true, "rotation": 8, "size": { "width": 1800, "height": 2880 }, "scale": 1.6583333333333334 }
+            ]
+        });
+
+        assert_eq!(
+            kde_output_logical_size_from_value_with(&value, "eDP-1", false),
+            Ok((1085, 1737))
         );
     }
 
@@ -249,12 +280,12 @@ mod tests {
         });
 
         assert_eq!(
-            kde_output_logical_size_from_value(&value, "eDP-1"),
+            kde_output_logical_size_from_value_with(&value, "eDP-1", true),
             Ok((1737, 1086))
         );
         assert_eq!(
-            kde_output_logical_size_from_value(&value, "eDP-2"),
-            kde_output_logical_size_from_value(&value, "eDP-1")
+            kde_output_logical_size_from_value_with(&value, "eDP-2", true),
+            kde_output_logical_size_from_value_with(&value, "eDP-1", true)
         );
     }
 
