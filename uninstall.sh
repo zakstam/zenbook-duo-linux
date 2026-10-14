@@ -138,7 +138,8 @@ fi
 # SUDOERS ENTRIES
 # ============================================================================
 
-# Remove sudoers lines added by the setup scripts.
+# Remove sudoers rules added by the setup scripts.
+sudo rm -f /etc/sudoers.d/zenbook-duo
 if sudo grep -q "/sys/class/backlight/.*/brightness" /etc/sudoers; then
     sudo sed -i '\|/sys/class/backlight/.*/brightness|d' /etc/sudoers
 fi
