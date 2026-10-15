@@ -149,7 +149,37 @@ pub(super) fn apply_niri_display_layout(layout: &DisplayLayout) -> Result<(), St
         run_niri_position_command(&display.connector, display.x, display.y)?;
     }
 
+    if let Some((x, y)) =
+        stacked_secondary_position(layout, &compositor::niri_outputs_json()?)?
+    {
+        run_niri_position_command(SECONDARY_INTERNAL_CONNECTOR, x, y)?;
+    }
+
     Ok(())
+}
+
+/// Where the bottom screen goes when the layout stacks it under the top one,
+/// measured from the size niri actually gave the top screen. Niri snaps a
+/// requested scale to a multiple of 1/120 (1.66 becomes 1.6583), so a position
+/// worked out from the requested scale (1800 / 1.66 -> 1085) lands inside the
+/// top screen (1085.4 tall) and niri moves the bottom screen to the right.
+fn stacked_secondary_position(
+    layout: &DisplayLayout,
+    niri_outputs: &serde_json::Value,
+) -> Result<Option<(i32, i32)>, String> {
+    let find = |name: &str| layout.displays.iter().find(|d| d.connector == name);
+    let (Some(top), Some(bottom)) = (
+        find(PRIMARY_INTERNAL_CONNECTOR),
+        find(SECONDARY_INTERNAL_CONNECTOR),
+    ) else {
+        return Ok(None);
+    };
+    if bottom.x != top.x || bottom.y <= top.y {
+        return Ok(None);
+    }
+    let (_, height) =
+        compositor::niri_output_logical_size_from_value(niri_outputs, PRIMARY_INTERNAL_CONNECTOR)?;
+    Ok(Some((top.x, top.y + height as i32)))
 }
 
 fn niri_output_logical_size(name: &str) -> Result<(i64, i64), String> {
@@ -225,6 +255,63 @@ mod tests {
         assert_eq!(
             result.expect_err("missing geometry should fail"),
             "missing geometry"
+        );
+    }
+
+    fn duo_display(connector: &str, scale: f64, y: i32) -> DisplayInfo {
+        let mode = make_display_mode(2880, 1800, 120.0);
+        DisplayInfo {
+            connector: connector.into(),
+            width: 2880,
+            height: 1800,
+            refresh_rate: 120.0,
+            scale,
+            x: 0,
+            y,
+            transform: 0,
+            primary: connector == PRIMARY_INTERNAL_CONNECTOR,
+            current_mode: mode.clone(),
+            available_modes: vec![mode],
+            refresh_policy: RefreshPolicy::Fixed,
+            supports_dynamic_refresh: false,
+        }
+    }
+
+    #[test]
+    fn bottom_screen_is_placed_from_the_scale_niri_snapped_to() {
+        // The app asked for 1.66 and stacked eDP-2 at 1800 / 1.66 -> 1085;
+        // niri 26.04 on the UX8406MA applied 1.6583 (top screen 1085.4 tall).
+        let layout = DisplayLayout {
+            displays: vec![
+                duo_display(PRIMARY_INTERNAL_CONNECTOR, 1.66, 0),
+                duo_display(SECONDARY_INTERNAL_CONNECTOR, 1.66, 1085),
+            ],
+        };
+        let niri = serde_json::json!([{
+            "name": "eDP-1",
+            "current_mode": 0,
+            "modes": [{"width": 2880, "height": 1800, "refresh_rate": 120000}],
+            "logical": {"x": 0, "y": 0, "width": 1736, "height": 1085,
+                        "scale": 1.6583333333333334, "transform": "Normal"}
+        }]);
+
+        assert_eq!(
+            stacked_secondary_position(&layout, &niri).expect("position"),
+            Some((0, 1086))
+        );
+    }
+
+    #[test]
+    fn bottom_screen_beside_the_top_one_is_left_alone() {
+        let mut bottom = duo_display(SECONDARY_INTERNAL_CONNECTOR, 1.66, 0);
+        bottom.x = 1735;
+        let layout = DisplayLayout {
+            displays: vec![duo_display(PRIMARY_INTERNAL_CONNECTOR, 1.66, 0), bottom],
+        };
+
+        assert_eq!(
+            stacked_secondary_position(&layout, &serde_json::json!([])).expect("position"),
+            None
         );
     }
 
