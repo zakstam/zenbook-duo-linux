@@ -121,6 +121,7 @@ run_user_systemctl_best_effort daemon-reload
 # ============================================================================
 
 sudo rm -f /etc/udev/rules.d/90-zenbook-duo-keyboard.rules
+sudo rm -f /etc/udev/rules.d/91-zenbook-duo-touch-output.rules
 sudo rm -f /etc/udev/hwdb.d/90-zenbook-duo-keyboard.hwdb
 sudo systemd-hwdb update
 sudo udevadm trigger
