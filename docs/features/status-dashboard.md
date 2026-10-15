@@ -13,3 +13,7 @@ invariants:
 ---
 
 Shows the machine's live state on the Status page: keyboard connection, displays and orientation, Wi-Fi and Bluetooth, and whether the background service is running with its version, with a restart action that restarts the daemon and session agent units.
+
+## Journeys
+
+- Switching to the Status page shows it instantly with no blinking cards, and it stays still while logs and events stream in the background. (card 3d42c96a-dabd-49f0-a286-8d9cf85a78bd, 2026-10-15)
