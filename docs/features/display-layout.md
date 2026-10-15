@@ -11,6 +11,8 @@ bindings:
   lid: ui-tauri-react/src-tauri/src/runtime/logind.rs
   page: ui-tauri-react/src/pages/DisplayLayout.tsx
   planner: ui-tauri-react/src-tauri/src/runtime/session_display_planner.rs
+invariants:
+  - Reading the display layout (get_display_layout, backend and frontend) returns each screen where the compositor has it; only applying a layout stacks the Duo screens via normalize_display_layout. Normalizing on read hid drifted screens from the user.
 ---
 
 Arranges the two internal screens and any external monitor: the Display Layout page shows a draggable canvas with resolution, refresh and scale per output, and saving applies the layout through a GNOME, KDE or Niri adapter. The saved layout is replayed when the session agent registers, when the keyboard docks or undocks, after resume, and when the lid closes (external-only clamshell) or opens. Most of the replay logic still lives in the background runtime's daemon file and the dock-mode compositor commands in the session agent file, pending a move into this feature's home.
