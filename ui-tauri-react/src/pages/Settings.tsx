@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useStore, useDispatch } from "@/lib/store";
+import { useStoreSelector, useDispatch } from "@/lib/store";
 import {
   autosavePersistedSetting,
   createSettingsDraft,
@@ -26,7 +26,8 @@ import {
 import { IconDeviceFloppy, IconKeyboard, IconPlayerPause, IconPlayerPlay, IconRotate } from "@tabler/icons-react";
 
 export default function Settings() {
-  const store = useStore();
+  const connectionType = useStoreSelector((s) => s.status.connectionType);
+  const settings = useStoreSelector((s) => s.settings);
   const dispatch = useDispatch();
   const { setTheme } = useTheme();
   const [saving, setSaving] = useState(false);
@@ -34,7 +35,7 @@ export default function Settings() {
     Partial<Record<"startOnBootMinimized" | "invertSensorRotation", boolean>>
   >({});
   const [localSettings, setLocalSettings] = useState<DuoSettings>(() =>
-    createSettingsDraft(store.settings),
+    createSettingsDraft(settings),
   );
   const [settingsDirty, setSettingsDirty] = useState(false);
   const {
@@ -55,9 +56,9 @@ export default function Settings() {
 
   useEffect(() => {
     if (!settingsDirty) {
-      setLocalSettings(createSettingsDraft(store.settings));
+      setLocalSettings(createSettingsDraft(settings));
     }
-  }, [settingsDirty, store.settings]);
+  }, [settingsDirty, settings]);
 
   const updateLocal = (key: keyof DuoSettings, value: unknown) => {
     setSettingsDirty(true);
@@ -249,7 +250,7 @@ export default function Settings() {
             label="USB Media Remap"
             description="Maps F1-F3/F5-F6 to media and brightness keys while docked"
             labelExtra={
-              store.status.connectionType === "bluetooth" ? (
+              connectionType === "bluetooth" ? (
                 <Badge
                   className="border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200"
                 >

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useStore, useStoreInit } from "@/lib/store";
+import { useStoreInit, useStoreSelector } from "@/lib/store";
 import Sidebar from "@/components/Sidebar";
 import TitleBar from "@/components/TitleBar";
 import Status from "@/pages/Status";
@@ -42,17 +42,19 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>("status");
 
   useStoreInit();
-  const store = useStore();
+  const loading = useStoreSelector((s) => s.loading);
+  const themePreference = useStoreSelector((s) => s.settings.theme);
+  const setupCompleted = useStoreSelector((s) => s.settings.setupCompleted);
   const { setTheme } = useTheme();
 
   useEffect(() => {
-    if (store.loading) return;
+    if (loading) return;
 
     let cancelled = false;
     let unlisten: (() => void) | undefined;
 
     async function applyThemePreference() {
-      const theme = await resolveThemeForPreference(store.settings.theme);
+      const theme = await resolveThemeForPreference(themePreference);
       if (!cancelled) {
         setTheme(theme);
       }
@@ -60,7 +62,7 @@ export default function App() {
 
     void applyThemePreference();
 
-    if (store.settings.theme === "system") {
+    if (themePreference === "system") {
       void onNativeSystemThemeChanged((theme) => {
         if (!cancelled) {
           setTheme(theme);
@@ -78,9 +80,9 @@ export default function App() {
       cancelled = true;
       unlisten?.();
     };
-  }, [setTheme, store.loading, store.settings.theme]);
+  }, [setTheme, loading, themePreference]);
 
-  if (!store.loading && !store.settings.setupCompleted) {
+  if (!loading && !setupCompleted) {
     return <Setup />;
   }
 

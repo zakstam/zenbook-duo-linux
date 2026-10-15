@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  useStore,
+  useStoreSelector,
   useDispatch,
   refreshProfiles,
 } from "@/lib/store";
@@ -17,7 +17,8 @@ import {
 } from "@tabler/icons-react";
 
 export default function Profiles() {
-  const store = useStore();
+  const backlightLevel = useStoreSelector((s) => s.status.backlightLevel);
+  const profiles = useStoreSelector((s) => s.profiles);
   const dispatch = useDispatch();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -27,7 +28,7 @@ export default function Profiles() {
     if (!name) return;
 
     try {
-      await profilesApi.saveCurrentProfile(name, store.status.backlightLevel);
+      await profilesApi.saveCurrentProfile(name, backlightLevel);
       await refreshProfiles(dispatch);
       setNewName("");
       setShowCreate(false);
@@ -97,7 +98,7 @@ export default function Profiles() {
         </div>
       )}
 
-      {store.profiles.length === 0 ? (
+      {profiles.length === 0 ? (
         <div className="glass-card flex flex-col items-center justify-center rounded-xl py-16 text-center">
           <div className="mb-3 flex size-12 items-center justify-center rounded-xl bg-muted">
             <IconBookmark className="size-5 text-muted-foreground" stroke={1.5} />
@@ -109,7 +110,7 @@ export default function Profiles() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {store.profiles.map((profile) => (
+          {profiles.map((profile) => (
             <ProfileCard key={profile.id} profile={profile} />
           ))}
         </div>

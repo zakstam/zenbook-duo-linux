@@ -4,20 +4,20 @@ import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { useDispatch, useStore } from "@/lib/store";
+import { useDispatch, useStoreSelector } from "@/lib/store";
 import { withDuoSettingsDefaults } from "@/lib/defaults";
 import { saveSettingsDraft, setupCompletionSettings } from "@/lib/settings-service";
 import { remapErrorMessage, setUsbMediaRemapEnabled } from "@/lib/usb-media-remap-controller";
 import type { DuoSettings } from "@/types/duo";
 
 export default function Setup() {
-  const store = useStore();
+  const settings = useStoreSelector((s) => s.settings);
   const dispatch = useDispatch();
   const { setTheme } = useTheme();
 
   const initial = useMemo<DuoSettings>(
-    () => withDuoSettingsDefaults(store.settings),
-    [store.settings],
+    () => withDuoSettingsDefaults(settings),
+    [settings],
   );
 
   const [local, setLocal] = useState<DuoSettings>(initial);

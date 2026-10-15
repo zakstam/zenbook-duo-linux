@@ -7,7 +7,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { refreshSettings, useDispatch, useStore } from "@/lib/store";
+import { refreshSettings, useDispatch, useStoreSelector } from "@/lib/store";
 import { settingsApi } from "@/lib/tauri-adapters";
 import { normalizeThemePreference, resolveThemeForPreference } from "@/lib/theme";
 import type { ThemePreference } from "@/types/duo";
@@ -27,25 +27,26 @@ const themeOptions: Array<{
 const SEGMENT_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 
 export default function ThemeToggle() {
-  const store = useStore();
+  const loading = useStoreSelector((s) => s.loading);
+  const settings = useStoreSelector((s) => s.settings);
   const dispatch = useDispatch();
   const { setTheme } = useTheme();
   const [savingTheme, setSavingTheme] = useState<ThemePreference | null>(null);
-  const currentTheme = normalizeThemePreference(store.settings.theme);
+  const currentTheme = normalizeThemePreference(settings.theme);
   const currentIndex = themeOptions.findIndex((o) => o.value === currentTheme);
   const currentLabel =
     themeOptions.find((o) => o.value === currentTheme)?.label ?? "System";
-  const busy = savingTheme !== null || store.loading;
+  const busy = savingTheme !== null || loading;
 
   const handleSelect = async (theme: ThemePreference) => {
-    if (savingTheme || store.loading || theme === currentTheme) return;
+    if (savingTheme || loading || theme === currentTheme) return;
 
     const previousTheme = currentTheme;
     setSavingTheme(theme);
 
     try {
       setTheme(await resolveThemeForPreference(theme));
-      await settingsApi.saveSettings({ ...store.settings, theme });
+      await settingsApi.saveSettings({ ...settings, theme });
       await refreshSettings(dispatch);
     } catch (err) {
       console.error("Failed to save theme preference:", err);

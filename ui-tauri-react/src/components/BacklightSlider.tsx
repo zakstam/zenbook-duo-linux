@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { controlsApi } from "@/lib/tauri-adapters";
-import { useStore, useDispatch } from "@/lib/store";
+import { useStoreSelector, useDispatch } from "@/lib/store";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 
@@ -12,13 +12,13 @@ const levels = [
 ];
 
 export default function BacklightSlider() {
-  const store = useStore();
+  const status = useStoreSelector((s) => s.status);
   const dispatch = useDispatch();
   const [pending, setPending] = useState(false);
   const [localLevel, setLocalLevel] = useState<number | null>(null);
   const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const displayLevel = localLevel ?? store.status.backlightLevel;
+  const displayLevel = localLevel ?? status.backlightLevel;
 
   const handleChange = async (value: number[]) => {
     const level = value[0];
@@ -32,7 +32,7 @@ export default function BacklightSlider() {
       await controlsApi.setBacklight(level);
       dispatch({
         type: "SET_STATUS",
-        payload: { ...store.status, backlightLevel: level },
+        payload: { ...status, backlightLevel: level },
       });
     } catch (err) {
       console.error("Failed to set backlight:", err);

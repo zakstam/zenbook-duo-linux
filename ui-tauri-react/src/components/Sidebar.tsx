@@ -1,5 +1,6 @@
+import { memo } from "react";
 import type { Page } from "@/App";
-import { useStore } from "@/lib/store";
+import { useStoreSelector } from "@/lib/store";
 import ThemeToggle from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import { APP_VERSION, formatVersion } from "@/lib/version";
@@ -31,8 +32,8 @@ interface SidebarProps {
   onNavigate: (page: Page) => void;
 }
 
-export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
-  const { versionInfo } = useStore();
+function Sidebar({ currentPage, onNavigate }: SidebarProps) {
+  const versionInfo = useStoreSelector((s) => s.versionInfo);
   const appVersion = formatVersion(versionInfo.appVersion || APP_VERSION);
   const serviceVersion = versionInfo.daemonVersion
     ? formatVersion(versionInfo.daemonVersion)
@@ -108,3 +109,5 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
     </nav>
   );
 }
+
+export default memo(Sidebar);

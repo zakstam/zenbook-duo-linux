@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useStore, useDispatch, refreshLogs, clearLogs } from "@/lib/store";
+import { useStoreSelector, useDispatch, refreshLogs, clearLogs } from "@/lib/store";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -19,7 +19,7 @@ const logLevelStyles = {
 } as const;
 
 export default function Logs() {
-  const store = useStore();
+  const logs = useStoreSelector((s) => s.logs);
   const dispatch = useDispatch();
   const [filter, setFilter] = useState("");
   const [copied, setCopied] = useState(false);
@@ -36,9 +36,9 @@ export default function Logs() {
 
   const filteredLogs = useMemo(() => {
     const f = filter.toLowerCase();
-    if (!f) return store.logs;
-    return store.logs.filter((line) => line.toLowerCase().includes(f));
-  }, [filter, store.logs]);
+    if (!f) return logs;
+    return logs.filter((line) => line.toLowerCase().includes(f));
+  }, [filter, logs]);
 
   return (
     <div>
@@ -57,7 +57,7 @@ export default function Logs() {
             {copied ? <IconCheck className="size-3.5" stroke={1.5} /> : <IconCopy className="size-3.5" stroke={1.5} />}
             {copied ? "Copied" : "Copy"}
           </Button>
-          <Button variant="outline" size="sm" onClick={handleClear} className="gap-1.5" disabled={store.logs.length === 0}>
+          <Button variant="outline" size="sm" onClick={handleClear} className="gap-1.5" disabled={logs.length === 0}>
             <IconTrash className="size-3.5" stroke={1.5} />
             Clear
           </Button>

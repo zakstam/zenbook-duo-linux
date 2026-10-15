@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { useStore, useDispatch, refreshEvents } from "@/lib/store";
+import { useStoreSelector, useDispatch, refreshEvents } from "@/lib/store";
 import EventStream from "@/components/EventStream";
 import type { EventCategory, EventSeverity } from "@/types/duo";
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,7 @@ const severityStyles: Record<EventSeverity, { active: string; inactive: string }
 };
 
 export default function EventMonitor() {
-  const store = useStore();
+  const events = useStoreSelector((s) => s.events);
   const dispatch = useDispatch();
   const [categoryFilter, setCategoryFilter] = useState<Set<EventCategory>>(
     () => new Set(ALL_CATEGORIES)
@@ -65,14 +65,14 @@ export default function EventMonitor() {
 
   const filteredEvents = useMemo(
     () =>
-      store.events.filter(
+      events.filter(
         (e) => categoryFilter.has(e.category) && severityFilter.has(e.severity)
       ),
-    [store.events, categoryFilter, severityFilter]
+    [events, categoryFilter, severityFilter]
   );
 
   const handleExport = () => {
-    const data = JSON.stringify(store.events, null, 2);
+    const data = JSON.stringify(events, null, 2);
     const blob = new Blob([data], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

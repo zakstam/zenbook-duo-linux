@@ -1,8 +1,9 @@
 import {
   createContext,
   useContext,
-  useReducer,
   useEffect,
+  useState,
+  useSyncExternalStore,
   type ReactNode,
   type Dispatch,
 } from "react";
@@ -25,6 +26,7 @@ export {
   refreshVersionInfo,
 } from "@/lib/store-effects";
 import { APP_VERSION } from "@/lib/version";
+import { shallowEqual } from "@/lib/utils";
 
 export interface AppState {
   status: DuoStatus;
@@ -64,6 +66,9 @@ const initialState: AppState = {
 function reducer(state: AppState, action: StoreAction): AppState {
   switch (action.type) {
     case "SET_STATUS":
+      // The backend sends a fresh object on every refresh; keep the old one
+      // when nothing changed so readers of status do not re-render.
+      if (shallowEqual(state.status, action.payload)) return state;
       return { ...state, status: action.payload };
     case "SET_SETTINGS":
       return { ...state, settings: action.payload };
@@ -74,33 +79,57 @@ function reducer(state: AppState, action: StoreAction): AppState {
     case "SET_LOGS":
       return { ...state, logs: action.payload };
     case "SET_VERSION_INFO":
+      if (shallowEqual(state.versionInfo, action.payload)) return state;
       return { ...state, versionInfo: action.payload };
     case "SET_LOADING":
       return { ...state, loading: action.payload };
   }
 }
 
-const StoreContext = createContext<AppState>(initialState);
-const DispatchContext = createContext<Dispatch<StoreAction>>(() => {});
-
-export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState);
-
-  return (
-    <StoreContext.Provider value={state}>
-      <DispatchContext.Provider value={dispatch}>
-        {children}
-      </DispatchContext.Provider>
-    </StoreContext.Provider>
-  );
+interface StoreApi {
+  getState: () => AppState;
+  subscribe: (listener: () => void) => () => void;
+  dispatch: Dispatch<StoreAction>;
 }
 
-export function useStore() {
-  return useContext(StoreContext);
+function createStoreApi(): StoreApi {
+  let state = initialState;
+  const listeners = new Set<() => void>();
+  return {
+    getState: () => state,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    dispatch(action) {
+      const next = reducer(state, action);
+      if (next === state) return;
+      state = next;
+      listeners.forEach((listener) => listener());
+    },
+  };
+}
+
+const StoreApiContext = createContext<StoreApi>(createStoreApi());
+
+export function StoreProvider({ children }: { children: ReactNode }) {
+  const [api] = useState(createStoreApi);
+
+  return <StoreApiContext.Provider value={api}>{children}</StoreApiContext.Provider>;
+}
+
+/**
+ * Read one piece of the store. The component re-renders only when the
+ * selected value changes (by identity), so select the slice or field you
+ * show, never a freshly built object.
+ */
+export function useStoreSelector<T>(selector: (state: AppState) => T): T {
+  const api = useContext(StoreApiContext);
+  return useSyncExternalStore(api.subscribe, () => selector(api.getState()));
 }
 
 export function useDispatch() {
-  return useContext(DispatchContext);
+  return useContext(StoreApiContext).dispatch;
 }
 
 export function useStoreInit() {

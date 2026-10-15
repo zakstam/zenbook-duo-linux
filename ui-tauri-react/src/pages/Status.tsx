@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useStore } from "@/lib/store";
+import { useStoreSelector } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { formatVersion } from "@/lib/version";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +27,8 @@ const cardAccents = {
 } as const;
 
 export default function Status() {
-  const store = useStore();
+  const status = useStoreSelector((s) => s.status);
+  const versionInfo = useStoreSelector((s) => s.versionInfo);
   const {
     isUsb,
     remapBusy,
@@ -39,8 +40,7 @@ export default function Status() {
     togglePause,
   } = useUsbMediaRemap();
 
-  const keyboardConnected = store.status.connectionType !== "none";
-  const versionInfo = store.versionInfo;
+  const keyboardConnected = status.connectionType !== "none";
   const appVersion = formatVersion(versionInfo.appVersion);
   const daemonVersion = versionInfo.daemonVersion
     ? formatVersion(versionInfo.daemonVersion)
@@ -53,12 +53,12 @@ export default function Status() {
 
   const brightnessPercent = useMemo(
     () =>
-      store.status.maxBrightness > 0
+      status.maxBrightness > 0
         ? Math.round(
-            (store.status.displayBrightness / store.status.maxBrightness) * 100
+            (status.displayBrightness / status.maxBrightness) * 100
           )
         : 0,
-    [store.status.displayBrightness, store.status.maxBrightness]
+    [status.displayBrightness, status.maxBrightness]
   );
 
   return (
@@ -88,12 +88,12 @@ export default function Status() {
             </StatusRow>
             <StatusRow label="Connection">
               <div className="flex items-center gap-1.5">
-                {store.status.connectionType === "bluetooth" && <IconBluetooth className="size-3 text-blue-500" stroke={1.5} />}
-                {store.status.connectionType === "usb" && <IconPlugConnected className="size-3 text-teal-500" stroke={1.5} />}
+                {status.connectionType === "bluetooth" && <IconBluetooth className="size-3 text-blue-500" stroke={1.5} />}
+                {status.connectionType === "usb" && <IconPlugConnected className="size-3 text-teal-500" stroke={1.5} />}
                 <span className="font-mono text-xs">
-                  {store.status.connectionType === "none"
+                  {status.connectionType === "none"
                     ? "Disconnected"
-                    : store.status.connectionType.toUpperCase()}
+                    : status.connectionType.toUpperCase()}
                 </span>
               </div>
             </StatusRow>
@@ -105,7 +105,7 @@ export default function Status() {
                       key={level}
                       className={cn(
                         "h-2.5 w-[14px] rounded-[3px] transition-all duration-300",
-                        level < store.status.backlightLevel
+                        level < status.backlightLevel
                           ? "bg-teal-500 shadow-sm shadow-teal-500/30"
                           : "bg-muted"
                       )}
@@ -113,7 +113,7 @@ export default function Status() {
                   ))}
                 </div>
                 <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-                  {store.status.backlightLevel}/3
+                  {status.backlightLevel}/3
                 </span>
               </div>
             </StatusRow>
@@ -122,7 +122,7 @@ export default function Status() {
                 <span className="font-mono text-[11px] text-muted-foreground">
                   {statusLabel}
                 </span>
-                {store.status.connectionType === "bluetooth" && (
+                {status.connectionType === "bluetooth" && (
                   <Badge className="border-amber-500/20 bg-amber-500/10 text-amber-700 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200">
                     USB only
                   </Badge>
@@ -178,7 +178,7 @@ export default function Status() {
             </div>
             <h3 className="text-[13px] font-semibold text-foreground">Display</h3>
             <span className="ml-auto rounded-md bg-blue-500/10 px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-blue-500">
-              {store.status.monitorCount}
+              {status.monitorCount}
             </span>
           </div>
           <div className="space-y-3">
@@ -197,7 +197,7 @@ export default function Status() {
             </StatusRow>
             <StatusRow label="Orientation">
               <span className="rounded-md bg-muted px-2 py-0.5 font-mono text-[11px] font-medium capitalize">
-                {store.status.orientation}
+                {status.orientation}
               </span>
             </StatusRow>
           </div>
@@ -214,23 +214,23 @@ export default function Status() {
           <div className="space-y-3">
             <StatusRow label="Wi-Fi">
               <div className="flex items-center gap-2">
-                <StatusDot active={store.status.wifiEnabled} />
+                <StatusDot active={status.wifiEnabled} />
                 <span className={cn(
                   "font-mono text-xs font-medium",
-                  store.status.wifiEnabled ? "text-emerald-500" : "text-muted-foreground"
+                  status.wifiEnabled ? "text-emerald-500" : "text-muted-foreground"
                 )}>
-                  {store.status.wifiEnabled ? "Enabled" : "Disabled"}
+                  {status.wifiEnabled ? "Enabled" : "Disabled"}
                 </span>
               </div>
             </StatusRow>
             <StatusRow label="Bluetooth">
               <div className="flex items-center gap-2">
-                <StatusDot active={store.status.bluetoothEnabled} />
+                <StatusDot active={status.bluetoothEnabled} />
                 <span className={cn(
                   "font-mono text-xs font-medium",
-                  store.status.bluetoothEnabled ? "text-emerald-500" : "text-muted-foreground"
+                  status.bluetoothEnabled ? "text-emerald-500" : "text-muted-foreground"
                 )}>
-                  {store.status.bluetoothEnabled ? "Enabled" : "Disabled"}
+                  {status.bluetoothEnabled ? "Enabled" : "Disabled"}
                 </span>
               </div>
             </StatusRow>
@@ -249,16 +249,16 @@ export default function Status() {
             <StatusRow label="Rust runtime">
               <div className="flex items-center gap-2">
                 <StatusDot
-                  active={store.status.serviceActive}
-                  error={!store.status.serviceActive}
+                  active={status.serviceActive}
+                  error={!status.serviceActive}
                 />
                 <span className={cn(
                   "rounded-md px-2 py-0.5 font-mono text-[11px] font-semibold",
-                  store.status.serviceActive
+                  status.serviceActive
                     ? "bg-emerald-500/10 text-emerald-500"
                     : "bg-destructive/10 text-destructive"
                 )}>
-                  {store.status.serviceActive ? "Active" : "Inactive"}
+                  {status.serviceActive ? "Active" : "Inactive"}
                 </span>
               </div>
             </StatusRow>

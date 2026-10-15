@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { refreshSettings, useDispatch, useStore } from "@/lib/store";
+import { refreshSettings, useDispatch, useStoreSelector } from "@/lib/store";
 import { settingsApi } from "@/lib/tauri-adapters";
+import { shallowEqual } from "@/lib/utils";
 import {
   defaultUsbMediaRemapStatus,
   readUsbMediaRemapStatus,
@@ -18,16 +19,17 @@ interface UseUsbMediaRemapOptions {
 }
 
 export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
-  const store = useStore();
+  const connectionType = useStoreSelector((s) => s.status.connectionType);
+  const storeSettings = useStoreSelector((s) => s.settings);
   const dispatch = useDispatch();
-  const isUsb = store.status.connectionType === "usb";
+  const isUsb = connectionType === "usb";
   const [remapBusy, setRemapBusy] = useState(false);
   const [remapStatus, setRemapStatus] =
     useState(defaultUsbMediaRemapStatus);
   const [remapDesired, setRemapDesired] = useState<boolean | null>(null);
   const remapOpIdRef = useRef(0);
   const remapDesiredRef = useRef<boolean | null>(null);
-  const settings = options.settings ?? store.settings;
+  const settings = options.settings ?? storeSettings;
 
   useEffect(() => {
     remapDesiredRef.current = remapDesired;
@@ -36,7 +38,7 @@ export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
   const refreshRemapStatus = async () => {
     try {
       const status = await readUsbMediaRemapStatus();
-      setRemapStatus(status);
+      setRemapStatus((current) => (shallowEqual(current, status) ? current : status));
       setRemapDesired((desired) =>
         desired !== null && status.running === desired ? null : desired
       );
@@ -115,7 +117,7 @@ export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [store.status.connectionType]);
+  }, [connectionType]);
 
   const statusLabel = usbMediaRemapStatusLabel(remapStatus, remapDesired);
 

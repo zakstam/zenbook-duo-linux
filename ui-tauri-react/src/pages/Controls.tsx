@@ -4,7 +4,7 @@ import OrientationButtons from "@/components/OrientationButtons";
 import { controlsApi } from "@/lib/tauri-adapters";
 import { useTouchscreens } from "@/hooks/use-touchscreens";
 import { Switch } from "@/components/ui/switch";
-import { refreshStatus, useDispatch, useStore } from "@/lib/store";
+import { refreshStatus, useDispatch, useStoreSelector } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -19,7 +19,7 @@ import {
 
 export default function Controls() {
   const dispatch = useDispatch();
-  const store = useStore();
+  const status = useStoreSelector((s) => s.status);
   const [restarting, setRestarting] = useState(false);
   const [restarted, setRestarted] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
@@ -85,7 +85,7 @@ export default function Controls() {
                 Screen Orientation
               </h3>
               <p className="text-[11px] text-muted-foreground">
-                Current: <span className="font-mono capitalize">{store.status.orientation}</span>
+                Current: <span className="font-mono capitalize">{status.orientation}</span>
               </p>
             </div>
           </div>
@@ -97,7 +97,7 @@ export default function Controls() {
             <div className="flex items-center gap-2.5">
               <div className={cn(
                 "flex size-7 items-center justify-center rounded-lg",
-                store.status.serviceActive
+                status.serviceActive
                   ? "bg-emerald-500/12 text-emerald-500 dark:bg-emerald-400/10 dark:text-emerald-400"
                   : "bg-destructive/12 text-destructive"
               )}>
@@ -111,9 +111,9 @@ export default function Controls() {
                   Rust runtime is{" "}
                   <span className={cn(
                     "font-semibold",
-                    store.status.serviceActive ? "text-emerald-500" : "text-destructive"
+                    status.serviceActive ? "text-emerald-500" : "text-destructive"
                   )}>
-                    {store.status.serviceActive ? "running" : "stopped"}
+                    {status.serviceActive ? "running" : "stopped"}
                   </span>
                 </p>
               </div>

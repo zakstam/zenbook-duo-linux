@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { displayApi } from "@/lib/tauri-adapters";
-import { useStore, useDispatch, refreshStatus } from "@/lib/store";
+import { useStoreSelector, useDispatch, refreshStatus } from "@/lib/store";
 import type { Orientation } from "@/types/duo";
 import { cn } from "@/lib/utils";
 import {
@@ -18,7 +18,7 @@ const orientations: { id: Orientation; label: string; icon: React.ComponentType<
 ];
 
 export default function OrientationButtons() {
-  const store = useStore();
+  const status = useStoreSelector((s) => s.status);
   const dispatch = useDispatch();
   const [pending, setPending] = useState(false);
 
@@ -38,7 +38,7 @@ export default function OrientationButtons() {
     <div className="grid grid-cols-4 gap-2">
       {orientations.map((o) => {
         const Icon = o.icon;
-        const isActive = store.status.orientation === o.id;
+        const isActive = status.orientation === o.id;
         return (
           <button
             key={o.id}

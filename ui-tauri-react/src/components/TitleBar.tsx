@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   IconMinus,
   IconSquare,
@@ -6,7 +7,7 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { cn } from "@/lib/utils";
-import { useStore } from "@/lib/store";
+import { useStoreSelector } from "@/lib/store";
 
 type TitleBarButtonProps = {
   label: string;
@@ -69,8 +70,8 @@ function TitleBarButton({
   );
 }
 
-export default function TitleBar() {
-  const { versionInfo } = useStore();
+function TitleBar() {
+  const versionInfo = useStoreSelector((s) => s.versionInfo);
   const linkUp = versionInfo.serviceAvailable;
 
   return (
@@ -152,3 +153,5 @@ export default function TitleBar() {
     </header>
   );
 }
+
+export default memo(TitleBar);
