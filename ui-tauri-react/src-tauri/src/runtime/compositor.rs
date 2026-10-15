@@ -140,6 +140,11 @@ pub fn kde_enabled_output_count_from_value(value: &Value) -> Result<usize, Strin
         .count())
 }
 
+/// An output's logical size, rounded up. Niri reports the logical width and
+/// height rounded to whole pixels, but places outputs with the fractional size:
+/// at scale 1.66 the Duo panel is about 1085.4 tall yet reported as 1085, so a
+/// screen placed at y=1085 overlaps it and niri moves it to the right. Rounding
+/// the mode size divided by the scale up keeps a neighbour clear of it.
 pub fn niri_output_logical_size_from_value(
     value: &Value,
     name: &str,
@@ -152,11 +157,45 @@ pub fn niri_output_logical_size_from_value(
                 .ok_or_else(|| "Missing niri logical size".to_string())?;
             let width = logical.get("width").and_then(|v| v.as_i64()).unwrap_or(0);
             let height = logical.get("height").and_then(|v| v.as_i64()).unwrap_or(0);
-            return Ok((width, height));
+            return Ok(niri_exact_logical_size(&output).unwrap_or((width, height)));
         }
     }
 
     Err(format!("Niri output {name} not found"))
+}
+
+fn niri_exact_logical_size(output: &Value) -> Option<(i64, i64)> {
+    let logical = output.get("logical")?;
+    let scale = logical.get("scale").and_then(|v| v.as_f64())?;
+    if scale <= 0.0 {
+        return None;
+    }
+    let mode = match output.get("current_mode")? {
+        Value::Object(_) => output.get("current_mode")?.clone(),
+        index => output
+            .get("modes")?
+            .as_array()?
+            .get(index.as_u64()? as usize)?
+            .clone(),
+    };
+    let width = mode.get("width").and_then(|v| v.as_f64())?;
+    let height = mode.get("height").and_then(|v| v.as_f64())?;
+    let transform = logical
+        .get("transform")
+        .or_else(|| output.get("transform"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let rotated = transform.contains("90") || transform.contains("270");
+    let (width, height) = if rotated {
+        (height, width)
+    } else {
+        (width, height)
+    };
+    Some((
+        (width / scale).ceil() as i64,
+        (height / scale).ceil() as i64,
+    ))
 }
 
 pub fn niri_enabled_output_count_from_value(value: &Value) -> Result<usize, String> {
@@ -226,5 +265,35 @@ mod tests {
             Ok((1440, 900))
         );
         assert_eq!(niri_enabled_output_count_from_value(&array_value), Ok(1));
+    }
+
+    // Niri on a UX8406MA at scale 1.66 reported the top panel as 1736x1085 and,
+    // after a rotation placed the bottom panel at y=1085, moved it to x=1737.
+    #[test]
+    fn niri_logical_size_rounds_up_so_a_stacked_screen_does_not_overlap() {
+        let value = serde_json::json!([{
+            "name": "eDP-1",
+            "current_mode": 0,
+            "modes": [{ "width": 2880, "height": 1800, "refresh_rate": 120000 }],
+            "logical": { "x": 0, "y": 0, "width": 1736, "height": 1085,
+                          "scale": 1.6583333333333334, "transform": "Normal" }
+        }]);
+        assert_eq!(
+            niri_output_logical_size_from_value(&value, "eDP-1"),
+            Ok((1737, 1086))
+        );
+    }
+
+    #[test]
+    fn niri_logical_size_follows_a_quarter_turn() {
+        let value = serde_json::json!([{
+            "name": "eDP-1",
+            "current_mode": { "width": 2880, "height": 1800 },
+            "logical": { "width": 1085, "height": 1736, "scale": 1.6583333333333334, "transform": "90" }
+        }]);
+        assert_eq!(
+            niri_output_logical_size_from_value(&value, "eDP-1"),
+            Ok((1086, 1737))
+        );
     }
 }
