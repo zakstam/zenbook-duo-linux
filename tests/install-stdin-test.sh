@@ -163,6 +163,31 @@ if ! grep -q 'run_system_systemctl daemon-reload' "${ROOT_DIR}/install-rust-runt
   exit 1
 fi
 
+# A failing service must not be reported as "systemd manager is unavailable".
+systemctl_fns="$(sed -n '/^systemctl_output_means_manager_unreachable() {/,/^}/p; /^emit_systemctl_failure() {/,/^}/p' "${ROOT_DIR}/install-rust-runtime.sh")"
+job_failure_message="$(bash -c "${systemctl_fns}"'
+emit_systemctl_failure "The system" "sudo systemctl --system restart x.service" "Job for x.service failed because the control process exited with error code."' 2>&1)"
+if printf '%s' "${job_failure_message}" | grep -q 'manager is unavailable' \
+  || ! printf '%s' "${job_failure_message}" | grep -q 'command failed: sudo systemctl --system restart x.service'; then
+  echo "FAIL: a failing service restart should say the command failed, not that systemd is unavailable" >&2
+  printf '%s\n' "${job_failure_message}" >&2
+  exit 1
+fi
+bus_failure_message="$(bash -c "${systemctl_fns}"'
+emit_systemctl_failure "The system" "sudo systemctl --system daemon-reload" "Failed to connect to bus: No such file or directory"' 2>&1)"
+if ! printf '%s' "${bus_failure_message}" | grep -q 'manager is unavailable'; then
+  echo "FAIL: an unreachable systemd bus should still be reported as the manager being unavailable" >&2
+  exit 1
+fi
+
+# A lifecycle restart failure must not stop the session agent from being restarted.
+lifecycle_line="$(grep -n 'restart_system_service_reporting "${LIFECYCLE_SERVICE_NAME}" || LIFECYCLE_RESTART_FAILED=1' "${ROOT_DIR}/install-rust-runtime.sh" | cut -d: -f1)"
+agent_line="$(grep -n 'run_user_systemctl_checked restart "${USER_SERVICE_NAME}"' "${ROOT_DIR}/install-rust-runtime.sh" | cut -d: -f1)"
+if [ -z "${lifecycle_line}" ] || [ -z "${agent_line}" ] || [ "${lifecycle_line}" -ge "${agent_line}" ]; then
+  echo "FAIL: runtime installer should restart the session agent even when the lifecycle service fails" >&2
+  exit 1
+fi
+
 if ! grep -q 'ensure_user_manager_available' "${ROOT_DIR}/install-rust-runtime.sh"; then
   echo "FAIL: runtime installer should preflight the target user service manager" >&2
   exit 1

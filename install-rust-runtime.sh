@@ -42,12 +42,25 @@ die() {
   exit 1
 }
 
+systemctl_output_means_manager_unreachable() {
+  case "$1" in
+    *"Failed to connect to bus"*|*"System has not been booted with systemd"*|*"Failed to connect to system scope bus"*|*"Failed to connect to user scope bus"*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 emit_systemctl_failure() {
   local manager="$1"
   local command_display="$2"
   local output="${3:-}"
 
-  echo "ERROR: ${manager} systemd manager is unavailable; cannot run: ${command_display}" >&2
+  if systemctl_output_means_manager_unreachable "${output}"; then
+    echo "ERROR: ${manager} systemd manager is unavailable; cannot run: ${command_display}" >&2
+  else
+    echo "ERROR: command failed: ${command_display}" >&2
+  fi
   if [ -n "${output}" ]; then
     printf '%s\n' "${output}" | sed 's/^/  systemctl: /' >&2
   fi
@@ -57,12 +70,32 @@ run_system_systemctl() {
   local output=""
   if ! output="$(sudo systemctl --system "$@" 2>&1)"; then
     emit_systemctl_failure "The system" "sudo systemctl --system $*" "${output}"
-    echo "Make sure this machine is booted with systemd and that 'sudo systemctl status' works, then rerun ./install.sh." >&2
+    if systemctl_output_means_manager_unreachable "${output}"; then
+      echo "Make sure this machine is booted with systemd and that 'sudo systemctl status' works, then rerun ./install.sh." >&2
+    fi
     exit 1
   fi
   if [ -n "${output}" ]; then
     printf '%s\n' "${output}"
   fi
+}
+
+# Restart a system service. On failure, print what the service itself logged and
+# return non-zero instead of exiting, so the installer still restarts the session agent.
+restart_system_service_reporting() {
+  local unit="$1"
+  local output=""
+  if output="$(sudo systemctl --system restart "${unit}" 2>&1)"; then
+    return 0
+  fi
+  emit_systemctl_failure "The system" "sudo systemctl --system restart ${unit}" "${output}"
+  if systemctl_output_means_manager_unreachable "${output}"; then
+    echo "Make sure this machine is booted with systemd and that 'sudo systemctl status' works, then rerun ./install.sh." >&2
+    exit 1
+  fi
+  echo "${unit} failed to start. Its last log lines:" >&2
+  sudo journalctl --system -u "${unit}" -n 15 --no-pager -o cat 2>&1 | sed 's/^/  journal: /' >&2 || true
+  return 1
 }
 
 run_user_systemctl() {
@@ -260,7 +293,8 @@ run_system_systemctl daemon-reload
 run_system_systemctl enable "${SYSTEM_SERVICE_NAME}"
 run_system_systemctl enable "${LIFECYCLE_SERVICE_NAME}"
 run_system_systemctl restart "${SYSTEM_SERVICE_NAME}"
-run_system_systemctl restart "${LIFECYCLE_SERVICE_NAME}"
+LIFECYCLE_RESTART_FAILED=0
+restart_system_service_reporting "${LIFECYCLE_SERVICE_NAME}" || LIFECYCLE_RESTART_FAILED=1
 
 ensure_user_manager_available
 run_user_systemctl_checked daemon-reload
@@ -269,5 +303,10 @@ run_user_systemctl disable zenbook-duo-user.service >/dev/null 2>&1 || true
 run_user_systemctl stop zenbook-duo-user.service >/dev/null 2>&1 || true
 run_user_systemctl_checked enable "${USER_SERVICE_NAME}"
 run_user_systemctl_checked restart "${USER_SERVICE_NAME}"
+
+if [ "${LIFECYCLE_RESTART_FAILED}" = "1" ]; then
+  echo "ERROR: the daemon and session agent now run the new version, but ${LIFECYCLE_SERVICE_NAME} failed (see its log lines above)." >&2
+  exit 1
+fi
 
 echo "Rust runtime services installed."

@@ -48,12 +48,16 @@ fn parse_phase(raw: &str) -> Result<LifecyclePhase, String> {
 }
 
 fn fallback_lifecycle(phase: &LifecyclePhase) -> Result<(), String> {
-    match phase {
-        LifecyclePhase::Pre | LifecyclePhase::Hibernate | LifecyclePhase::Shutdown => {
-            hid::set_backlight_if_keyboard_present(0)
-        }
+    // The keyboard backlight is best effort: an unreachable keyboard is logged as a
+    // warning and never fails the phase (or `./install.sh`, which restarts this unit).
+    let level = match phase {
+        LifecyclePhase::Pre | LifecyclePhase::Hibernate | LifecyclePhase::Shutdown => 0,
         LifecyclePhase::Post | LifecyclePhase::Thaw | LifecyclePhase::Boot => {
-            hid::set_backlight_if_keyboard_present(sysfs::read_backlight_level())
+            sysfs::read_backlight_level()
         }
+    };
+    if let Some(warning) = hid::set_backlight_if_keyboard_present(level) {
+        eprintln!("warning: {warning}");
     }
+    Ok(())
 }

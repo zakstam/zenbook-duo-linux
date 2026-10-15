@@ -316,7 +316,9 @@ async fn handle_lifecycle(
                     .ok();
                 }
             }
-            hardware::hid::set_backlight_if_keyboard_present(0)?;
+            if let Some(warning) = hardware::hid::set_backlight_if_keyboard_present(0) {
+                logger::append_line(format!("rust-daemon: lifecycle {:?}: {warning}", phase)).ok();
+            }
 
             let mut guard = state.write().await;
             guard.push_recent_event(HardwareEvent::info(
@@ -338,7 +340,9 @@ async fn handle_lifecycle(
                 let guard = state.read().await;
                 (guard.status.backlight_level, guard.settings.default_scale)
             };
-            hardware::hid::set_backlight_if_keyboard_present(restore_level)?;
+            if let Some(warning) = hardware::hid::set_backlight_if_keyboard_present(restore_level) {
+                logger::append_line(format!("rust-daemon: lifecycle {:?}: {warning}", phase)).ok();
+            }
 
             let refreshed = crate::runtime::probe::current_status();
             let attached = refreshed.keyboard_attached;

@@ -154,16 +154,19 @@ pub fn set_backlight(level: u8) -> Result<(), String> {
     ))
 }
 
-/// Apply a lifecycle backlight restore only when the detachable keyboard is present.
-/// A missing keyboard is a normal, recoverable dock state; failures remain visible
-/// when USB or Bluetooth detection says the keyboard is attached.
-pub fn set_backlight_if_keyboard_present(level: u8) -> Result<(), String> {
+/// Apply the keyboard backlight for a lifecycle phase, best effort.
+///
+/// The backlight is cosmetic, so it never fails a lifecycle phase: a keyboard that
+/// is absent, asleep over Bluetooth (HID ioctl EIO) or otherwise unreachable must
+/// not stop boot, resume or `./install.sh`. A missing keyboard returns `None`
+/// quietly; any other failure is logged and returned so callers can record it.
+pub fn set_backlight_if_keyboard_present(level: u8) -> Option<String> {
     set_backlight_for_lifecycle(crate::hardware::sysfs::detect_connection_type, || {
         set_backlight(level)
     })
 }
 
-fn set_backlight_for_lifecycle<D, F>(mut detect: D, set: F) -> Result<(), String>
+fn set_backlight_for_lifecycle<D, F>(mut detect: D, set: F) -> Option<String>
 where
     D: FnMut() -> ConnectionType,
     F: FnOnce() -> Result<(), String>,
@@ -172,18 +175,24 @@ where
         log::warn!(
             "keyboard backlight unavailable during lifecycle: detachable keyboard is absent"
         );
-        return Ok(());
+        return None;
     }
 
     match set() {
-        Ok(()) => Ok(()),
+        Ok(()) => None,
         Err(err) if detect() == ConnectionType::None => {
             log::warn!(
                 "keyboard backlight became unavailable during lifecycle; continuing because the detachable keyboard is absent: {err}"
             );
-            Ok(())
+            None
         }
-        Err(err) => Err(err),
+        Err(err) => {
+            let warning = format!(
+                "keyboard backlight not applied during lifecycle; continuing: {err}"
+            );
+            log::warn!("{warning}");
+            Some(warning)
+        }
     }
 }
 
@@ -203,7 +212,7 @@ mod tests {
             },
         );
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, None);
         assert!(called.get());
     }
 
@@ -218,7 +227,7 @@ mod tests {
             },
         );
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, None);
         assert!(called.get());
     }
 
@@ -233,7 +242,7 @@ mod tests {
             },
         );
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, None);
         assert!(!called.get());
     }
 
@@ -253,7 +262,7 @@ mod tests {
             || Err("USB device disappeared".into()),
         );
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, None);
         assert_eq!(detections.get(), 2);
     }
 
@@ -264,19 +273,31 @@ mod tests {
             || Err("backlight unavailable".into()),
         );
 
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, None);
     }
 
     #[test]
-    fn unrelated_fatal_lifecycle_error_is_not_suppressed() {
+    fn attached_keyboard_failure_is_reported_but_never_fatal() {
         let result = set_backlight_for_lifecycle(
             || ConnectionType::Usb,
             || Err("permission denied while writing attached keyboard".into()),
         );
 
-        assert_eq!(
-            result,
-            Err("permission denied while writing attached keyboard".into())
+        let warning = result.expect("failure on an attached keyboard should be reported");
+        assert!(warning.contains("permission denied while writing attached keyboard"));
+    }
+
+    #[test]
+    fn unreachable_bluetooth_backlight_does_not_fail_lifecycle() {
+        // Duo 2026-10-15: keyboard detached, paired over Bluetooth but asleep, so
+        // USB finds nothing and HIDIOCSFEATURE returns EIO. Boot must still succeed.
+        let err = "Failed to set keyboard backlight natively (usb: Zenbook Duo keyboard not found via USB; bt: ioctl HIDIOCSFEATURE failed: Input/output error (os error 5))";
+        let result = set_backlight_for_lifecycle(
+            || ConnectionType::Bluetooth,
+            || Err(err.into()),
         );
+
+        let warning = result.expect("unreachable backlight should be reported");
+        assert!(warning.contains("os error 5"));
     }
 }
