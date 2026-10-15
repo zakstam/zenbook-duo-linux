@@ -316,6 +316,68 @@ mod tests {
     }
 
     #[test]
+    fn gnome_parser_reads_every_logical_monitor() {
+        // Real `gdctl show` with both Duo panels on (GNOME 50). Every logical
+        // monitor but the last has its monitor line prefixed with "│".
+        let output = r#"Monitors:
+├──Monitor eDP-1 (Built-in display)
+│  ├──Vendor: SDC
+│  ├──Product: 0x419d
+│  ├──Serial: 0x00000000
+│  ├──Current mode
+│  │   └──2880x1800@120.000
+│  └──Preferences
+│      └──Backlight:
+│          ├──active ⇒  True
+│          ├──min ⇒  4
+│          ├──max ⇒  400
+│          └──value ⇒  121
+└──Monitor eDP-2 (Built-in display)
+   ├──Vendor: SDC
+   ├──Product: 0x419d
+   ├──Serial: 0x00000000
+   ├──Current mode
+   │   └──2880x1800@120.000
+   └──Preferences
+       └──Backlight:
+           ├──active ⇒  True
+           ├──min ⇒  4
+           ├──max ⇒  400
+           └──value ⇒  121
+
+Logical monitors:
+├──Logical monitor #1
+│  ├──Position: (0, 0)
+│  ├──Scale: 1.6666666269302368
+│  ├──Transform: normal
+│  ├──Primary: yes
+│  └──Monitors: (1)
+│      └──eDP-1 (Built-in display)
+└──Logical monitor #2
+   ├──Position: (0, 1080)
+   ├──Scale: 1.6666666269302368
+   ├──Transform: normal
+   ├──Primary: no
+   └──Monitors: (1)
+       └──eDP-2 (Built-in display)
+"#;
+
+        let layout = gnome::parse_gdctl_output(output).expect("gdctl output should parse");
+        let panels: Vec<(String, f64, i32, bool)> = layout
+            .displays
+            .iter()
+            .map(|d| (d.connector.clone(), d.scale, d.y, d.primary))
+            .collect();
+        assert_eq!(
+            panels,
+            vec![
+                ("eDP-1".to_string(), 1.6666666269302368, 0, true),
+                ("eDP-2".to_string(), 1.6666666269302368, 1080, false),
+            ]
+        );
+    }
+
+    #[test]
     fn parses_gdctl_modes_into_current_and_available_modes() {
         let output = r#"Monitors:
 ├──Monitor eDP-1 (Built-in display)

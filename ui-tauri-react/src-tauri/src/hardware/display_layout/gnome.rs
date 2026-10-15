@@ -207,7 +207,13 @@ pub(super) fn parse_gdctl_output(output: &str) -> Result<DisplayLayout, String> 
             // Monitor list item under this logical monitor.
             // Example: "└──eDP-1 (Built-in display)"
             if line.contains('(') {
-                let token = line.split_whitespace().next().unwrap_or("");
+                // Skip the tree drawing first: every logical monitor but the
+                // last has its monitor lines prefixed with "│".
+                let token = line
+                    .trim_start_matches(|c: char| c.is_whitespace() || "│├└─".contains(c))
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
                 let connector = token
                     .trim()
                     .trim_start_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '-'));
@@ -543,3 +549,4 @@ pub(super) fn set_gnome_orientation(orientation: &Orientation) -> Result<(), Str
 
     run_command("gdctl", &args)
 }
+
