@@ -9,3 +9,7 @@ bindings:
 ---
 
 Sets the detachable keyboard's backlight level (off to 3) from the Controls page slider or the tray menu, writing a HID report over USB when docked or over Bluetooth hidraw when detached. The daemon turns the backlight off before sleep and shutdown, and settings hold a default level.
+
+## Journeys
+
+- Booting, resuming or suspending with the keyboard unreachable no longer fails; the backlight is skipped with a warning in the log. (card 328c0178-7652-479a-82e0-141204f0e032, 2026-10-15)
