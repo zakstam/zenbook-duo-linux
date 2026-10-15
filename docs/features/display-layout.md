@@ -22,3 +22,4 @@ Arranges the two internal screens and any external monitor: the Display Layout p
 - On GNOME at 1.66x scale, removing the keyboard turns the bottom screen on below the top one instead of showing a 'Logical monitors are not adjacent' error. (card ae019f84-475d-448b-8b67-a9c324046b87, 2026-10-04)
 - Each display's scale dropdown lists scales in ascending order, includes 1.75, and shows the display's current scale even when it is not a preset. (card 9d6f1731-d4f1-4114-a4b2-12f24323f3ef, 2026-10-05)
 - On niri, picking a scale like 1.66x and pressing Apply Layout leaves the bottom screen directly under the top one, so the mouse crosses straight down. (card 8ef9898e-1d8f-4320-86e0-84c68a7a3c7e, 2026-10-15)
+- After niri moves the bottom screen beside the top one, the Display Layout page draws it to the right at niri's coordinates, and Apply Layout puts it back underneath. (card e55c3ab8-aaef-4f26-bf26-886889f0f84d, 2026-10-15)
