@@ -8,9 +8,8 @@ fn daemon_display_layout_or_transport_fallback(
     fallback: impl FnOnce() -> Result<DisplayLayout, String>,
 ) -> Result<DisplayLayout, String> {
     match response {
-        Ok(DaemonResponse::DisplayLayout { layout }) => {
-            Ok(display_layout::normalize_display_layout(layout))
-        }
+        // Shown as the compositor has it; apply_display_layout stacks the screens.
+        Ok(DaemonResponse::DisplayLayout { layout }) => Ok(layout),
         Ok(DaemonResponse::Error { message }) => Err(message),
         Ok(other) => Err(format!(
             "Unexpected daemon response while reading display layout: {other:?}"
@@ -93,6 +92,52 @@ mod tests {
             .expect_err("unexpected response should fail")
             .contains("Unexpected daemon response")
         );
+    }
+
+    #[test]
+    fn display_layout_read_keeps_a_bottom_screen_the_compositor_moved() {
+        let screen = |connector: &str, x: i32, y: i32| {
+            let mode = crate::models::DisplayMode {
+                mode_id: "2880x1800@120".into(),
+                backend_mode_id: None,
+                width: 2880,
+                height: 1800,
+                refresh_rate: 120.0,
+            };
+            crate::models::DisplayInfo {
+                connector: connector.into(),
+                width: mode.width,
+                height: mode.height,
+                refresh_rate: mode.refresh_rate,
+                scale: 1.66,
+                x,
+                y,
+                transform: 0,
+                primary: connector == "eDP-1",
+                current_mode: mode.clone(),
+                available_modes: vec![mode],
+                refresh_policy: crate::models::RefreshPolicy::Fixed,
+                supports_dynamic_refresh: false,
+            }
+        };
+        let layout = DisplayLayout {
+            displays: vec![screen("eDP-1", 0, 0), screen("eDP-2", 1737, 0)],
+        };
+
+        let read = daemon_display_layout_or_transport_fallback(
+            Ok(DaemonResponse::DisplayLayout {
+                layout: layout.clone(),
+            }),
+            || Ok(empty_layout()),
+        )
+        .expect("daemon layout should be returned");
+
+        let bottom = read
+            .displays
+            .iter()
+            .find(|display| display.connector == "eDP-2")
+            .expect("bottom screen present");
+        assert_eq!((bottom.x, bottom.y), (1737, 0));
     }
 
     #[test]

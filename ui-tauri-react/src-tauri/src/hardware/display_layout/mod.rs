@@ -139,11 +139,12 @@ pub fn normalize_display_layout(layout: DisplayLayout) -> DisplayLayout {
     DisplayLayout { displays }
 }
 
-/// Get the current display layout through the selected compositor Adapter.
+/// Get the current display layout through the selected compositor Adapter,
+/// with each screen where the compositor actually has it. Only applying a
+/// layout stacks the Duo screens (normalize_display_layout); reading must not,
+/// or the Display Layout page hides a bottom screen the compositor moved.
 pub fn get_display_layout() -> Result<DisplayLayout, String> {
-    let layout = adapters::with_display_adapter(detect_backend(), |adapter| adapter.layout())?;
-
-    Ok(normalize_display_layout(layout))
+    adapters::with_display_adapter(detect_backend(), |adapter| adapter.layout())
 }
 
 /// Apply a display layout through the selected compositor Adapter.

@@ -73,14 +73,14 @@ export function snapDisplayPosition(pos: { x: number; y: number }) {
 }
 
 export function layoutToCanvasNodes(layout: DisplayLayout): DisplayCanvasNodeModel[] {
-  const normalizedLayout = normalizeDuoDisplays(layout);
-  const primary = normalizedLayout.displays.find((d) => d.primary) ?? normalizedLayout.displays[0];
+  // Drawn where the compositor has each screen; only Apply stacks the Duo screens.
+  const primary = layout.displays.find((d) => d.primary) ?? layout.displays[0];
   const baseX = primary?.x ?? 0;
   const baseY = primary?.y ?? 0;
   const primaryLogical = primary ? displayLogicalSize(primary) : null;
   const seen = new Map<string, number>();
 
-  return normalizedLayout.displays.map((display) => {
+  return layout.displays.map((display) => {
     const logical = displayLogicalSize(display);
     const key = `${display.x},${display.y}`;
     const count = seen.get(key) ?? 0;
