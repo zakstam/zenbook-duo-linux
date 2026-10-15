@@ -1,3 +1,4 @@
+use super::lying_flat;
 use super::*;
 
 pub(crate) struct RotationWatcherSupervisor;
@@ -97,35 +98,66 @@ async fn watch_rotation() -> Result<RotationWatchExit, String> {
         .ok_or_else(|| "monitor-sensor stdout unavailable".to_string())?;
     let mut lines = BufReader::new(stdout).lines();
 
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .map_err(|e| format!("Failed reading monitor-sensor output: {e}"))?
-    {
-        if let Some(sensor_orientation) = sensor_orientation_value(&line) {
-            let invert_sensor_rotation =
-                crate::commands::settings::load_settings_local().invert_sensor_rotation;
-            match display_orientation_from_sensor_value(sensor_orientation, invert_sensor_rotation)
-            {
-                Some(orientation) => {
-                    runtime_log_info(format!(
-                        "monitor-sensor orientation changed: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}"
-                    ));
-                    if let Err(err) = crate::hardware::display_layout::set_orientation(&orientation)
-                    {
-                        runtime_log_warn(format!(
-                            "failed to apply accelerometer orientation: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}: {err}"
-                        ));
-                    } else {
+    let accelerometer = lying_flat::find_accelerometer();
+    if accelerometer.is_none() {
+        runtime_log_warn("no accel_3d IIO device found; lying-flat detection is off");
+    }
+    let mut flat_detector = lying_flat::LyingFlatDetector::default();
+    let mut sensor_orientation_now: Option<Orientation> = None;
+    let mut flat_poll = tokio::time::interval(lying_flat_poll_interval());
+    flat_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                let Some(line) =
+                    line.map_err(|e| format!("Failed reading monitor-sensor output: {e}"))?
+                else {
+                    break;
+                };
+                let Some(sensor_orientation) = sensor_orientation_value(&line) else {
+                    continue;
+                };
+                let invert_sensor_rotation =
+                    crate::commands::settings::load_settings_local().invert_sensor_rotation;
+                match display_orientation_from_sensor_value(sensor_orientation, invert_sensor_rotation)
+                {
+                    Some(orientation) => {
                         runtime_log_info(format!(
-                            "applied accelerometer orientation: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}"
+                            "monitor-sensor orientation changed: sensor={sensor_orientation} mapped_display={orientation:?} invert_sensor_rotation={invert_sensor_rotation}"
+                        ));
+                        sensor_orientation_now = Some(orientation.clone());
+                        if flat_detector.lying_flat() {
+                            runtime_log_info(format!(
+                                "lying flat: keeping the top screen turned; {orientation:?} applies when it is picked up"
+                            ));
+                            continue;
+                        }
+                        apply_sensor_orientation(&orientation);
+                    }
+                    None => {
+                        runtime_log_warn(format!(
+                            "monitor-sensor reported unsupported accelerometer orientation: {sensor_orientation}"
                         ));
                     }
                 }
-                None => {
-                    runtime_log_warn(format!(
-                        "monitor-sensor reported unsupported accelerometer orientation: {sensor_orientation}"
-                    ));
+            }
+            _ = flat_poll.tick(), if accelerometer.is_some() => {
+                let Some(reading) = accelerometer
+                    .as_deref()
+                    .and_then(lying_flat::read_accelerometer)
+                else {
+                    continue;
+                };
+                match flat_detector.update(reading) {
+                    Some(true) => apply_lying_flat_layout(),
+                    Some(false) => {
+                        runtime_log_info("picked up from lying flat");
+                        apply_sensor_orientation(
+                            sensor_orientation_now.as_ref().unwrap_or(&Orientation::Normal),
+                        );
+                    }
+                    None => {}
                 }
             }
         }
@@ -182,6 +214,35 @@ async fn log_monitor_sensor_stderr(
         }
     }
     summary
+}
+
+fn lying_flat_poll_interval() -> Duration {
+    Duration::from_secs(1)
+}
+
+fn apply_sensor_orientation(orientation: &Orientation) {
+    match crate::hardware::display_layout::set_orientation(orientation) {
+        Ok(()) => runtime_log_info(format!(
+            "applied accelerometer orientation: {orientation:?}"
+        )),
+        Err(err) => runtime_log_warn(format!(
+            "failed to apply accelerometer orientation {orientation:?}: {err}"
+        )),
+    }
+}
+
+/// Lying flat on a table: only the top screen turns around, for the person
+/// opposite (the Presentation profile's arrangement).
+fn apply_lying_flat_layout() {
+    let result = crate::hardware::display_layout::get_display_layout().and_then(|current| {
+        crate::hardware::display_layout::apply_display_layout(&lying_flat::lying_flat_layout(
+            &current,
+        ))
+    });
+    match result {
+        Ok(()) => runtime_log_info("lying flat: turned only the top screen around"),
+        Err(err) => runtime_log_warn(format!("failed to apply lying-flat layout: {err}")),
+    }
 }
 
 pub(super) fn monitor_sensor_accelerometer_claim_timeout(line: &str) -> bool {

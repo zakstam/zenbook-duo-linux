@@ -10,6 +10,7 @@ This is intentionally device-specific. The goal is a dependable Zenbook Duo expe
 - Switches between docked and tablet-style display layouts when the keyboard is attached or removed.
 - Keeps keyboard backlight, display brightness, Bluetooth/Wi-Fi restore behavior, rotation, and saved settings coordinated through a Rust daemon.
 - Provides USB media remapping for Zenbook Duo top-row keys, including mute/volume, brightness, keyboard backlight cycling, and emoji launcher behavior where supported.
+- Auto-rotates the screens from the accelerometer. Laying the Duo opened flat on a table (both screens facing up) turns only the top screen around for the person opposite, as Windows does; picking it up rotates normally again.
 - Handles Bluetooth backlight and brightness hotkeys through the daemon.
 - Supports per-display touchscreen enable/disable for the built-in ELAN panels, persisted across reboot/resume.
 - On GNOME, maps Duo touch and stylus input to the matching internal panel so touch targets the correct screen.

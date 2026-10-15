@@ -7,6 +7,7 @@ use std::process::Command;
 use std::time::Duration;
 
 pub(crate) mod brightness_sync;
+mod lying_flat;
 pub(crate) mod rotation;
 pub(crate) mod touch_mapping;
 
