@@ -47,7 +47,7 @@ export default function DisplayLayout() {
     setApplying(true);
     setError("");
     try {
-      await applyAndPersistDisplayLayout(layout);
+      setLayout(await applyAndPersistDisplayLayout(layout));
     } catch (err) {
       setError(`Failed to apply or save layout: ${err}`);
     } finally {
