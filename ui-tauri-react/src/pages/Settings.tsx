@@ -113,7 +113,7 @@ export default function Settings() {
         </p>
       </div>
 
-      <div className="glass-card animate-stagger-in stagger-1 rounded-xl p-5">
+      <div className="glass-card rounded-xl p-5">
         <div className="mb-5 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
             <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -206,7 +206,7 @@ export default function Settings() {
         </div>
       </div>
 
-      <div className="mt-5 glass-card animate-stagger-in stagger-2 rounded-xl p-5">
+      <div className="mt-5 glass-card rounded-xl p-5">
         <div className="mb-5 flex items-center gap-2.5">
           <div className="flex size-7 items-center justify-center rounded-lg bg-purple-500/10 text-purple-500 dark:bg-purple-400/10 dark:text-purple-400">
             <IconRotate className="size-3.5" stroke={1.75} />
@@ -234,7 +234,7 @@ export default function Settings() {
         </SettingRow>
       </div>
 
-      <div className="mt-5 glass-card animate-stagger-in stagger-3 rounded-xl p-5">
+      <div className="mt-5 glass-card rounded-xl p-5">
         <div className="mb-5 flex items-center gap-2.5">
           <div className="flex size-7 items-center justify-center rounded-lg bg-teal-500/10 text-teal-500 dark:bg-teal-400/10 dark:text-teal-400">
             <IconKeyboard className="size-3.5" stroke={1.75} />

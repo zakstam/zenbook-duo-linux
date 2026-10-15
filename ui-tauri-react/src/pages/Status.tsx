@@ -72,7 +72,7 @@ export default function Status() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {/* Keyboard */}
-        <div className={cn("glass-card rounded-xl border-l-[3px] p-5 animate-stagger-in stagger-1", cardAccents.keyboard.border)}>
+        <div className={cn("glass-card rounded-xl border-l-[3px] p-5", cardAccents.keyboard.border)}>
           <div className="mb-4 flex items-center gap-2.5">
             <div className={cn("flex size-7 items-center justify-center rounded-lg", cardAccents.keyboard.icon)}>
               <IconKeyboard className="size-3.5" stroke={1.75} />
@@ -171,7 +171,7 @@ export default function Status() {
         </div>
 
         {/* Display */}
-        <div className={cn("glass-card rounded-xl border-l-[3px] p-5 animate-stagger-in stagger-2", cardAccents.display.border)}>
+        <div className={cn("glass-card rounded-xl border-l-[3px] p-5", cardAccents.display.border)}>
           <div className="mb-4 flex items-center gap-2.5">
             <div className={cn("flex size-7 items-center justify-center rounded-lg", cardAccents.display.icon)}>
               <IconDeviceDesktop className="size-3.5" stroke={1.75} />
@@ -204,7 +204,7 @@ export default function Status() {
         </div>
 
         {/* Connectivity */}
-        <div className={cn("glass-card rounded-xl border-l-[3px] p-5 animate-stagger-in stagger-3", cardAccents.connectivity.border)}>
+        <div className={cn("glass-card rounded-xl border-l-[3px] p-5", cardAccents.connectivity.border)}>
           <div className="mb-4 flex items-center gap-2.5">
             <div className={cn("flex size-7 items-center justify-center rounded-lg", cardAccents.connectivity.icon)}>
               <IconWifi className="size-3.5" stroke={1.75} />
@@ -238,7 +238,7 @@ export default function Status() {
         </div>
 
         {/* Service */}
-        <div className={cn("glass-card rounded-xl border-l-[3px] p-5 animate-stagger-in stagger-4", cardAccents.service.border)}>
+        <div className={cn("glass-card rounded-xl border-l-[3px] p-5", cardAccents.service.border)}>
           <div className="mb-4 flex items-center gap-2.5">
             <div className={cn("flex size-7 items-center justify-center rounded-lg", cardAccents.service.icon)}>
               <IconServer className="size-3.5" stroke={1.75} />

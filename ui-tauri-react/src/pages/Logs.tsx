@@ -68,7 +68,7 @@ export default function Logs() {
         </div>
       </div>
 
-      <div className="mb-4 animate-stagger-in stagger-1">
+      <div className="mb-4">
         <div className="relative">
           <IconFilter className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" stroke={1.5} />
           <Input
@@ -81,7 +81,7 @@ export default function Logs() {
         </div>
       </div>
 
-      <div className="glass-card rounded-xl p-1 animate-stagger-in stagger-2">
+      <div className="glass-card rounded-xl p-1">
         {filteredLogs.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="mb-3 flex size-10 items-center justify-center rounded-lg bg-muted">

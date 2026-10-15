@@ -91,17 +91,17 @@ export default function DisplayLayout() {
       </div>
 
       {error && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 animate-page-enter">
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
           <IconAlertTriangle className="size-4 shrink-0 text-destructive" stroke={1.5} />
           <span className="text-[13px] text-destructive">{error}</span>
         </div>
       )}
 
-      <div className="animate-stagger-in stagger-1">
+      <div>
         <DisplayCanvas layout={layout} onLayoutChange={setLayout} />
       </div>
 
-      <div className="glass-card mt-5 rounded-xl p-5 animate-stagger-in stagger-2">
+      <div className="glass-card mt-5 rounded-xl p-5">
         <h3 className="mb-4 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
           Connected Displays
         </h3>
@@ -150,7 +150,7 @@ export default function DisplayLayout() {
         </div>
       </div>
 
-      <div className="glass-card mt-4 rounded-xl p-5 animate-stagger-in stagger-3">
+      <div className="glass-card mt-4 rounded-xl p-5">
         <h3 className="mb-4 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
           Per-Display Settings
         </h3>

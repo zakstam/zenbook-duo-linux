@@ -95,7 +95,7 @@ export default function App() {
           {/* Subtle top border accent */}
           <div className="h-px w-full bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
           <main className="flex-1 overflow-y-auto px-8 py-7" key={currentPage}>
-            <div className="animate-page-enter mx-auto max-w-4xl">
+            <div className="mx-auto max-w-4xl">
               <PageComponent />
             </div>
           </main>

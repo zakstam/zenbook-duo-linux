@@ -214,7 +214,7 @@ export default function Diagnostics() {
 
       <div className="grid grid-cols-1 gap-4">
         {/* Evdev Capture */}
-        <div className="glass-card rounded-xl p-5 animate-stagger-in stagger-1">
+        <div className="glass-card rounded-xl p-5">
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="flex size-7 items-center justify-center rounded-lg bg-violet-500/12 text-violet-500 dark:bg-violet-400/10 dark:text-violet-400">
@@ -346,7 +346,7 @@ export default function Diagnostics() {
         </div>
 
         {/* HID Topology */}
-        <div className="glass-card rounded-xl p-5 animate-stagger-in stagger-2">
+        <div className="glass-card rounded-xl p-5">
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="flex size-7 items-center justify-center rounded-lg bg-cyan-500/12 text-cyan-500 dark:bg-cyan-400/10 dark:text-cyan-400">
@@ -488,7 +488,7 @@ export default function Diagnostics() {
         </div>
 
         {/* Hidraw Capture */}
-        <div className="glass-card rounded-xl p-5 animate-stagger-in stagger-3">
+        <div className="glass-card rounded-xl p-5">
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="flex size-7 items-center justify-center rounded-lg bg-orange-500/12 text-orange-500 dark:bg-orange-400/10 dark:text-orange-400">

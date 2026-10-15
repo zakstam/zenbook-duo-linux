@@ -103,7 +103,7 @@ export default function EventMonitor() {
         </div>
       </div>
 
-      <div className="glass-card mb-4 rounded-xl p-5 animate-stagger-in stagger-1">
+      <div className="glass-card mb-4 rounded-xl p-5">
         <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
           Filters
         </h3>
@@ -151,7 +151,7 @@ export default function EventMonitor() {
         </div>
       </div>
 
-      <div className="glass-card rounded-xl p-5 animate-stagger-in stagger-2">
+      <div className="glass-card rounded-xl p-5">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
             Event Stream

@@ -77,7 +77,7 @@ export default function Profiles() {
       </div>
 
       {showCreate && (
-        <div className="glass-card mb-5 rounded-xl p-5 animate-page-enter">
+        <div className="glass-card mb-5 rounded-xl p-5">
           <h3 className="mb-4 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
             Save Current State
           </h3>
@@ -109,10 +109,8 @@ export default function Profiles() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {store.profiles.map((profile, i) => (
-            <div key={profile.id} className={`animate-stagger-in stagger-${Math.min(i + 1, 6)}`}>
-              <ProfileCard profile={profile} />
-            </div>
+          {store.profiles.map((profile) => (
+            <ProfileCard key={profile.id} profile={profile} />
           ))}
         </div>
       )}

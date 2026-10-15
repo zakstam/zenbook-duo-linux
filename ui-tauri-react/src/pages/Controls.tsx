@@ -60,7 +60,7 @@ export default function Controls() {
       </div>
 
       <div className="space-y-5">
-        <div className="glass-card animate-stagger-in stagger-1 rounded-xl p-5">
+        <div className="glass-card rounded-xl p-5">
           <div className="mb-5 flex items-center gap-2.5">
             <div className="flex size-7 items-center justify-center rounded-lg bg-amber-500/12 text-amber-500 dark:bg-amber-400/10 dark:text-amber-400">
               <IconKeyboard className="size-3.5" stroke={1.75} />
@@ -75,7 +75,7 @@ export default function Controls() {
           <BacklightSlider />
         </div>
 
-        <div className="glass-card animate-stagger-in stagger-2 rounded-xl p-5">
+        <div className="glass-card rounded-xl p-5">
           <div className="mb-5 flex items-center gap-2.5">
             <div className="flex size-7 items-center justify-center rounded-lg bg-blue-500/12 text-blue-500 dark:bg-blue-400/10 dark:text-blue-400">
               <IconRotate className="size-3.5" stroke={1.75} />
@@ -92,7 +92,7 @@ export default function Controls() {
           <OrientationButtons />
         </div>
 
-        <div className="glass-card animate-stagger-in stagger-3 rounded-xl p-5">
+        <div className="glass-card rounded-xl p-5">
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className={cn(
@@ -145,7 +145,7 @@ export default function Controls() {
         </div>
 
         {touchscreens.length > 0 && (
-          <div className="glass-card animate-stagger-in stagger-4 rounded-xl p-5">
+          <div className="glass-card rounded-xl p-5">
             <div className="mb-5 flex items-center gap-2.5">
               <div className="flex size-7 items-center justify-center rounded-lg bg-purple-500/12 text-purple-500 dark:bg-purple-400/10 dark:text-purple-400">
                 <IconHandFinger className="size-3.5" stroke={1.75} />
