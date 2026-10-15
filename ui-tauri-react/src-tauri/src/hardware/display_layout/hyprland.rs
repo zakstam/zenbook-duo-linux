@@ -195,6 +195,62 @@ fn monitor_rule(display: &DisplayInfo) -> String {
     )
 }
 
+/// A monitor's logical size as Hyprland lays it out. Hyprland only applies a
+/// scale that divides the mode cleanly (1.66 becomes 5/3 on 2880x1800), so the
+/// mode divided by the *applied* scale is whole up to float noise; dividing by
+/// a requested scale is not, and leaves a gap of a few pixels.
+fn logical_size(display: &DisplayInfo) -> (i32, i32) {
+    let scale = display.scale.max(0.1);
+    let width = (display.current_mode.width as f64 / scale).round() as i32;
+    let height = (display.current_mode.height as f64 / scale).round() as i32;
+    if display.transform == 90 || display.transform == 270 {
+        (height, width)
+    } else {
+        (width, height)
+    }
+}
+
+/// Where the lower panel goes, flush against the upper one on the side
+/// `orientation` puts it, both measured at the scale Hyprland applied.
+fn lower_position(
+    upper: &DisplayInfo,
+    lower: &DisplayInfo,
+    orientation: &Orientation,
+) -> (i32, i32) {
+    let (upper_w, upper_h) = logical_size(upper);
+    let (lower_w, lower_h) = logical_size(lower);
+    match orientation {
+        Orientation::Left => (upper.x - lower_w, upper.y),
+        Orientation::Right => (upper.x + upper_w, upper.y),
+        Orientation::Inverted => (upper.x, upper.y - lower_h),
+        Orientation::Normal => (upper.x, upper.y + upper_h),
+    }
+}
+
+/// When the requested layout stacks the lower panel under the upper one, the
+/// position that keeps it flush under the upper panel as Hyprland actually
+/// applied it, if that differs from where it is now.
+fn stacked_lower_correction(
+    requested: &DisplayLayout,
+    live: &DisplayLayout,
+    owned: &OwnedConnectors,
+) -> Option<(i32, i32)> {
+    let find = |layout: &DisplayLayout, name: &str| {
+        layout
+            .displays
+            .iter()
+            .find(|d| d.connector == name)
+            .cloned()
+    };
+    let (upper, lower) = (find(requested, &owned.upper)?, find(requested, &owned.lower)?);
+    if lower.x != upper.x || lower.y <= upper.y {
+        return None;
+    }
+    let (live_upper, live_lower) = (find(live, &owned.upper)?, find(live, &owned.lower)?);
+    let target = lower_position(&live_upper, &live_lower, &Orientation::Normal);
+    (target != (live_lower.x, live_lower.y)).then_some(target)
+}
+
 fn run_hyprctl(args: &[&str]) -> Result<(), String> {
     run_command("hyprctl", args).map_err(|err| {
         log::warn!("Hyprland monitor mutation failed args={args:?}: {err}");
@@ -310,8 +366,20 @@ pub(super) fn apply_hyprland_display_layout(layout: &DisplayLayout) -> Result<()
         "Hyprland Duo mutations configure={configure_rules:?} disable_lower={}",
         plan.disable_lower
     );
+    // -r makes Hyprland apply the rule now (keeping it over the user's config
+    // rules), so the read-back below sees the scale it actually chose.
     for rule in &configure_rules {
-        run_hyprctl(&["keyword", "monitor", rule])?;
+        run_hyprctl(&["-r", "keyword", "monitor", rule])?;
+    }
+    if !plan.disable_lower {
+        let live = get_hyprland_display_layout()?;
+        if let (Some((x, y)), Some(lower)) = (
+            stacked_lower_correction(layout, &live, &owned),
+            plan.configure.iter().find(|d| d.connector == owned.lower),
+        ) {
+            let placed = DisplayInfo { x, y, ..(*lower).clone() };
+            run_hyprctl(&["-r", "keyword", "monitor", &monitor_rule(&placed)])?;
+        }
     }
     if plan.disable_lower {
         migrate_lower_workspaces(&owned.lower, &target.connector)?;
@@ -331,6 +399,15 @@ pub(super) fn set_hyprland_orientation(orientation: &Orientation) -> Result<(), 
     };
     for display in &mut layout.displays {
         display.transform = transform;
+    }
+    // Rotating changes each panel's footprint, so place the lower panel beside
+    // or under the upper one again; keeping the old positions overlaps them.
+    let owned = owned_connectors()?;
+    let upper = layout.displays.iter().find(|d| d.connector == owned.upper).cloned();
+    if let Some(upper) = upper {
+        if let Some(lower) = layout.displays.iter_mut().find(|d| d.connector == owned.lower) {
+            (lower.x, lower.y) = lower_position(&upper, lower, orientation);
+        }
     }
     apply_hyprland_display_layout(&layout)
 }
@@ -388,6 +465,60 @@ mod tests {
         assert_eq!(layout.displays.len(), 2);
         assert_eq!(layout.displays[1].connector, "DP-USB-C-7");
         assert_eq!(layout.displays[1].transform, 90);
+    }
+
+    fn snapped(connector: &str, x: i32, y: i32, transform: u32) -> DisplayInfo {
+        DisplayInfo {
+            x,
+            y,
+            transform,
+            scale: 1.6666666,
+            ..display(connector, connector == "eDP-1")
+        }
+    }
+
+    #[test]
+    fn stacked_lower_panel_follows_the_scale_hyprland_applied() {
+        // Measured on Hyprland 0.56.2: 1.66 is applied as 5/3, so the upper
+        // panel is 1080 tall and y=1085 (from 1.66) leaves a 5px gap.
+        let requested = DisplayLayout {
+            displays: vec![
+                DisplayInfo { scale: 1.66, ..snapped("eDP-1", 0, 0, 0) },
+                DisplayInfo { scale: 1.66, ..snapped("eDP-2", 0, 1085, 0) },
+            ],
+        };
+        let live = DisplayLayout {
+            displays: vec![snapped("eDP-1", 0, 0, 0), snapped("eDP-2", 0, 1085, 0)],
+        };
+        assert_eq!(
+            stacked_lower_correction(&requested, &live, &owned()),
+            Some((0, 1080))
+        );
+
+        let flush = DisplayLayout {
+            displays: vec![snapped("eDP-1", 0, 0, 0), snapped("eDP-2", 0, 1080, 0)],
+        };
+        assert_eq!(stacked_lower_correction(&requested, &flush, &owned()), None);
+    }
+
+    #[test]
+    fn side_by_side_layouts_are_not_restacked() {
+        let requested = DisplayLayout {
+            displays: vec![snapped("eDP-1", 0, 0, 0), snapped("eDP-2", 1728, 0, 0)],
+        };
+        assert_eq!(stacked_lower_correction(&requested, &requested, &owned()), None);
+    }
+
+    #[test]
+    fn rotation_places_the_lower_panel_beside_the_rotated_upper_one() {
+        let upper = snapped("eDP-1", 0, 0, 90);
+        let lower = snapped("eDP-2", 0, 1080, 90);
+        assert_eq!(lower_position(&upper, &lower, &Orientation::Left), (-1080, 0));
+        assert_eq!(lower_position(&upper, &lower, &Orientation::Right), (1080, 0));
+        let upper = snapped("eDP-1", 0, 0, 0);
+        let lower = snapped("eDP-2", 0, 1080, 0);
+        assert_eq!(lower_position(&upper, &lower, &Orientation::Normal), (0, 1080));
+        assert_eq!(lower_position(&upper, &lower, &Orientation::Inverted), (0, -1080));
     }
 
     #[test]
