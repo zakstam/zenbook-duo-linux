@@ -161,21 +161,6 @@ configure_duo_sudoers() {
   fi
 }
 
-DUO_TOUCH_OUTPUT_RULES_FILE=/etc/udev/rules.d/91-zenbook-duo-touch-output.rules
-
-# Tie each panel's touchscreen and stylus to its own screen. libinput exposes
-# WL_OUTPUT as the device's output, which niri and KWin honour; without it niri
-# sends both touchscreens to the first screen. GNOME ignores it and is mapped by
-# the session agent instead (touch_mapping.rs). Keep the controller-to-screen
-# pairing aligned with connector_for_touch_device in that file.
-duo_touch_output_rules() {
-  cat <<'EOF'
-# Zenbook Duo: each internal touch controller drives the screen it sits on.
-SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="ELAN9008:00 *", ENV{WL_OUTPUT}="eDP-1"
-SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="ELAN9009:00 *", ENV{WL_OUTPUT}="eDP-2"
-EOF
-}
-
 configure_duo_input_access() {
   if [ -n "${TARGET_USER}" ] && ! groups "${TARGET_USER}" | grep -q '\binput\b'; then
     sudo usermod -aG input "${TARGET_USER}"
@@ -183,7 +168,8 @@ configure_duo_input_access() {
   fi
 
   echo 'SUBSYSTEM=="input", ATTRS{name}=="*ASUS Zenbook Duo Keyboard", TAG+="uaccess", MODE="0660", GROUP="input"' | sudo tee /etc/udev/rules.d/90-zenbook-duo-keyboard.rules >/dev/null
-  duo_touch_output_rules | sudo tee "${DUO_TOUCH_OUTPUT_RULES_FILE}" >/dev/null
+  # Stale: niri ignores WL_OUTPUT for touch, so this rule never took effect.
+  sudo rm -f /etc/udev/rules.d/91-zenbook-duo-touch-output.rules
 
   # Do not install a hwdb remap for KEYBOARD_KEY_7003*: it overrides the USB Fn layer.
   sudo rm -f /etc/udev/hwdb.d/90-zenbook-duo-keyboard.hwdb

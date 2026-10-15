@@ -11,4 +11,4 @@ bindings:
 
 Enables or disables touch input per screen from the Controls page: each ELAN touchscreen is matched to its internal display connector, and the disabled list is kept in settings so it survives restarts.
 
-It also keeps each screen's touch and stylus input landing on that screen: on GNOME the session agent writes the per-device output mapping into dconf, and on niri and KDE the installer's udev rule (`91-zenbook-duo-touch-output.rules`, from `setup-common.sh`) tags each controller with its screen via `WL_OUTPUT` (ELAN9008 is eDP-1, the top screen; ELAN9009 is eDP-2, the bottom).
+On GNOME the session agent also maps each screen's touch and stylus input to that screen (dconf, `touch_mapping.rs`). niri 26.04 cannot map touch per device (its libinput devices report no output, and `input { touch { map-to-output } }` is global); per-device touch config waits on upstream PR niri-wm/niri#1856. ELAN9008 is eDP-1 (top), ELAN9009 is eDP-2 (bottom).

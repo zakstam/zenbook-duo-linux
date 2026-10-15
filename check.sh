@@ -27,12 +27,10 @@ check_installers() {
     "${ROOT_DIR}/setup-kde.sh" \
     "${ROOT_DIR}/setup-niri.sh" \
     "${ROOT_DIR}/uninstall.sh" \
-    "${ROOT_DIR}/tests/install-stdin-test.sh" \
-    "${ROOT_DIR}/tests/touch-output-rules-test.sh"
+    "${ROOT_DIR}/tests/install-stdin-test.sh"
 
   echo "==> Running installer smoke tests"
   bash "${ROOT_DIR}/tests/install-stdin-test.sh"
-  bash "${ROOT_DIR}/tests/touch-output-rules-test.sh"
 }
 
 check_rust() {
