@@ -8,6 +8,7 @@ import {
   updateDisplayScale,
 } from "@/lib/display-layout-controller";
 import { useTouchscreens } from "@/hooks/use-touchscreens";
+import { MonitorNamesContext, displayLabel, useMonitorNames } from "@/lib/display-names";
 import { modesForResolution, refreshSelectValue } from "@/lib/display-layout";
 import { displayScaleOptions, formatDisplayScale } from "@/shared/display-scales";
 import type { DisplayLayout as LayoutType } from "@/types/duo";
@@ -33,6 +34,7 @@ function formatRefreshRate(refreshRate: number) {
 
 export default function DisplayLayout() {
   const [layout, setLayout] = useState<LayoutType>({ displays: [] });
+  const names = useMonitorNames(layout);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState("");
   const { touchscreens, pendingConnector, setEnabled: setTouchscreenEnabled } = useTouchscreens();
@@ -98,7 +100,9 @@ export default function DisplayLayout() {
       )}
 
       <div>
-        <DisplayCanvas layout={layout} onLayoutChange={setLayout} />
+        <MonitorNamesContext.Provider value={names}>
+          <DisplayCanvas layout={layout} onLayoutChange={setLayout} />
+        </MonitorNamesContext.Provider>
       </div>
 
       <div className="glass-card mt-5 rounded-xl p-5">
@@ -112,7 +116,8 @@ export default function DisplayLayout() {
               className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2.5"
             >
               <div className="flex items-center gap-3">
-                <span className="font-mono text-[13px] font-medium">{d.connector}</span>
+                <span className="text-[13px] font-medium">{displayLabel(d.connector, names)}</span>
+                <span className="font-mono text-[11px] text-muted-foreground">{d.connector}</span>
                 {d.primary && (
                   <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
                     Primary
@@ -157,7 +162,10 @@ export default function DisplayLayout() {
         <div className="space-y-4">
           {layout.displays.map((d) => (
             <div key={d.connector} className="flex items-center justify-between gap-4">
-              <Label className="font-mono text-[13px]">{d.connector}</Label>
+              <Label className="text-[13px]">
+                {displayLabel(d.connector, names)}
+                <span className="ml-2 font-mono text-[11px] text-muted-foreground">{d.connector}</span>
+              </Label>
               <div className="flex items-center gap-3">
                 <Select
                   value={String(d.scale)}

@@ -155,6 +155,15 @@ pub fn apply_display_layout(layout: &DisplayLayout) -> Result<(), String> {
     })
 }
 
+/// The monitors' names by connector (GNOME; empty on other desktops).
+pub fn monitor_names() -> std::collections::HashMap<String, String> {
+    if detect_backend() == SessionBackend::Gnome {
+        gnome::get_gnome_monitor_names()
+    } else {
+        std::collections::HashMap::new()
+    }
+}
+
 fn detect_backend() -> SessionBackend {
     session::detect_backend_from_env()
 }
@@ -193,6 +202,15 @@ pub fn set_orientation(orientation: &Orientation) -> Result<(), String> {
 mod tests {
     use super::adapters::CompositorDisplayAdapter;
     use super::*;
+
+    #[test]
+    fn monitor_names_from_gdctl() {
+        let output = "Monitors:\n├──Monitor eDP-1 (Built-in display)\n│  ├──Vendor: SDC\n└──Monitor DP-2 (RTK 15.6\")\n   └──Modes (12)\n";
+        let names = gnome::monitor_names(output);
+        assert_eq!(names.get("eDP-1").map(String::as_str), Some("Built-in display"));
+        assert_eq!(names.get("DP-2").map(String::as_str), Some("RTK 15.6\""));
+        assert_eq!(names.len(), 2);
+    }
 
     fn test_display(connector: &str) -> DisplayInfo {
         let mode = make_display_mode(2880, 1800, 120.0);

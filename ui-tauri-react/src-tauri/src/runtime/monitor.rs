@@ -52,6 +52,11 @@ pub fn start(state: Arc<RwLock<RuntimeState>>) {
                     log::warn!("failed to save monitored runtime state: {err}");
                 }
                 drop(guard);
+                if previous.connection_type != updated.connection_type
+                    && updated.connection_type == crate::models::ConnectionType::Usb
+                {
+                    crate::runtime::mic_led::restore_after_connect("USB");
+                }
                 apply_policy_actions(state.clone(), actions).await;
             } else {
                 drop(guard);
@@ -381,6 +386,13 @@ fn push_status_events(
         ));
     }
 
+    if old.fn_lock != new.fn_lock {
+        state.push_recent_event(HardwareEvent::info(
+            EventCategory::Keyboard,
+            if new.fn_lock { "Fn lock on" } else { "Fn lock off" },
+            "rust-daemon",
+        ));
+    }
     if old.backlight_level != new.backlight_level {
         state.push_recent_event(HardwareEvent::info(
             EventCategory::Keyboard,

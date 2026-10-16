@@ -150,6 +150,30 @@ export default function Settings() {
 
           <div className="h-px bg-border/50" />
 
+          <SettingRow
+            label="Backlight Sleep"
+            description="Turn the keyboard backlight off after no input; any key, touch or pointer movement turns it back on"
+          >
+            <Select
+              value={String(localSettings.keyboardBacklightIdleSecs)}
+              onValueChange={(v) => updateLocal("keyboardBacklightIdleSecs", parseInt(v))}
+            >
+              <SelectTrigger className="w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">Never</SelectItem>
+                <SelectItem value="15">After 15 seconds</SelectItem>
+                <SelectItem value="30">After 30 seconds</SelectItem>
+                <SelectItem value="60">After 1 minute</SelectItem>
+                <SelectItem value="120">After 2 minutes</SelectItem>
+                <SelectItem value="300">After 5 minutes</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+
+          <div className="h-px bg-border/50" />
+
           <SettingRow label="Default Display Scale" description="Scale factor for newly connected displays">
             <Select
               value={String(localSettings.defaultScale)}

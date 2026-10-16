@@ -2,6 +2,7 @@ pub mod backlight;
 pub mod diagnostics;
 pub mod display;
 pub mod events;
+pub mod keyboard;
 pub mod logs;
 pub mod service;
 pub mod settings;

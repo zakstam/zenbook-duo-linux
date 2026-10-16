@@ -34,6 +34,13 @@ pub struct DuoSettings {
     pub touchscreen_disabled: Vec<String>,
     #[serde(default)]
     pub saved_display_layout: Option<DisplayLayout>,
+    /// Turn the keyboard backlight off after this many seconds without input
+    /// (keys, touchpad, mouse, touch); 0 keeps it on.
+    #[serde(default)]
+    pub keyboard_backlight_idle_secs: u32,
+    /// What the top-row keys do in place of their ASUS function ("F1"-"F12").
+    #[serde(default)]
+    pub key_overrides: crate::runtime::key_overrides::KeyOverrides,
 }
 
 impl Default for DuoSettings {
@@ -50,6 +57,8 @@ impl Default for DuoSettings {
             setup_completed: DEFAULT_SETUP_COMPLETED,
             touchscreen_disabled: Vec::new(),
             saved_display_layout: None,
+            keyboard_backlight_idle_secs: 0,
+            key_overrides: Default::default(),
         }
     }
 }

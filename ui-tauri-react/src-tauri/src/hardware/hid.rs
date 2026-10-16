@@ -1,6 +1,5 @@
 use std::fs;
 use std::os::unix::io::AsRawFd;
-use std::path::Path;
 
 use rusb::UsbContext;
 
@@ -14,6 +13,12 @@ use crate::models::ConnectionType;
 ///   wValue: 0x035A, wIndex: 4, wLength: 16
 pub fn set_backlight_usb(level: u8) -> Result<(), String> {
     let level = level.min(3);
+    // Through hidraw first, like the mic LED and Fn lock: claiming the USB
+    // interface below detaches the kernel driver, so the keyboard's vendor
+    // interface (and the key reports on it) is gone for about a second.
+    if send_vendor_feature_to(&[VENDOR_REPORT_ID, 0xBA, 0xC5, 0xC4, level], Some(false)).is_ok() {
+        return Ok(());
+    }
 
     let context = rusb::Context::new().map_err(|e| format!("USB context error: {e}"))?;
     let devices = context
@@ -77,62 +82,137 @@ pub fn set_backlight_usb(level: u8) -> Result<(), String> {
     Err("Zenbook Duo keyboard not found via USB".into())
 }
 
-/// Bluetooth HID Feature Report for keyboard backlight using ioctl HIDIOCSFEATURE.
+/// Bluetooth HID Feature Report for keyboard backlight (`5a ba c5 c4 <level>`).
+/// The detached keyboard has two hidraw nodes; only the one declaring the
+/// vendor report accepts it (the other fails with an I/O error).
 pub fn set_backlight_bluetooth(level: u8) -> Result<(), String> {
-    let level = level.min(3);
+    send_vendor_feature(&[VENDOR_REPORT_ID, 0xBA, 0xC5, 0xC4, level.min(3)])
+}
 
-    // Find the hidraw device for the Zenbook keyboard
-    let hidraw_path = find_bt_hidraw()?;
+/// The keyboard's vendor report: ASUS keys, backlight and the mic-mute LED.
+const VENDOR_REPORT_ID: u8 = 0x5A;
 
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&hidraw_path)
-        .map_err(|e| format!("Failed to open {hidraw_path}: {e}"))?;
+/// Turns the orange LED on the mic-mute key on or off (feature report
+/// `5a d0 7c <on>`, captured from the Windows driver). The keyboard does not
+/// remember it, so it has to be sent again after every reconnect.
+pub fn set_mic_led(on: bool) -> Result<(), String> {
+    send_vendor_feature(&[VENDOR_REPORT_ID, 0xD0, 0x7C, u8::from(on)])
+}
 
-    let fd = file.as_raw_fd();
+/// The keyboard's own Fn lock (feature report `5a d0 4e <on>`, captured from
+/// the Windows driver): on, the top row sends F1-F12 and Fn+key the ASUS
+/// functions; off, the other way round. The keyboard forgets it on every
+/// (re)connect, docked and detached.
+pub fn set_fn_lock_bluetooth(locked: bool) -> Result<(), String> {
+    send_vendor_feature_to(&[VENDOR_REPORT_ID, 0xD0, 0x4E, u8::from(locked)], Some(true))
+}
 
-    // Build the same payload
-    let mut data = [0u8; 16];
-    data[0] = 0x5A;
-    data[1] = 0xBA;
-    data[2] = 0xC5;
-    data[3] = 0xC4;
-    data[4] = level;
+/// The same for the docked keyboard (USB).
+pub fn set_fn_lock_usb(locked: bool) -> Result<(), String> {
+    send_vendor_feature_to(&[VENDOR_REPORT_ID, 0xD0, 0x4E, u8::from(locked)], Some(false))
+}
 
-    // HIDIOCSFEATURE = 0xC0104806 + len
-    // This is _IOC(_IOC_WRITE|_IOC_READ, 'H', 0x06, len)
-    // For 16 bytes: 0xC0104806
-    let hidiocsfeature: libc::c_ulong = 0xC010_4806;
+/// Sends a 16-byte feature report to every hidraw node of the keyboard (USB
+/// or Bluetooth) that carries the vendor report. Succeeds when one accepts it.
+fn send_vendor_feature(payload: &[u8]) -> Result<(), String> {
+    send_vendor_feature_to(payload, None)
+}
 
-    let ret = unsafe { libc::ioctl(fd, hidiocsfeature, data.as_mut_ptr()) };
-
-    if ret < 0 {
-        return Err(format!(
-            "ioctl HIDIOCSFEATURE failed: {}",
-            std::io::Error::last_os_error()
-        ));
+/// `bluetooth`: Some(true) only the Bluetooth keyboard, Some(false) only USB.
+fn send_vendor_feature_to(payload: &[u8], bluetooth: Option<bool>) -> Result<(), String> {
+    let nodes: Vec<String> = vendor_hidraw_nodes()
+        .into_iter()
+        .filter(|node| bluetooth.is_none_or(|bt| is_bluetooth_node(node) == bt))
+        .collect();
+    if nodes.is_empty() {
+        return Err("Zenbook Duo keyboard not found".into());
     }
-
+    let mut errors = Vec::new();
+    for node in &nodes {
+        let mut data = [0u8; 16];
+        data[..payload.len()].copy_from_slice(payload);
+        if let Err(err) = write_feature(node, &mut data) {
+            errors.push(format!("{node}: {err}"));
+        }
+    }
+    if errors.len() == nodes.len() {
+        return Err(errors.join("; "));
+    }
     Ok(())
 }
 
-fn find_bt_hidraw() -> Result<String, String> {
-    let hidraw_dir = Path::new("/sys/class/hidraw");
-    if let Ok(entries) = fs::read_dir(hidraw_dir) {
-        for entry in entries.flatten() {
-            let uevent_path = entry.path().join("device/uevent");
-            if let Ok(contents) = fs::read_to_string(&uevent_path) {
-                if (contents.contains("Zenbook Duo Keyboard") || contents.contains("ASUS_DUO"))
-                    && contents.contains("0005:")
-                {
-                    let name = entry.file_name();
-                    return Ok(format!("/dev/{}", name.to_string_lossy()));
-                }
-            }
-        }
+fn write_feature(node: &str, data: &mut [u8; 16]) -> Result<(), String> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(node)
+        .map_err(|e| e.to_string())?;
+    // HIDIOCSFEATURE(16) = _IOC(_IOC_WRITE|_IOC_READ, 'H', 0x06, 16)
+    let hidiocsfeature: libc::c_ulong = 0xC010_4806;
+    let ret = unsafe { libc::ioctl(file.as_raw_fd(), hidiocsfeature, data.as_mut_ptr()) };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
     }
-    Err("Bluetooth hidraw device not found".into())
+    Ok(())
+}
+
+/// hidraw nodes of the keyboard (USB 0b05:1b2c, Bluetooth 0b05:1b2d) whose
+/// report descriptor declares the vendor report. The Bluetooth keyboard has a
+/// second node without it, which rejects the report.
+fn vendor_hidraw_nodes() -> Vec<String> {
+    let Ok(entries) = fs::read_dir("/sys/class/hidraw") else {
+        return Vec::new();
+    };
+    let mut nodes: Vec<String> = entries
+        .flatten()
+        .filter(|entry| {
+            let device = entry.path().join("device");
+            let uevent = fs::read_to_string(device.join("uevent")).unwrap_or_default();
+            let descriptor = fs::read(device.join("report_descriptor")).unwrap_or_default();
+            is_keyboard_hid_id(&uevent) && declares_report_id(&descriptor, VENDOR_REPORT_ID)
+        })
+        .map(|entry| format!("/dev/{}", entry.file_name().to_string_lossy()))
+        .collect();
+    nodes.sort();
+    nodes
+}
+
+fn is_bluetooth_node(node: &str) -> bool {
+    let name = node.trim_start_matches("/dev/");
+    fs::read_to_string(format!("/sys/class/hidraw/{name}/device/uevent"))
+        .is_ok_and(|uevent| uevent.to_ascii_uppercase().contains(":00000B05:00001B2D"))
+}
+
+fn is_keyboard_hid_id(uevent: &str) -> bool {
+    uevent.lines().any(|line| {
+        let id = line.trim().to_ascii_uppercase();
+        id.starts_with("HID_ID=")
+            && (id.ends_with(":00000B05:00001B2C") || id.ends_with(":00000B05:00001B2D"))
+    })
+}
+
+/// Whether a HID report descriptor has a Report ID item with this ID.
+fn declares_report_id(descriptor: &[u8], report_id: u8) -> bool {
+    let mut i = 0;
+    while i < descriptor.len() {
+        let prefix = descriptor[i];
+        if prefix == 0xFE {
+            // Long item: data size in the next byte, plus the tag byte.
+            let size = descriptor.get(i + 1).copied().unwrap_or(0) as usize;
+            i += 3 + size;
+            continue;
+        }
+        let size = match prefix & 0x03 {
+            3 => 4,
+            n => n as usize,
+        };
+        // Report ID: global item, tag 8 (prefix 0x85 with one data byte).
+        if prefix & 0xFC == 0x84 && size >= 1 && descriptor.get(i + 1) == Some(&report_id) {
+            return true;
+        }
+        i += 1 + size;
+    }
+    false
 }
 
 /// Set backlight, trying USB first then Bluetooth.
@@ -299,5 +379,23 @@ mod tests {
 
         let warning = result.expect("unreachable backlight should be reported");
         assert!(warning.contains("os error 5"));
+    }
+
+    #[test]
+    fn finds_the_vendor_report_id_in_a_report_descriptor() {
+        // Usage page (vendor), collection, report ID 0x5a, report size, end.
+        let vendor = [0x06, 0x31, 0xFF, 0xA1, 0x01, 0x85, 0x5A, 0x75, 0x08, 0xC0];
+        assert!(declares_report_id(&vendor, 0x5A));
+        // 0x85 0x5a as data of another item (logical maximum, 2 bytes) is not one.
+        let data_only = [0x26, 0x85, 0x5A, 0x85, 0x01, 0xC0];
+        assert!(!declares_report_id(&data_only, 0x5A));
+        assert!(!declares_report_id(&[], 0x5A));
+    }
+
+    #[test]
+    fn matches_the_keyboard_over_usb_and_bluetooth_only() {
+        assert!(is_keyboard_hid_id("DRIVER=asus\nHID_ID=0003:00000B05:00001B2C\n"));
+        assert!(is_keyboard_hid_id("HID_ID=0005:00000b05:00001b2d"));
+        assert!(!is_keyboard_hid_id("HID_ID=0003:00000B05:000019B6"));
     }
 }
