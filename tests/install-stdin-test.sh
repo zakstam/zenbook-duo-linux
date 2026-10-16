@@ -44,7 +44,7 @@ chmod +x "${fake_bin}/git"
 checkout_output="$(bash --noprofile --norc -c '
   set -euo pipefail
   export PATH="'"${fake_bin}"':/usr/bin:/bin"
-  source <(sed -n "1,132p" "'"${ROOT_DIR}"'/install.sh")
+  source <(sed -n "1,139p" "'"${ROOT_DIR}"'/install.sh")
   SCRIPT_DIR="'"${temp_root}"'/missing-checkout"
   ensure_repo_checkout
 ' 2>/dev/null)" || {
@@ -64,18 +64,19 @@ fi
 
 desktop_output="$(bash --noprofile --norc -c '
   set -euo pipefail
-  source <(sed -n "1,132p" "'"${ROOT_DIR}"'/install.sh")
+  source <(sed -n "1,139p" "'"${ROOT_DIR}"'/install.sh")
   XDG_CURRENT_DESKTOP=GNOME DESKTOP_SESSION= XDG_SESSION_DESKTOP= pick_desktop
   XDG_CURRENT_DESKTOP="KDE Plasma" DESKTOP_SESSION= XDG_SESSION_DESKTOP= pick_desktop
   XDG_CURRENT_DESKTOP= DESKTOP_SESSION= XDG_SESSION_DESKTOP=niri pick_desktop
   XDG_CURRENT_DESKTOP=Hyprland DESKTOP_SESSION= XDG_SESSION_DESKTOP= pick_desktop
+  XDG_CURRENT_DESKTOP=Hyprland DESKTOP_SESSION=niri XDG_SESSION_DESKTOP=niri pick_desktop
 ' 2>/dev/null)" || {
   echo "FAIL: pick_desktop should detect all supported desktops" >&2
   exit 1
 }
 
-if [[ "${desktop_output}" != $'gnome\nkde\nniri\nhyprland' ]]; then
-  echo "FAIL: pick_desktop should map GNOME, KDE, Niri, and Hyprland consistently" >&2
+if [[ "${desktop_output}" != $'gnome\nkde\nniri\nhyprland\nhyprland' ]]; then
+  echo "FAIL: pick_desktop should map GNOME, KDE, Niri, and Hyprland consistently, trusting XDG_CURRENT_DESKTOP over leftovers from an earlier login" >&2
   exit 1
 fi
 
@@ -138,8 +139,13 @@ if ! grep -q 'StartLimitIntervalSec=0' "${ROOT_DIR}/install-rust-runtime.sh"; th
   exit 1
 fi
 
-if ! grep -Fq 'ExecStartPre=/bin/sh -c '\''test -n "\${DISPLAY:-}\${WAYLAND_DISPLAY:-}\${NIRI_SOCKET:-}"'\''' "${ROOT_DIR}/install-rust-runtime.sh"; then
-  echo "FAIL: user service should wait for graphical session variables before starting" >&2
+if grep -q 'ExecStartPre=' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: user service should start without a session-variable gate; the agent waits for a live desktop itself" >&2
+  exit 1
+fi
+
+if ! grep -q 'setup-hyprland.sh" --snippet-only' "${ROOT_DIR}/install.sh" || ! grep -q -- '--snippet-only) SNIPPET_ONLY=true' "${ROOT_DIR}/setup-hyprland.sh"; then
+  echo "FAIL: install.sh should add the Hyprland session snippet whenever Hyprland is installed" >&2
   exit 1
 fi
 

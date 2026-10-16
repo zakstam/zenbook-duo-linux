@@ -270,7 +270,6 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStartPre=/bin/sh -c 'test -n "\${DISPLAY:-}\${WAYLAND_DISPLAY:-}\${NIRI_SOCKET:-}"'
 ExecStart=${RUNTIME_INSTALL_DIR}/zenbook-duo-session-agent
 Restart=on-failure
 RestartSec=2

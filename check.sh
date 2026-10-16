@@ -26,6 +26,7 @@ check_installers() {
     "${ROOT_DIR}/setup-gnome.sh" \
     "${ROOT_DIR}/setup-kde.sh" \
     "${ROOT_DIR}/setup-niri.sh" \
+    "${ROOT_DIR}/setup-hyprland.sh" \
     "${ROOT_DIR}/uninstall.sh" \
     "${ROOT_DIR}/tests/install-stdin-test.sh"
 

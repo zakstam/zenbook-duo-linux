@@ -79,8 +79,15 @@ pick_desktop() {
   desktop_session="$(lower "${desktop_session_raw}")"
   session_desktop="$(lower "${session_desktop_raw}")"
 
+  # XDG_CURRENT_DESKTOP is set by the running desktop itself; the other two can
+  # be left over from a previous login, so they only count when it is empty.
+  local values=("${current_desktop//:/ }")
+  if [ -z "${current_desktop}" ]; then
+    values=("${desktop_session}" "${session_desktop}")
+  fi
+
   local detected=()
-  for value in "${current_desktop//:/ }" "${desktop_session}" "${session_desktop}"; do
+  for value in "${values[@]}"; do
     [ -n "${value}" ] || continue
     if contains_token "${value}" "gnome"; then
       detected+=("gnome")
@@ -194,6 +201,14 @@ if [ -r /dev/tty ]; then
   "${setup_script}" "${SETUP_ARGS[@]}" </dev/tty
 else
   "${setup_script}" "${SETUP_ARGS[@]}"
+fi
+
+# The session agent follows whichever desktop is running, so one install
+# serves every desktop; Hyprland also gets its session-environment snippet
+# when it is installed but this install runs from another desktop.
+if [ "${desktop}" != "hyprland" ] && command -v Hyprland >/dev/null 2>&1; then
+  echo "Hyprland is installed too; adding its session snippet..."
+  "${repo_dir}/setup-hyprland.sh" --snippet-only || echo "WARNING: could not add the Hyprland session snippet." >&2
 fi
 
 if [ "${INSTALL_UI}" = true ]; then

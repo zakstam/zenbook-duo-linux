@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Installation wrapper for the Hyprland backend. The optional snippet only
 # imports the session environment; it never replaces monitor or keybind config.
+# --snippet-only writes just the snippet: install.sh uses it when Hyprland is
+# installed but the install runs from another desktop.
 set -euo pipefail
 
 DUO_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-${0}}")" && pwd)"
@@ -10,19 +12,20 @@ APT_DESKTOP_PACKAGES=(hyprland)
 PACMAN_DESKTOP_PACKAGES=(hyprland)
 MANUAL_DESKTOP_DEPENDENCIES_HINT="hyprland"
 INSTALL_HYPR_SNIPPET=true
+SNIPPET_ONLY=false
 
 for arg in "$@"; do
   case "${arg}" in
     --no-hyprland-snippet) INSTALL_HYPR_SNIPPET=false ;;
     --hyprland-snippet) INSTALL_HYPR_SNIPPET=true ;;
+    --snippet-only) SNIPPET_ONLY=true ;;
   esac
 done
 
 # shellcheck source=setup-common.sh
 source "${DUO_SETUP_DIR}/setup-common.sh"
-run_duo_setup "$@"
 
-if [ "${INSTALL_HYPR_SNIPPET}" = true ]; then
+install_hyprland_snippet() {
   hypr_dir="${TARGET_HOME}/.config/hypr"
   main_config="${hypr_dir}/hyprland.conf"
   snippet="${hypr_dir}/zenbook-duo.conf"
@@ -38,8 +41,8 @@ if [ "${INSTALL_HYPR_SNIPPET}" = true ]; then
   fi
   "${run_as_target[@]}" tee "${snippet}" >/dev/null <<'EOF'
 # Zenbook Duo session environment. Safe for Hyprland and minimaLinux configs.
-exec-once = systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
-exec-once = dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
+exec-once = systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
+exec-once = dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
 EOF
 
   if [ -f "${main_config}" ] && ! "${run_as_target[@]}" grep -Fqx "${include_line}" "${main_config}"; then
@@ -48,4 +51,17 @@ EOF
   elif [ ! -f "${main_config}" ]; then
     echo "Hyprland snippet created at ${snippet}; source it once from your active config."
   fi
+}
+
+if [ "${SNIPPET_ONLY}" = true ]; then
+  resolve_duo_target_user
+  install_hyprland_snippet
+  echo "Hyprland session snippet installed."
+  exit 0
+fi
+
+run_duo_setup "$@"
+
+if [ "${INSTALL_HYPR_SNIPPET}" = true ]; then
+  install_hyprland_snippet
 fi
