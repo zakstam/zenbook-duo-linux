@@ -136,6 +136,26 @@ The installer/setup scripts make system-level changes because the project contro
   - `zenbook-duo-session-agent.service` — per-user session agent for compositor/session actions.
 - Stores user settings under `~/.config/zenbook-duo`.
 
+## GNOME extension
+
+On GNOME, setup asks whether to install **Zenbook Duo Snap**, a GNOME Shell extension for the two screens (`--gnome-extension` / `--no-gnome-extension` answer up front). It is copied to `~/.local/share/gnome-shell/extensions/zenbook-duo-snap@zenbook-duo-linux` and enabled; it loads after you log out and back in.
+
+- **Snap while dragging**: when you start dragging a window (mouse or finger), a popup opens next to the pointer with layouts for the top screen, the bottom screen, both screens stretched together, and any connected external screens: full, free (the window's own size, centred), halves, stacked, thirds, and quarters. Drop on a cell to place the window there. Screens that are off are greyed out.
+- **Tiled windows resize together**: dragging the edge between two snapped windows moves the whole dividing line. Dragging a snapped window away gives it back its earlier size.
+- **Swap screens**: `XF86Launch2` (the screen-arrows key, `F8`) swaps the windows of two screens; `Shift+XF86Launch2` moves the focused window to another screen. With exactly two screens on (both panels, or a panel and an external screen) this happens directly; with more, a dialog shows a map of the screens to pick the two to swap (it remembers the last pair) or the target screen. The keys can be changed in the extension's settings (`gsettings` schema `org.gnome.shell.extensions.zenbook-duo-snap`).
+- **On-screen keyboard**: opens only when you tap a text field with your finger (not for mouse or touchpad), and on the Duo panels never while the keyboard is attached: on the bottom screen, or on the top screen when the keyboard would cover the field. Swiping up to open it only works from the bottom edge of the bottom screen. On an external touch screen it opens on that screen, for taps and swipes, also with the keyboard attached.
+- **Display controls**: the display key (`F7`, which the keyboard sends as `Super+P`) opens a compact Displays dialog on the main display, and closes it again (setting `display-controls-on-super-p`; turning it off gives `Super+P` back to GNOME). Changes apply right away, in three tabs:
+  - *Projection*: show everything, the Duo only, or the external screens only; per screen on/off and main display; an external screen can show its own desktop or mirror a Duo panel or another external screen (both switch to a resolution they share). *Table mode* turns the top screen upside down for someone across the table, with the bottom screen as the main display (slides on top, the presenter view below); auto-rotation pauses meanwhile. With the keyboard attached the bottom screen can't be turned on here.
+  - *Position*: place an external screen above, left, right or below the Duo, one panel, or another external screen, with an offset along that edge: centred, halfway, as far as GNOME allows (10% of the shorter edge stays shared so the pointer can cross), or with the edges lined up. Choices that would overlap another screen are greyed out; screens placed against another one move along with it.
+  - *Screen*: rotation for external screens, the scale (the panels' scale is saved like the Control Panel's), and each Duo panel's brightness, with a *Both Duo screens* toggle.
+- **Main display switch**: `Shift+F7`, or five fingers held still on a touch screen for a moment, shows a bubble on every screen: press *Make this the main display* on the one you want; pressed again, it is cancelled. The keyboard drops Shift for `F7` and sends `Super+P`, so `Shift+F7` needs the Zenbook Duo services to recognise it (settings `main-display-switch`, `five-finger-main-display`).
+- **Warnings**: when the bottom screen is on while the keyboard lies on it (turned on in GNOME Settings, say), a bubble offers to turn it off, which moves its windows to the top screen. With the Zenbook Duo services, low keyboard battery shows as a bubble that stays until you press OK.
+- **Pop-ups**: provides on-screen pop-ups, like GNOME's volume and brightness ones, that the Zenbook Duo services use when they are installed (Fn lock, keyboard backlight, mic volume, the screen key, attach and detach).
+
+It targets GNOME 50. Stretching a window across both screens relies on Ubuntu's Mutter (which lets the extension mark the window as tiled so GTK 4 apps keep the size); elsewhere it still places the window but some apps may shrink back to one screen.
+
+If the extension ever misbehaves, turn it off with `gnome-extensions disable zenbook-duo-snap@zenbook-duo-linux`. `uninstall.sh` removes it.
+
 ## Architecture snapshot
 
 - **Rust system daemon**: owns hardware state, policy, persistence, privileged operations, logs/events, Bluetooth hotkeys, and daemon IPC.
