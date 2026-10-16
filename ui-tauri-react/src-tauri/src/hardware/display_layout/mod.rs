@@ -90,8 +90,10 @@ fn stacked_logical_height(display: &DisplayInfo) -> i32 {
     } else {
         display.height
     };
-    let scale = display.scale.max(0.1);
-    (physical_height as f64 / scale).ceil() as i32
+    crate::features::display_layout::scale::ceil_logical_pixels(
+        physical_height as f64,
+        display.scale,
+    ) as i32
 }
 
 pub fn normalize_display_layout(layout: DisplayLayout) -> DisplayLayout {

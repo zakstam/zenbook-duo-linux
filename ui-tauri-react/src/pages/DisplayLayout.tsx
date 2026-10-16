@@ -9,7 +9,7 @@ import {
 } from "@/lib/display-layout-controller";
 import { useTouchscreens } from "@/hooks/use-touchscreens";
 import { modesForResolution, refreshSelectValue } from "@/lib/display-layout";
-import { displayScaleOptions, formatDisplayScale } from "@/shared/display-scales";
+import { canonicalDisplayScale, displayScaleOptions, formatDisplayScale } from "@/shared/display-scales";
 import type { DisplayLayout as LayoutType } from "@/types/duo";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -160,7 +160,7 @@ export default function DisplayLayout() {
               <Label className="font-mono text-[13px]">{d.connector}</Label>
               <div className="flex items-center gap-3">
                 <Select
-                  value={String(d.scale)}
+                  value={String(canonicalDisplayScale(d.scale))}
                   onValueChange={(v) => {
                     const scale = parseFloat(v);
                     setLayout((current) => updateDisplayScale(current, d.connector, scale));

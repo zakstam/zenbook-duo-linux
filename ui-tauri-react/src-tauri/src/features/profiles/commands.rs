@@ -14,14 +14,18 @@ fn profiles_path() -> PathBuf {
 
 fn load_profile_list() -> ProfileList {
     let path = profiles_path();
-    fs::read_to_string(&path)
+    let mut list = fs::read_to_string(&path)
         .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
+        .and_then(|s| serde_json::from_str::<ProfileList>(&s).ok())
         .unwrap_or_else(|| ProfileList {
             profiles: Profile::default_profiles(
                 crate::commands::settings::load_settings_local().default_scale,
             ),
-        })
+        });
+    for profile in &mut list.profiles {
+        crate::features::display_layout::scale::migrate_profile_scales(profile);
+    }
+    list
 }
 
 fn save_profile_list(list: &ProfileList) -> Result<(), String> {

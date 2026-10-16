@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use super::DisplayLayout;
 
 pub const DEFAULT_BACKLIGHT_LEVEL: u8 = 0;
-pub const DEFAULT_SCALE_FACTOR: f64 = 1.66;
+/// 5/3: the Duo panels at 1728x1080 logical pixels. See
+/// `features::display_layout::scale` for why the scale must be a clean preset.
+pub const DEFAULT_SCALE_FACTOR: f64 = 5.0 / 3.0;
 pub const DEFAULT_USB_MEDIA_REMAP_ENABLED: bool = true;
 pub const DEFAULT_START_ON_BOOT_MINIMIZED: bool = false;
 pub const DEFAULT_INVERT_SENSOR_ROTATION: bool = false;

@@ -40,6 +40,9 @@ check_rust() {
 }
 
 check_frontend() {
+  echo "==> Running frontend unit tests"
+  (cd "${UI_DIR}" && node --test src/shared/*.test.ts)
+
   echo "==> Building and type-checking frontend"
   (cd "${UI_DIR}" && npm run vite:build)
 }

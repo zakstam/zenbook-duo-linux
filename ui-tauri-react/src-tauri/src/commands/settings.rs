@@ -102,6 +102,7 @@ pub fn load_settings_local() -> DuoSettings {
         }
     }
 
+    crate::features::display_layout::scale::migrate_settings_scales(&mut settings);
     settings
 }
 

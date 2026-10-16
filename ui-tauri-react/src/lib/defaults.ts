@@ -16,7 +16,7 @@ export const DEFAULT_DUO_STATUS: DuoStatus = {
 
 export const DEFAULT_DUO_SETTINGS: DuoSettings = {
   defaultBacklight: 0,
-  defaultScale: 1.66,
+  defaultScale: 5 / 3,
   autoDualScreen: true,
   syncBrightness: true,
   theme: "system",

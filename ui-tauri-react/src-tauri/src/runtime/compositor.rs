@@ -2,6 +2,7 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 
+use crate::features::display_layout::scale::ceil_logical_pixels;
 use crate::runtime::session;
 
 pub fn command_output<S: AsRef<str>>(program: &str, args: &[S]) -> Result<Output, String> {
@@ -150,8 +151,8 @@ pub(crate) fn kde_output_logical_size_from_value_with(
             // fractional scales (1800 / 1.6583 = 1085.43 -> 1085 vs KWin's 1086),
             // which KDE reports as a gap and blocks pointer movement across it.
             return Ok((
-                (width as f64 / scale).ceil() as i64,
-                (height as f64 / scale).ceil() as i64,
+                ceil_logical_pixels(width as f64, scale),
+                ceil_logical_pixels(height as f64, scale),
             ));
         }
     }
@@ -224,8 +225,8 @@ fn niri_exact_logical_size(output: &Value) -> Option<(i64, i64)> {
         (width, height)
     };
     Some((
-        (width / scale).ceil() as i64,
-        (height / scale).ceil() as i64,
+        ceil_logical_pixels(width, scale),
+        ceil_logical_pixels(height, scale),
     ))
 }
 

@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useUsbMediaRemap } from "@/hooks/use-usb-media-remap";
-import { displayScaleOptions, formatDisplayScale } from "@/shared/display-scales";
+import { canonicalDisplayScale, displayScaleOptions, formatDisplayScale } from "@/shared/display-scales";
 import {
   Select,
   SelectContent,
@@ -152,7 +152,7 @@ export default function Settings() {
 
           <SettingRow label="Default Display Scale" description="Scale factor for newly connected displays">
             <Select
-              value={String(localSettings.defaultScale)}
+              value={String(canonicalDisplayScale(localSettings.defaultScale))}
               onValueChange={(v) => updateLocal("defaultScale", parseFloat(v))}
             >
               <SelectTrigger className="w-48">
