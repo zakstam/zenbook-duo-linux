@@ -105,7 +105,7 @@ assert_setup_packages() {
     exit 1
   }
 
-  local expected=$'dnf:usbutils iio-sensor-proxy systemd '"${dnf_desktop}"$'\napt:usbutils iio-sensor-proxy systemd '"${apt_desktop}"$'\npacman:usbutils iio-sensor-proxy systemd '"${pacman_desktop}"$'\nhint:usbutils, iio-sensor-proxy, systemd, '"${manual_hint}"
+  local expected=$'dnf:usbutils iio-sensor-proxy systemd upower pulseaudio-utils '"${dnf_desktop}"$'\napt:usbutils iio-sensor-proxy systemd upower pulseaudio-utils '"${apt_desktop}"$'\npacman:usbutils iio-sensor-proxy systemd upower libpulse '"${pacman_desktop}"$'\nhint:usbutils, iio-sensor-proxy, systemd, upower, pactl (pulseaudio-utils), '"${manual_hint}"
   if [[ "${output}" != "${expected}" ]]; then
     echo "FAIL: setup package matrix mismatch for ${label}" >&2
     echo "Got:" >&2
@@ -125,6 +125,11 @@ fi
 
 if grep -q 'Wants=graphical-session.target' "${ROOT_DIR}/install-rust-runtime.sh"; then
   echo "FAIL: user service should not pull in graphical-session.target" >&2
+  exit 1
+fi
+
+if ! grep -q 'PartOf=graphical-session.target' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: user service should restart with every graphical login" >&2
   exit 1
 fi
 
@@ -274,9 +279,9 @@ if ! grep -q 'command -v pacman' "${ROOT_DIR}/setup-common.sh"; then
 fi
 
 for common_packages in \
-  'DUO_COMMON_DNF_PACKAGES=(usbutils iio-sensor-proxy systemd)' \
-  'DUO_COMMON_APT_PACKAGES=(usbutils iio-sensor-proxy systemd)' \
-  'DUO_COMMON_PACMAN_PACKAGES=(usbutils iio-sensor-proxy systemd)'; do
+  'DUO_COMMON_DNF_PACKAGES=(usbutils iio-sensor-proxy systemd upower pulseaudio-utils)' \
+  'DUO_COMMON_APT_PACKAGES=(usbutils iio-sensor-proxy systemd upower pulseaudio-utils)' \
+  'DUO_COMMON_PACMAN_PACKAGES=(usbutils iio-sensor-proxy systemd upower libpulse)'; do
   if ! grep -q "${common_packages}" "${ROOT_DIR}/setup-common.sh"; then
     echo "FAIL: shared setup helper should centralize common dependency list ${common_packages}" >&2
     exit 1
@@ -286,14 +291,7 @@ done
 remap_default_output="$(bash --noprofile --norc -c '
   set -euo pipefail
   source "'"${ROOT_DIR}"'/setup-common.sh"
-  duo_prompt() { printf -v "$2" ""; }
-
-  DEFAULT_BACKLIGHT=0
-  DEFAULT_SCALE=1.66
-  USB_MEDIA_REMAP_ENABLED=false
-  prompt_duo_defaults
-  printf "%s\n" "${USB_MEDIA_REMAP_ENABLED}"
-
+  duo_prompt() { printf -v "$2" "n"; }
   DEFAULT_BACKLIGHT=0
   DEFAULT_SCALE=1.66
   USB_MEDIA_REMAP_ENABLED=true
@@ -304,9 +302,35 @@ remap_default_output="$(bash --noprofile --norc -c '
   exit 1
 }
 
-if [[ "${remap_default_output}" != $'false\ntrue' ]]; then
-  echo "FAIL: empty USB remap prompt answer should preserve the current default" >&2
+if [[ "${remap_default_output}" != "true" ]]; then
+  echo "FAIL: the USB remap is no longer asked about" >&2
   printf 'Got:\n%s\n' "${remap_default_output}" >&2
+  exit 1
+fi
+
+saved_defaults_output="$(bash --noprofile --norc -c '
+  set -euo pipefail
+  source "'"${ROOT_DIR}"'/setup-common.sh"
+  home="$(mktemp -d)"
+  mkdir -p "${home}/.config/zenbook-duo"
+  echo "{\"defaultBacklight\": 2, \"defaultScale\": 1.25, \"usbMediaRemapEnabled\": false}" \
+    > "${home}/.config/zenbook-duo/settings.json"
+  TARGET_HOME="${home}"
+  DEFAULT_BACKLIGHT=0 DEFAULT_SCALE=1.66 USB_MEDIA_REMAP_ENABLED=true
+  load_duo_saved_defaults
+  printf "%s %s %s\n" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}"
+  DEFAULT_BACKLIGHT=0 DEFAULT_SCALE=1.66 USB_MEDIA_REMAP_ENABLED=true DUO_GIVEN_SCALE=1
+  load_duo_saved_defaults
+  printf "%s %s %s\n" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}"
+  rm -rf "${home}"
+' 2>&1)" || {
+  echo "FAIL: load_duo_saved_defaults should be callable" >&2
+  exit 1
+}
+
+if [[ "${saved_defaults_output}" != $'2 1.25 false\n2 1.66 false' ]]; then
+  echo "FAIL: a reinstall should default to the saved settings, unless given explicitly" >&2
+  printf 'Got:\n%s\n' "${saved_defaults_output}" >&2
   exit 1
 fi
 

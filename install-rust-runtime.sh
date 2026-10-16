@@ -265,6 +265,11 @@ cat <<EOF | sudo tee "/etc/systemd/user/${USER_SERVICE_NAME}" >/dev/null
 [Unit]
 Description=Zenbook Duo Session Agent
 ConditionUser=!gdm
+# Restarted with every graphical login on desktops that use
+# graphical-session.target, so each new session gets the screen layout for the
+# keyboard's state (the user manager outlives a quick logout). Also started
+# from default.target for desktops that never start that target.
+PartOf=graphical-session.target
 After=graphical-session.target
 StartLimitIntervalSec=0
 
@@ -278,7 +283,7 @@ TimeoutStopSec=5
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 
 [Install]
-WantedBy=default.target
+WantedBy=default.target graphical-session.target
 EOF
 
 sudo mkdir -p "${SYSTEM_SLEEP_HOOK_DIR}"
@@ -301,6 +306,8 @@ run_user_systemctl_checked daemon-reload
 import_user_environment
 run_user_systemctl disable zenbook-duo-user.service >/dev/null 2>&1 || true
 run_user_systemctl stop zenbook-duo-user.service >/dev/null 2>&1 || true
+# Re-enable so the links match the current [Install] section.
+run_user_systemctl disable "${USER_SERVICE_NAME}" >/dev/null 2>&1 || true
 run_user_systemctl_checked enable "${USER_SERVICE_NAME}"
 run_user_systemctl_checked restart "${USER_SERVICE_NAME}"
 
