@@ -27,11 +27,76 @@ use crate::runtime::{
     session_watchers, state::RuntimeState,
 };
 
-pub async fn run() -> Result<(), String> {
+/// Exit status the agent uses when the desktop it follows has ended; systemd
+/// restarts it and the new process adopts whichever desktop logs in next.
+pub const SESSION_ENDED_EXIT_CODE: i32 = 75;
+const SESSION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Wait until a desktop session is running for this user and point the
+/// process environment at it. Call from `main` before the async runtime starts,
+/// because it writes the process environment.
+pub fn adopt_live_session_blocking() -> session::LiveSession {
+    let runtime_dir = user_runtime_root();
+    let mut announced_wait = false;
+    loop {
+        let manager_env = session::user_manager_environment();
+        if let Some(live) = session::discover_live_session(&runtime_dir, &manager_env) {
+            live.adopt_into_process_env();
+            session_agent_log_info(format!("following desktop session: {}", live.describe()));
+            return live;
+        }
+        if !announced_wait {
+            session_agent_log_info("no desktop session is running; waiting for a login");
+            announced_wait = true;
+        }
+        std::thread::sleep(SESSION_POLL_INTERVAL);
+    }
+}
+
+fn user_runtime_root() -> std::path::PathBuf {
+    env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| paths::current_user_runtime_dir().parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| std::path::PathBuf::from("/run/user"))
+}
+
+/// Exit once the followed desktop stops answering (the user logged out), so
+/// systemd restarts the agent for the next login. Two misses in a row are
+/// required so one slow accept does not restart a live session.
+fn exit_when_session_ends(live: session::LiveSession) {
+    tokio::spawn(async move {
+        let runtime_dir = user_runtime_root();
+        let mut misses = 0;
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if session::session_is_live(&live, &runtime_dir) {
+                misses = 0;
+                continue;
+            }
+            misses += 1;
+            if misses >= 2 {
+                session_agent_log_info(format!(
+                    "desktop session ended ({}); restarting to follow the next login",
+                    live.desktop_name
+                ));
+                std::process::exit(SESSION_ENDED_EXIT_CODE);
+            }
+        }
+    });
+}
+
+pub async fn run(live: session::LiveSession) -> Result<(), String> {
     ensure_user_runtime_dir()?;
     let listener = bind_session_listener(paths::current_user_session_socket_path().as_path())?;
+    exit_when_session_ends(live.clone());
 
     let backend = BackendReadiness::wait_for_ready_backend().await;
+    if backend != live.backend {
+        session_agent_log_warn(format!(
+            "followed desktop is {:?} but the ready backend is {:?}",
+            live.backend, backend
+        ));
+    }
     register_with_daemon(backend).await?;
     apply_touch_mapping_best_effort("session startup", backend);
     session_watchers::start_all();
