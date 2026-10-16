@@ -11,6 +11,8 @@ bindings:
   lid: ui-tauri-react/src-tauri/src/runtime/logind.rs
   page: ui-tauri-react/src/pages/DisplayLayout.tsx
   planner: ui-tauri-react/src-tauri/src/runtime/session_display_planner.rs
+  scales: ui-tauri-react/src-tauri/src/features/display_layout
+  scalePresets: ui-tauri-react/src/shared/display-scales.ts
 invariants:
   - Reading the display layout (get_display_layout, backend and frontend) returns each screen where the compositor has it; only applying a layout stacks the Duo screens via normalize_display_layout. Normalizing on read hid drifted screens from the user.
 ---

@@ -229,6 +229,33 @@ mod tests {
     }
 
     #[test]
+    fn scales_saved_as_1_66_or_1_75_load_as_five_thirds() {
+        let _guard = crate::commands::settings::test_env_lock()
+            .lock()
+            .expect("profiles env lock");
+        let _home = TestHome::new();
+        let mut settings = crate::models::DuoSettings::default();
+        settings.default_scale = 1.66;
+        crate::commands::settings::save_settings_local(settings).expect("save settings");
+        assert_eq!(
+            crate::commands::settings::load_settings_local().default_scale,
+            5.0 / 3.0
+        );
+
+        save_profile(Profile {
+            scale: 1.75,
+            bottom_scale: Some(1.66),
+            ..test_profile("old")
+        })
+        .expect("save old profile");
+        let old = list_profiles()
+            .into_iter()
+            .find(|p| p.id == "old")
+            .expect("old profile");
+        assert_eq!((old.scale, old.bottom_scale), (5.0 / 3.0, Some(5.0 / 3.0)));
+    }
+
+    #[test]
     fn profile_storage_roundtrip_uses_zenbook_duo_home() {
         let _guard = crate::commands::settings::test_env_lock()
             .lock()

@@ -11,7 +11,9 @@ DUO_COMMON_MANUAL_DEPENDENCIES_HINT="usbutils, iio-sensor-proxy, systemd"
 # Keep these defaults aligned with DuoSettings::default in the Rust runtime and
 # DEFAULT_DUO_SETTINGS in the frontend.
 DUO_DEFAULT_BACKLIGHT=0
-DUO_DEFAULT_SCALE=1.66
+# 1.67 stands for 5/3 (1728x1080 on the 2880x1800 panels); the app stores it as 5/3.
+# Offer only scales on the 1/120 grid that divide 2880x1800 evenly, or desktops change them.
+DUO_DEFAULT_SCALE=1.67
 DUO_DEFAULT_USB_MEDIA_REMAP_ENABLED=true
 DUO_DEFAULT_START_ON_BOOT_MINIMIZED=false
 DUO_INSTALLER_MARKS_SETUP_COMPLETED=true
@@ -115,7 +117,7 @@ prompt_duo_defaults() {
   duo_prompt "What would you like to use for the default keyboard backlight brightness [0-3] (default: ${DEFAULT_BACKLIGHT})? " input
   DEFAULT_BACKLIGHT="${input:-${DEFAULT_BACKLIGHT}}"
 
-  duo_prompt "What would you like to use for monitor scale (1 = 100%, 1.5 = 150%, 1.66 = 166%, 2=200%) (default: ${DEFAULT_SCALE})? " input
+  duo_prompt "What would you like to use for monitor scale (1, 1.25, 1.33, 1.5, 1.67 or 2) (default: ${DEFAULT_SCALE})? " input
   DEFAULT_SCALE="${input:-${DEFAULT_SCALE}}"
 
   local remap_answer=""

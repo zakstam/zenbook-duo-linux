@@ -295,13 +295,13 @@ remap_default_output="$(bash --noprofile --norc -c '
   duo_prompt() { printf -v "$2" ""; }
 
   DEFAULT_BACKLIGHT=0
-  DEFAULT_SCALE=1.66
+  DEFAULT_SCALE=1.67
   USB_MEDIA_REMAP_ENABLED=false
   prompt_duo_defaults
   printf "%s\n" "${USB_MEDIA_REMAP_ENABLED}"
 
   DEFAULT_BACKLIGHT=0
-  DEFAULT_SCALE=1.66
+  DEFAULT_SCALE=1.67
   USB_MEDIA_REMAP_ENABLED=true
   prompt_duo_defaults
   printf "%s\n" "${USB_MEDIA_REMAP_ENABLED}"
@@ -335,7 +335,7 @@ from pathlib import Path
 settings = json.loads(Path(sys.argv[1]).read_text())
 expected = {
     "defaultBacklight": 0,
-    "defaultScale": 1.66,
+    "defaultScale": 1.67,
     "usbMediaRemapEnabled": True,
     "startOnBootMinimized": False,
     "setupCompleted": True,
