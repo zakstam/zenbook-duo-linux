@@ -6,7 +6,7 @@ bindings:
   commands: ui-tauri-react/src-tauri/src/commands/touchscreen.rs
   hardware: ui-tauri-react/src-tauri/src/hardware/touchscreen.rs
   hook: ui-tauri-react/src/hooks/use-touchscreens.ts
-  touch-mapping: ui-tauri-react/src-tauri/src/runtime/session_agent/touch_mapping.rs
+  touchMapping: ui-tauri-react/src-tauri/src/runtime/session_agent/touch_mapping.rs
 ---
 
 Enables or disables touch input per screen from the Controls page: each ELAN touchscreen is matched to its internal display connector, and the disabled list is kept in settings so it survives restarts.

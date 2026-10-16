@@ -4,7 +4,7 @@ slug: screen-rotation
 name: Screen rotation
 bindings:
   watcher: ui-tauri-react/src-tauri/src/runtime/session_agent/rotation.rs
-  lying-flat: ui-tauri-react/src-tauri/src/runtime/session_agent/lying_flat.rs
+  lyingFlat: ui-tauri-react/src-tauri/src/runtime/session_agent/lying_flat.rs
   buttons: ui-tauri-react/src/components/OrientationButtons.tsx
 ---
 
