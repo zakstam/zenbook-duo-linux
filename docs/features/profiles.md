@@ -18,3 +18,4 @@ Saves named hardware states (keyboard backlight; top screen scale and rotation; 
 ## Journeys
 
 - Activating Docked switches the bottom screen off at the profile's scale, Tablet switches it back on, Presentation flips the top screen, and an edited profile, even a built-in one, keeps its changes after a restart. (card ec32a902-bdb3-44be-b22f-eb501473e1a5, 2026-10-04)
+- A profile saved at 1.66x or 1.75x applies at 1.67x after updating. (card 17880f60-1d4d-48f7-8e2d-ca8d73859792, 2026-10-16)

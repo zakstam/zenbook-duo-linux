@@ -11,8 +11,8 @@ bindings:
   lid: ui-tauri-react/src-tauri/src/runtime/logind.rs
   page: ui-tauri-react/src/pages/DisplayLayout.tsx
   planner: ui-tauri-react/src-tauri/src/runtime/session_display_planner.rs
-  scales: ui-tauri-react/src-tauri/src/features/display_layout
   scalePresets: ui-tauri-react/src/shared/display-scales.ts
+  scales: ui-tauri-react/src-tauri/src/features/display_layout
 invariants:
   - Reading the display layout (get_display_layout, backend and frontend) returns each screen where the compositor has it; only applying a layout stacks the Duo screens via normalize_display_layout. Normalizing on read hid drifted screens from the user.
 ---
@@ -25,3 +25,6 @@ Arranges the two internal screens and any external monitor: the Display Layout p
 - Each display's scale dropdown lists scales in ascending order, includes 1.75, and shows the display's current scale even when it is not a preset. (card 9d6f1731-d4f1-4114-a4b2-12f24323f3ef, 2026-10-05)
 - On niri, picking a scale like 1.66x and pressing Apply Layout leaves the bottom screen directly under the top one, so the mouse crosses straight down. (card 8ef9898e-1d8f-4320-86e0-84c68a7a3c7e, 2026-10-15)
 - After niri moves the bottom screen beside the top one, the Display Layout page draws it to the right at niri's coordinates, and Apply Layout puts it back underneath. (card e55c3ab8-aaef-4f26-bf26-886889f0f84d, 2026-10-15)
+- On the Display Layout page, changing a screen's scale keeps the bottom screen drawn flush under the top one, and after Apply the page shows where the desktop really put the screens. (card c022a42f-1b04-466e-b8be-7b7a0a2156e3, 2026-10-16)
+- The scale dropdown offers 1.0x, 1.25x, 1.33x, 1.5x, 1.67x and 2.0x, and the desktop keeps whichever is picked, so the bottom screen stays flush under the top one. (card 17880f60-1d4d-48f7-8e2d-ca8d73859792, 2026-10-16)
+- Logging out of niri and into Hyprland (or back) leaves rotation, dock changes and layout working in the new desktop, with no restart. (card cf1eef69-b08e-4b0c-a8a6-a0244af8f4ee, 2026-10-16)

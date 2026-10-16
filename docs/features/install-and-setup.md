@@ -22,3 +22,5 @@ Gets the app onto a machine and ready: shell installers build and install the Ru
 ## Journeys
 
 - Running the installer with the keyboard detached and asleep finishes successfully and leaves the session agent running the new version; if a service does fail, the installer names it and shows its log lines. (card 328c0178-7652-479a-82e0-141204f0e032, 2026-10-15)
+- The installer's scale prompt lists 1, 1.25, 1.33, 1.5, 1.67 and 2, with 1.67 as the default. (card 17880f60-1d4d-48f7-8e2d-ca8d73859792, 2026-10-16)
+- Installing once from niri also sets the app up for Hyprland when it is installed, and a terminal still carrying an earlier desktop's settings no longer makes the installer give up. (card cf1eef69-b08e-4b0c-a8a6-a0244af8f4ee, 2026-10-16)
