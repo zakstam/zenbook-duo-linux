@@ -1,0 +1,254 @@
+.duo-snap-popup {
+  background-color: rgba(30, 30, 30, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  padding: 10px;
+  spacing: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+}
+
+.duo-snap-column {
+  spacing: 8px;
+}
+
+.duo-snap-box {
+  background-color: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 6px 8px 8px 8px;
+  spacing: 4px;
+}
+
+.duo-snap-box:active {
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(53, 132, 228, 0.9);
+}
+
+.duo-snap-label {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+  font-weight: bold;
+  padding: 0 2px 2px 2px;
+}
+
+.duo-snap-layouts,
+.duo-snap-layouts-row {
+  spacing: 6px;
+}
+
+/* One layout icon: a tiny screen made of droppable cells. */
+.duo-snap-layout {
+  width: 60px;
+  height: 38px;
+  padding: 2px;
+  spacing: 2px;
+  border-radius: 6px;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.duo-snap-span-layout {
+  width: 48px;
+  height: 0;
+}
+
+.duo-snap-cells {
+  spacing: 2px;
+}
+
+.duo-snap-zone {
+  border-radius: 3px;
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+.duo-snap-zone:hover {
+  background-color: rgba(53, 132, 228, 0.95);
+}
+
+.duo-snap-free-label {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 9px;
+}
+
+/* F8 / Shift+F8 with more than two screens: pick screens on a map. */
+.duo-snap-pick-map {
+  margin-top: 12px;
+}
+
+.duo-snap-pick-screen {
+  background-color: rgba(255, 255, 255, 0.08);
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  transition-duration: 150ms;
+}
+
+.duo-snap-pick-screen:hover,
+.duo-snap-pick-screen:focus {
+  background-color: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.duo-snap-pick-screen:checked {
+  background-color: rgba(53, 132, 228, 0.3);
+  border-color: rgba(53, 132, 228, 0.95);
+}
+
+.duo-snap-pick-source {
+  background-color: rgba(53, 132, 228, 0.15);
+  border: 2px dashed rgba(53, 132, 228, 0.7);
+}
+
+.duo-snap-pick-badge {
+  font-size: 18px;
+  font-weight: bold;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.duo-snap-pick-name {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* F7 display controls. */
+.duo-snap-display-body {
+  spacing: 14px;
+  margin-top: 12px;
+}
+
+.duo-snap-display-map-box {
+  spacing: 8px;
+}
+
+.duo-snap-display-row {
+  spacing: 6px;
+}
+
+.duo-snap-display-row-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.duo-snap-close-button {
+  padding: 6px;
+  border-radius: 99px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.duo-snap-close-button:hover,
+.duo-snap-close-button:focus {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.duo-snap-chips {
+  spacing: 6px;
+}
+
+.duo-snap-tabs {
+  spacing: 2px;
+  padding: 3px;
+  border-radius: 99px;
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.duo-snap-tab {
+  padding: 6px 14px;
+  border-radius: 99px;
+  font-size: 13px;
+  font-weight: bold;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.duo-snap-tab:hover,
+.duo-snap-tab:focus {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.duo-snap-tab:checked {
+  background-color: rgba(255, 255, 255, 0.18);
+  color: white;
+}
+
+.duo-snap-display-note {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.duo-snap-brightness {
+  spacing: 10px;
+  padding: 4px 0;
+}
+
+.duo-snap-cross {
+  spacing: 6px;
+}
+
+.duo-snap-chip {
+  padding: 6px 12px;
+  border-radius: 99px;
+  font-size: 13px;
+  background-color: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+  transition-duration: 150ms;
+}
+
+.duo-snap-chip:hover,
+.duo-snap-chip:focus {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+.duo-snap-chip:checked {
+  background-color: rgba(53, 132, 228, 0.9);
+  color: white;
+}
+
+.duo-snap-chip:insensitive {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* On top of GNOME's .osd-window look (colours, shape, bottom margin). */
+.duo-snap-alert {
+  spacing: 14px;
+  border-radius: 24px;
+}
+
+/* A fixed text width, so wrapped lines get the right height. */
+.duo-snap-alert > StBoxLayout,
+.duo-snap-alert-text {
+  width: 360px;
+}
+
+.duo-snap-alert-icon {
+  icon-size: 32px;
+  color: #f6d32d;
+}
+
+.duo-snap-alert-title {
+  text-align: left;
+}
+
+.duo-snap-alert-message {
+  text-align: left;
+  font-weight: normal;
+  font-size: 0.9em;
+}
+
+.duo-snap-alert-actions {
+  spacing: 6px;
+}
+
+.duo-snap-alert-button {
+  padding: 8px 18px;
+  border-radius: 99px;
+  font-weight: bold;
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.duo-snap-alert-button:hover,
+.duo-snap-alert-button:focus {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.duo-snap-alert-button:insensitive {
+  color: rgba(255, 255, 255, 0.45);
+  background-color: rgba(255, 255, 255, 0.05);
+}

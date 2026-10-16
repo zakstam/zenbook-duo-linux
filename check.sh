@@ -12,6 +12,7 @@ Usage:
   ./check.sh installers   # shell syntax + installer smoke tests
   ./check.sh rust         # Rust runtime unit tests
   ./check.sh frontend     # React/TypeScript production build
+  ./check.sh extension    # GNOME extension unit tests (needs gjs)
   ./check.sh all          # run every check above
 EOF
 }
@@ -38,6 +39,15 @@ check_rust() {
   cargo test --manifest-path "${UI_DIR}/src-tauri/Cargo.toml" --lib
 }
 
+check_extension() {
+  if ! command -v gjs >/dev/null 2>&1; then
+    echo "==> Skipping GNOME extension tests (gjs not installed)"
+    return 0
+  fi
+  echo "==> Running GNOME extension unit tests"
+  gjs -m "${ROOT_DIR}/gnome-extension/tests/zones.test.js"
+}
+
 check_frontend() {
   echo "==> Building and type-checking frontend"
   (cd "${UI_DIR}" && npm run vite:build)
@@ -53,9 +63,13 @@ case "${1:-all}" in
   frontend)
     check_frontend
     ;;
+  extension)
+    check_extension
+    ;;
   all)
     check_installers
     check_rust
+    check_extension
     check_frontend
     ;;
   -h|--help|help)

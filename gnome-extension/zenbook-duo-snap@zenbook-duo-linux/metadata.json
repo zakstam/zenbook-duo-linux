@@ -1,0 +1,10 @@
+{
+  "uuid": "zenbook-duo-snap@zenbook-duo-linux",
+  "name": "Zenbook Duo Snap",
+  "description": "Window snapping and touch helpers for the ASUS Zenbook Duo: while a window is dragged, a popup snaps it to either screen, across both, or to an external screen; F8 / Shift+F8 swap windows between the screens; F7 opens display controls (what is shown, positions, mirroring, table mode, scale, rotation and brightness); the on-screen keyboard opens on the screen without the text field and stays off while the keyboard is attached; pop-ups for the Duo keys (with the Zenbook Duo services).",
+  "shell-version": [
+    "50"
+  ],
+  "settings-schema": "org.gnome.shell.extensions.zenbook-duo-snap",
+  "url": "https://github.com/zakstam/zenbook-duo-linux"
+}

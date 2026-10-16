@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.zenbook-duo-snap"
+          path="/org/gnome/shell/extensions/zenbook-duo-snap/">
+    <key name="swap-windows" type="as">
+      <default><![CDATA[['XF86Launch2']]]></default>
+      <summary>Swap all windows between the top and bottom screen</summary>
+      <description>F8 (screen arrows) on the Zenbook Duo keyboard sends XF86Launch2.</description>
+    </key>
+    <key name="move-window-to-other-screen" type="as">
+      <default><![CDATA[['<Shift>XF86Launch2']]]></default>
+      <summary>Move the focused window to the other screen</summary>
+    </key>
+    <key name="display-controls" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Open the display controls</summary>
+      <description>Extra shortcuts for the display controls. F7 (the projection key) sends Super+P, which display-controls-on-super-p takes over.</description>
+    </key>
+    <key name="main-display-switch" type="as">
+      <default><![CDATA[['<Shift><Super>p']]]></default>
+      <summary>Ask which screen becomes the main display</summary>
+      <description>Shift+F7: a bubble on every screen; "Make this the main display" on one of them makes that screen the main display. The keyboard drops Shift and sends Super+P for Shift+F7; the Zenbook Duo services recognise that and call ShiftF7Pressed. Shift+Super+P is the fallback.</description>
+    </key>
+    <key name="five-finger-main-display" type="b">
+      <default>true</default>
+      <summary>Five fingers held on a screen open the main-display switch</summary>
+      <description>Holding five fingers still on one touch screen for a moment shows the same bubble as Shift+F7.</description>
+    </key>
+    <key name="display-controls-on-super-p" type="b">
+      <default>true</default>
+      <summary>Open the display controls with Super+P too</summary>
+      <description>Detached, F7 sends Super+P, which GNOME uses for its display switcher; this opens the display controls instead.</description>
+    </key>
+    <key name="touch-keyboard" type="b">
+      <default>true</default>
+      <summary>Show the on-screen keyboard when a text field is tapped with a finger</summary>
+      <description>GNOME normally only does this without a physical keyboard; clicking with the touchpad or mouse still never opens it.</description>
+    </key>
+    <key name="keyboard-on-other-screen" type="b">
+      <default>true</default>
+      <summary>Keep the on-screen keyboard on the bottom screen</summary>
+      <description>With both screens on, the on-screen keyboard appears on the bottom screen, or on the top screen when it would cover a text field on the bottom screen, and the swipe-up gesture only works from the bottom screen's edge.</description>
+    </key>
+  </schema>
+</schemalist>

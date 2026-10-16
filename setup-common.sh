@@ -51,6 +51,10 @@ run_duo_setup() {
   configure_duo_libinput_quirks
   write_duo_settings_defaults
   install_duo_rust_runtime
+  # Desktop-specific extras, defined by the desktop's setup script.
+  if declare -F install_duo_desktop_extras >/dev/null; then
+    install_duo_desktop_extras
+  fi
 
   echo "Install complete."
 }
@@ -64,6 +68,14 @@ parse_duo_setup_args() {
         ;;
       --no-usb-media-remap)
         USB_MEDIA_REMAP_ENABLED=false
+        shift
+        ;;
+      --gnome-extension)
+        DUO_GNOME_EXTENSION=true
+        shift
+        ;;
+      --no-gnome-extension)
+        DUO_GNOME_EXTENSION=false
         shift
         ;;
       *)

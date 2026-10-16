@@ -161,6 +161,18 @@ rm -rf /tmp/duo
 rm -rf "/tmp/duo-${TARGET_UID}"
 
 # ============================================================================
+# GNOME EXTENSION
+# ============================================================================
+
+DUO_GNOME_EXTENSION_UUID="zenbook-duo-snap@zenbook-duo-linux"
+DUO_GNOME_EXTENSION_DIR="${TARGET_HOME}/.local/share/gnome-shell/extensions/${DUO_GNOME_EXTENSION_UUID}"
+if [ -e "${DUO_GNOME_EXTENSION_DIR}" ]; then
+    sudo -u "${TARGET_USER}" env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+        gnome-extensions disable "${DUO_GNOME_EXTENSION_UUID}" >/dev/null 2>&1 || true
+    sudo -u "${TARGET_USER}" rm -rf "${DUO_GNOME_EXTENSION_DIR}"
+fi
+
+# ============================================================================
 # UI APP (RPM/DEB) + DESKTOP ENTRIES
 # ============================================================================
 
