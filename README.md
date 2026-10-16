@@ -9,7 +9,9 @@ This is intentionally device-specific. The goal is a dependable Zenbook Duo expe
 - Detects the Zenbook Duo keyboard over USB and Bluetooth.
 - Switches between docked and tablet-style display layouts when the keyboard is attached or removed.
 - Keeps keyboard backlight, display brightness, Bluetooth/Wi-Fi restore behavior, rotation, and saved settings coordinated through a Rust daemon.
-- Provides USB media remapping for Zenbook Duo top-row keys, including mute/volume, brightness, keyboard backlight cycling, and emoji launcher behavior where supported.
+- Makes the top row and the ASUS keys work docked and detached: the keyboard's own Fn lock (`Fn+Esc`), volume, brightness, keyboard backlight, mic mute with its LED and mic volume, emoji picker, the ASUS key (opens the Control Panel) and the screen key. Each key can be changed in the Control Panel (see [Keyboard keys](#keyboard-keys)).
+- Shows the detached keyboard's battery and warns when it runs low.
+- Sets each Duo screen's brightness on its own or both together (see [Display brightness](#display-brightness)).
 - Auto-rotates the screens from the accelerometer. Laying the Duo opened flat on a table (both screens facing up) turns only the top screen around for the person opposite, as Windows does; picking it up rotates normally again.
 - Handles Bluetooth backlight and brightness hotkeys through the daemon.
 - Supports per-display touchscreen enable/disable for the built-in ELAN panels, persisted across reboot/resume.
@@ -21,7 +23,7 @@ Known boundaries:
 - Supported hardware target: ASUS Zenbook Duo.
 - Supported desktop backends: GNOME Wayland, KDE Plasma Wayland, Hyprland, and Niri.
 - X11 and other compositors are not first-class targets.
-- Some vendor-specific keys, such as airplane mode and ASUS software keys, are not implemented by this project.
+- Some vendor-specific keys, such as airplane mode, are not implemented by this project.
 - Per-panel touch-to-output mapping is currently automatic on GNOME only; KDE and Niri need backend-specific support before this can be enabled safely.
 
 ## Quick start
@@ -41,7 +43,7 @@ Known boundaries:
 curl -fsSL https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install.sh | bash
 ```
 
-`install.sh` detects GNOME, KDE Plasma, Hyprland, or Niri, runs the matching setup wrapper, installs the Rust runtime services, and then builds/installs the Control Panel unless you opt out.
+`install.sh` detects GNOME, KDE Plasma, Hyprland, or Niri, runs the matching setup wrapper, installs the Rust runtime services, and then builds/installs the Control Panel unless you opt out. It asks for the default keyboard backlight and screen scale; on a reinstall it suggests the values you already use.
 
 Useful one-line variants:
 
@@ -54,7 +56,7 @@ The same options work from a local checkout:
 
 ```bash
 ./install.sh --skip-ui              # install/update only the runtime services
-./install.sh --no-usb-media-remap   # leave USB media remap disabled by default
+./install.sh --no-usb-media-remap   # leave the attached keyboard's ASUS keys alone (e.g. for another remapper)
 sudo -E ./install.sh                # allowed, but a real sudo user session is required
 ```
 
@@ -107,11 +109,36 @@ zenbook-duo-control
 
 Main pages:
 
-- **Status** — live keyboard, display, connectivity, service, version, and USB-remap status.
-- **Displays** — connected display layout, scale, refresh mode where available, and mapped touchscreen toggles.
-- **Controls** — keyboard backlight, orientation, service restart, and touchscreen toggles.
+- **Status** — live keyboard, display, connectivity, service, version, and USB-remap status, plus the detached keyboard's battery, the top-row mode, and the microphone.
+- **Displays** — connected display layout (screens named as in GNOME Settings; a dropped screen snaps to the nearest place the desktop accepts), scale, refresh mode where available, and mapped touchscreen toggles.
+- **Controls** — keyboard backlight, display brightness per Duo screen, the Function Keys card, orientation, service restart, and touchscreen toggles.
 - **Profiles** — save and activate common hardware configurations.
-- **Settings** — defaults such as backlight, scale, theme, start-on-boot, rotation inversion, and USB media remap.
+- **Settings** — defaults such as backlight, backlight sleep, scale, theme, start-on-boot, rotation inversion, and USB media remap.
+
+## Keyboard keys
+
+The top row has two modes, switched with `Fn+Esc` or the Function Keys card: **media keys** (volume, brightness and so on; `Fn` gives `F1`-`F12`) and **F1-F12** (the other way round). The mode is the keyboard's own: the daemon tells the keyboard which one to use, docked and detached, and again after every connect, so holding `Fn` for several keys works as on Windows.
+
+| Key | Function |
+|-----|----------|
+| `F1`-`F3` | Mute, volume down, volume up |
+| `F4` | Keyboard backlight (cycles) |
+| `F5` / `F6` | Display brightness |
+| `F7` | Display key (`Super+P`; the GNOME extension's display controls) |
+| `F8` | Screen arrows (`XF86Launch2`) |
+| `F9` | Mic mute; its LED shows whether the microphone is muted. Hold it and press the volume keys to change the microphone volume (held keys repeat). |
+| `F10` | The keyboard's Bluetooth pairing key; `F10` itself works in F1-F12 mode |
+| `F11` | Emoji picker |
+| `F12` | ASUS key: opens the Control Panel |
+| Screen key (right of `F12`) | Cycles the Duo screens |
+
+**Changing a key:** in the Function Keys card each key, and the screen key, can keep its function, send its own F-key, run a command (as you, never as root), send a key combination such as `Ctrl+Alt+T`, become a **GNOME shortcut** (it then sends a key GNOME has no use for: in Settings › Keyboard give any action a shortcut and press the key), or do nothing. Only the key's function changes; the plain F-key stays. Detached, the keyboard sends volume, mute and F7 itself, so while one of those is changed the daemon grabs the Bluetooth keyboard and passes everything else through.
+
+The detached keyboard's battery is shown on the Status page; at 20% and 10% a warning appears (a bubble that stays until acknowledged with the GNOME extension, a notification otherwise).
+
+## Display brightness
+
+Each Duo screen has its own backlight. The Display Brightness card sets them one by one or, with **Same brightness for both Duo screens** (the default), together; the bottom screen then also follows the desktop's brightness slider and keys, which change the top screen. Levels are set through systemd-logind, so no root rights are needed. On GNOME 50, Mutter drives the top screen's backlight for both panels, so the bottom screen is always set directly; with the GNOME extension the top screen goes through GNOME itself, so its slider shows the level.
 - **Logs / Events** — runtime log output and recent hardware/service events.
 - **Diagnostics** — evdev, HID, report descriptor, and hidraw capture helpers for debugging hardware behavior.
 
@@ -119,7 +146,7 @@ Main pages:
 
 The installer/setup scripts make system-level changes because the project controls hardware and desktop-session behavior:
 
-- Installs common dependencies: `usbutils`, `iio-sensor-proxy`, and `systemd`.
+- Installs common dependencies: `usbutils`, `iio-sensor-proxy`, `systemd`, `upower` (keyboard battery), and `pactl` (`pulseaudio-utils` / `libpulse`, for the mic LED and mic volume).
 - Installs backend dependencies:
   - GNOME: `mutter` / `gdctl` and `dconf` for touch/stylus output mapping
   - KDE Plasma: `kscreen` / `kscreen-doctor`
@@ -208,9 +235,7 @@ You do not need a separate `/etc/udev/rules.d/*uinput*` rule for this project.
 
 ### USB top row and the Fn layer
 
-When docked over USB, the optional USB media remap turns the top row into media keys (F1-F3 volume, F4 backlight, F5/F6 brightness, F11 emojis). Holding `Fn` sends plain `F1`-`F12` only if the keyboard reports the Fn key over USB. The remap logs which case applies when it starts: look for `Fn key reported by` or `No keyboard node reports the Fn key` in `/run/user/$UID/zenbook-duo/duo.log`.
-
-If Fn is not reported, use pause as an Fn-lock: bind `zenbook-duo-control --toggle-remap-pause` to a desktop shortcut (or use the Pause button in the app). While paused the top row sends plain `F1`-`F12`, and you get a notification on each toggle.
+The keyboard handles `Fn` itself once it is told its mode (see [Keyboard keys](#keyboard-keys)). The USB remap helper sends the mode when it starts and after the keyboard comes back, and logs it: look for `Top row:` in `/run/user/$UID/zenbook-duo/duo.log`. Pausing the remap (`zenbook-duo-control --toggle-remap-pause` or the Pause button in the app) puts the top row in F1-F12 mode.
 
 Do not install hwdb remaps for `KEYBOARD_KEY_7003*` on USB; it overrides the Fn layer.
 
