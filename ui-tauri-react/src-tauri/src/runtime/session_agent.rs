@@ -242,16 +242,19 @@ fn apply_touch_mapping_best_effort(context: &str, backend: SessionBackend) {
     }
 }
 
+// The agent runs as the user and daemon.log is root-owned, so append_line
+// usually fails here; stderr always reaches the user journal
+// (journalctl --user -u zenbook-duo-session-agent).
 fn session_agent_log_info(message: impl AsRef<str>) {
     let text = message.as_ref();
     let _ = crate::runtime::logger::append_line(format!("session-agent: {text}"));
-    log::info!("{text}");
+    eprintln!("session-agent: {text}");
 }
 
 fn session_agent_log_warn(message: impl AsRef<str>) {
     let text = message.as_ref();
     let _ = crate::runtime::logger::append_line(format!("session-agent: {text}"));
-    log::warn!("{text}");
+    eprintln!("session-agent: warning: {text}");
 }
 
 pub(crate) struct BackendReadiness;
