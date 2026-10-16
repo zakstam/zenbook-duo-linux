@@ -2,7 +2,9 @@ use crate::hardware::duo::{PRIMARY_INTERNAL_CONNECTOR, SECONDARY_INTERNAL_CONNEC
 use crate::ipc::protocol::SessionBackend;
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const PROC_INPUT_DEVICES: &str = "/proc/bus/input/devices";
@@ -29,12 +31,96 @@ struct DconfWrite {
     value: String,
 }
 
-pub(crate) fn apply_for_backend(backend: SessionBackend) -> Result<usize, String> {
-    if backend != SessionBackend::Gnome {
-        return Ok(0);
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NamedTouchInput {
+    /// Kernel/libinput device name, e.g. "ELAN9008:00 04F3:425B Stylus".
+    name: String,
+    connector: String,
+}
 
-    apply_gnome_touch_mappings()
+/// Maps each internal panel's touchscreen and stylus to the screen it sits on.
+/// Returns how many mappings were written; 0 on desktops that need none.
+pub(crate) fn apply_for_backend(backend: SessionBackend) -> Result<usize, String> {
+    match backend {
+        SessionBackend::Gnome => apply_gnome_touch_mappings(),
+        SessionBackend::Hyprland => apply_hyprland_touch_mappings(),
+        // niri cannot map touch per device until upstream niri-wm/niri#1856 (or its
+        // successor) lands; KDE keeps its own per-device mapping in System Settings.
+        _ => Ok(0),
+    }
+}
+
+fn apply_hyprland_touch_mappings() -> Result<usize, String> {
+    let proc_input = fs::read_to_string(PROC_INPUT_DEVICES)
+        .map_err(|e| format!("Failed to read {PROC_INPUT_DEVICES}: {e}"))?;
+    let devices = discover_named_duo_touch_inputs_from_proc_input(&proc_input);
+    let Some(batch) = hyprland_device_output_batch(&devices) else {
+        return Ok(0);
+    };
+
+    let output = Command::new("hyprctl")
+        .args(["--batch", batch.as_str()])
+        .output()
+        .map_err(|e| format!("Failed to run hyprctl: {e}"))?;
+    if output.status.success() {
+        Ok(devices.len())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(format!("hyprctl --batch failed: {stderr}"))
+    }
+}
+
+/// Hyprland names input devices by their kernel name, lowercased with spaces
+/// turned into dashes ("ELAN9008:00 04F3:425B Stylus" -> "elan9008:00-04f3:425b-stylus").
+fn hyprland_device_name(name: &str) -> String {
+    name.replace([' ', '\n'], "-").to_lowercase()
+}
+
+/// One `hyprctl --batch` argument setting each device's output. Hyprland keeps
+/// these until its config reloads, so the caller re-applies after each reload.
+fn hyprland_device_output_batch(devices: &[NamedTouchInput]) -> Option<String> {
+    if devices.is_empty() {
+        return None;
+    }
+    let commands = devices
+        .iter()
+        .map(|device| {
+            format!(
+                "keyword device[{}]:output {}",
+                hyprland_device_name(&device.name),
+                device.connector
+            )
+        })
+        .collect::<Vec<_>>();
+    Some(commands.join(" ; "))
+}
+
+/// Watches Hyprland's event socket and calls `on_reload` after every config
+/// reload, which drops mappings set with `hyprctl keyword`. Returns when the
+/// socket closes (the session ended).
+pub(crate) fn watch_hyprland_config_reloads(
+    runtime_dir: &Path,
+    signature: &str,
+    on_reload: impl Fn(),
+) -> Result<(), String> {
+    let path = runtime_dir
+        .join("hypr")
+        .join(signature)
+        .join(".socket2.sock");
+    let stream = UnixStream::connect(&path)
+        .map_err(|e| format!("Failed to connect to {}: {e}", path.display()))?;
+    for line in BufReader::new(stream).lines() {
+        let line = line.map_err(|e| format!("Failed to read Hyprland events: {e}"))?;
+        if is_hyprland_config_reload_event(&line) {
+            on_reload();
+        }
+    }
+    Ok(())
+}
+
+fn is_hyprland_config_reload_event(line: &str) -> bool {
+    line.split_once(">>")
+        .is_some_and(|(event, _)| event == "configreloaded")
 }
 
 fn apply_gnome_touch_mappings() -> Result<usize, String> {
@@ -155,6 +241,37 @@ fn discover_duo_touch_inputs_from_proc_input(input: &str) -> Vec<DuoTouchInput> 
     devices.sort_by(|left, right| {
         connector_sort_key(&left.connector).cmp(&connector_sort_key(&right.connector))
     });
+    devices
+}
+
+/// Every Duo panel touchscreen and stylus by kernel name, each paired with its
+/// screen. Skips the panels' touchpad and unnamed ("UNKNOWN") HID collections.
+fn discover_named_duo_touch_inputs_from_proc_input(input: &str) -> Vec<NamedTouchInput> {
+    let mut devices: Vec<NamedTouchInput> = Vec::new();
+    for block in input.split("\n\n") {
+        let Some((vendor, product)) = input_block_vendor_product(block) else {
+            continue;
+        };
+        if !vendor.eq_ignore_ascii_case("04f3") {
+            continue;
+        }
+        let Some(name) = input_block_name(block) else {
+            continue;
+        };
+        if name.contains("Touchpad") || name.ends_with("UNKNOWN") {
+            continue;
+        }
+        let Some(connector) = connector_for_touch_device(&name, &product.to_ascii_lowercase())
+        else {
+            continue;
+        };
+        if devices.iter().all(|device| device.name != name) {
+            devices.push(NamedTouchInput {
+                name,
+                connector: connector.to_string(),
+            });
+        }
+    }
     devices
 }
 
@@ -364,5 +481,61 @@ H: Handlers=event11 mouse2
                 },
             ]
         );
+    }
+
+    const UX8406MA_PROC_INPUT: &str = r#"
+I: Bus=0018 Vendor=04f3 Product=425a Version=0100
+N: Name="ELAN9009:00 04F3:425A"
+
+I: Bus=0018 Vendor=04f3 Product=425a Version=0100
+N: Name="ELAN9009:00 04F3:425A UNKNOWN"
+
+I: Bus=0018 Vendor=04f3 Product=425a Version=0100
+N: Name="ELAN9009:00 04F3:425A Stylus"
+
+I: Bus=0018 Vendor=04f3 Product=425a Version=0100
+N: Name="ELAN9009:00 04F3:425A Touchpad"
+
+I: Bus=0018 Vendor=04f3 Product=425b Version=0100
+N: Name="ELAN9008:00 04F3:425B"
+
+I: Bus=0018 Vendor=04f3 Product=425b Version=0100
+N: Name="ELAN9008:00 04F3:425B Stylus"
+
+I: Bus=0003 Vendor=0b05 Product=1b2c Version=0110
+N: Name="ASUSTeK Computer Inc. ASUS Zenbook Duo Keyboard"
+"#;
+
+    #[test]
+    fn hyprland_maps_each_panel_touch_and_stylus_to_its_own_screen() {
+        let devices = discover_named_duo_touch_inputs_from_proc_input(UX8406MA_PROC_INPUT);
+        let batch = hyprland_device_output_batch(&devices).expect("Duo panels found");
+
+        let mut commands = batch.split(" ; ").collect::<Vec<_>>();
+        commands.sort_unstable();
+        assert_eq!(
+            commands,
+            vec![
+                "keyword device[elan9008:00-04f3:425b-stylus]:output eDP-1",
+                "keyword device[elan9008:00-04f3:425b]:output eDP-1",
+                "keyword device[elan9009:00-04f3:425a-stylus]:output eDP-2",
+                "keyword device[elan9009:00-04f3:425a]:output eDP-2",
+            ]
+        );
+    }
+
+    #[test]
+    fn hyprland_batch_is_skipped_without_duo_panels() {
+        let devices = discover_named_duo_touch_inputs_from_proc_input(
+            "I: Bus=0003 Vendor=046d Product=c548 Version=0111\nN: Name=\"Logitech USB Receiver\"\n",
+        );
+        assert_eq!(hyprland_device_output_batch(&devices), None);
+    }
+
+    #[test]
+    fn recognizes_hyprland_config_reload_events_only() {
+        assert!(is_hyprland_config_reload_event("configreloaded>>"));
+        assert!(!is_hyprland_config_reload_event("monitoradded>>eDP-2"));
+        assert!(!is_hyprland_config_reload_event("activewindow>>configreloaded,x"));
     }
 }

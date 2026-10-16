@@ -11,4 +11,4 @@ bindings:
 
 Enables or disables touch input per screen from the Controls page: each ELAN touchscreen is matched to its internal display connector, and the disabled list is kept in settings so it survives restarts.
 
-On GNOME the session agent also maps each screen's touch and stylus input to that screen (dconf, `touch_mapping.rs`). niri 26.04 cannot map touch per device (its libinput devices report no output, and `input { touch { map-to-output } }` is global); per-device touch config waits on upstream PR niri-wm/niri#1856. ELAN9008 is eDP-1 (top), ELAN9009 is eDP-2 (bottom).
+On GNOME and Hyprland the session agent also maps each screen's touch and stylus input to that screen (`touch_mapping.rs`): GNOME through dconf, Hyprland through `hyprctl keyword device[<name>]:output`, applied at session start, after dock mode and layout changes, and again after every Hyprland config reload (which drops runtime keywords). niri 26.04 cannot map touch per device (its libinput devices report no output, and `input { touch { map-to-output } }` is global); per-device touch config waits on upstream PR niri-wm/niri#1856. ELAN9008 is eDP-1 (top), ELAN9009 is eDP-2 (bottom).

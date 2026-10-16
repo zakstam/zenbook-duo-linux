@@ -99,6 +99,7 @@ pub async fn run(live: session::LiveSession) -> Result<(), String> {
     }
     register_with_daemon(backend).await?;
     apply_touch_mapping_best_effort("session startup", backend);
+    reapply_touch_mapping_after_hyprland_reloads(&live);
     session_watchers::start_all();
 
     loop {
@@ -227,19 +228,35 @@ fn detect_session_id() -> String {
 }
 
 fn apply_touch_mapping_best_effort(context: &str, backend: SessionBackend) {
-    if backend != SessionBackend::Gnome {
-        return;
-    }
-
     match touch_mapping::apply_for_backend(backend) {
         Ok(0) => {}
         Ok(count) => session_agent_log_info(format!(
-            "applied {count} GNOME touch/tablet output mappings after {context}"
+            "applied {count} {backend:?} touch/tablet output mappings after {context}"
         )),
         Err(err) => session_agent_log_warn(format!(
-            "failed to apply GNOME touch/tablet output mappings after {context}: {err}"
+            "failed to apply {backend:?} touch/tablet output mappings after {context}: {err}"
         )),
     }
+}
+
+/// Hyprland forgets runtime device mappings on every config reload, so map
+/// touch again after each one. Ends with the session.
+fn reapply_touch_mapping_after_hyprland_reloads(live: &session::LiveSession) {
+    if live.backend != SessionBackend::Hyprland {
+        return;
+    }
+    let Some(signature) = live.hyprland_signature.clone() else {
+        return;
+    };
+    let runtime_dir = user_runtime_root();
+    std::thread::spawn(move || {
+        let result = touch_mapping::watch_hyprland_config_reloads(&runtime_dir, &signature, || {
+            apply_touch_mapping_best_effort("Hyprland config reload", SessionBackend::Hyprland)
+        });
+        if let Err(err) = result {
+            session_agent_log_warn(format!("stopped watching Hyprland config reloads: {err}"));
+        }
+    });
 }
 
 // The agent runs as the user and daemon.log is root-owned, so append_line
