@@ -1,6 +1,5 @@
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 use std::process::Command;

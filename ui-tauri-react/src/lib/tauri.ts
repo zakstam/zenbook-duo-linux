@@ -26,6 +26,10 @@ export const getStatus = () => invoke<DuoStatus>("get_status");
 export const getBacklight = () => invoke<number>("get_backlight");
 export const setBacklight = (level: number) =>
   invoke<void>("set_backlight", { level });
+export const getPanelBrightness = () =>
+  invoke<{ panel: "top" | "bottom"; percent: number }[]>("get_panel_brightness");
+export const setPanelBrightness = (panel: "top" | "bottom" | "both", percent: number) =>
+  invoke<void>("set_panel_brightness", { panel, percent });
 
 // Display
 export const getDisplayLayout = () =>
@@ -178,6 +182,8 @@ export const profilesApi = {
 export const controlsApi = {
   getBacklight,
   setBacklight,
+  getPanelBrightness,
+  setPanelBrightness,
   isServiceActive,
   restartService,
   listTouchscreens,
