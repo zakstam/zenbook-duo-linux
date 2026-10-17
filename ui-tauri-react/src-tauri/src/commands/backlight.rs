@@ -27,6 +27,19 @@ fn daemon_ack_or_transport_fallback(
     }
 }
 
+/// The Duo panels' brightness (read from their backlights).
+#[tauri::command]
+pub fn get_panel_brightness() -> Vec<crate::hardware::panel_brightness::PanelBrightness> {
+    crate::hardware::panel_brightness::read_panels()
+}
+
+/// Sets Duo panels ("top", "bottom" or "both") to a brightness in percent,
+/// through logind, as GNOME's own brightness slider does.
+#[tauri::command]
+pub async fn set_panel_brightness(panel: String, percent: u8) -> Result<(), String> {
+    crate::hardware::panel_brightness::set_panels(&panel, percent).await
+}
+
 pub fn set_backlight_daemon_first(level: u8) -> Result<(), String> {
     daemon_ack_or_transport_fallback(
         client::request(DaemonRequest::SetBacklight { level }),

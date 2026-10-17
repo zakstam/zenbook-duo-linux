@@ -45,7 +45,7 @@ If it can't tell which desktop you're on, clone the repo and run the setup scrip
 
 - Switches between one and two screens when the keyboard is attached or removed, over USB or Bluetooth.
 - Auto-rotates the screens. Laying the Duo flat with both screens up turns only the top screen around for the person opposite.
-- Keeps brightness in sync between the screens and handles the keyboard backlight and brightness keys, including over Bluetooth.
+- Keeps brightness in sync between the screens and handles the keyboard backlight and brightness keys, including over Bluetooth. **Controls → Display Brightness** in the Control app sets each screen on its own, or both together.
 - Optionally turns the top row into media keys when docked (F1-F3 volume, F4 backlight, F5/F6 brightness, F11 emoji).
 - Lets you turn touch off per screen (e.g. pen-only on the bottom screen), remembered across reboots.
 - The **Zenbook Duo Control** app (app menu, or `zenbook-duo-control`) shows status and lets you change layout, scale, profiles, settings, and see logs.
