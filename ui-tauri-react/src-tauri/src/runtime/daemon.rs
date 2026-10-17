@@ -43,6 +43,7 @@ pub async fn run() -> Result<(), String> {
     crate::runtime::bluetooth_hotkeys::start(state.clone());
     crate::runtime::monitor::start(state.clone());
     crate::runtime::logind::start(state.clone());
+    crate::runtime::keyboard_battery::start(state.clone());
 
     loop {
         let (stream, _) = listener
@@ -156,6 +157,7 @@ match payload {
     }
     DaemonRequest::SetBacklight { level } => match hardware::hid::set_backlight(level) {
         Ok(()) => {
+            crate::runtime::backlight_idle::level_set();
             let mut guard = state.write().await;
             guard.status.backlight_level = level;
             let _ = logger::append_line(format!(
@@ -174,6 +176,55 @@ match payload {
     },
     DaemonRequest::SetOrientation { orientation } => {
         apply_orientation(&state, orientation).await
+    }
+    DaemonRequest::SetFnLock { locked } => {
+        crate::usb_media_remap_helper::save_fn_lock(locked);
+        let mut guard = state.write().await;
+        guard.status.fn_lock = locked;
+        let _ = logger::append_line(format!(
+            "rust-daemon: set Fn lock request -> {}",
+            if locked { "on" } else { "off" }
+        ));
+        guard.touch();
+        persist_state(&guard);
+        DaemonResponse::Ack
+    }
+    DaemonRequest::SetMicMute { muted } => {
+        let result = tokio::task::spawn_blocking(move || crate::runtime::mic_led::set_muted(muted))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+        let mut guard = state.write().await;
+        guard.status.mic_muted = Some(muted);
+        let state_label = if muted { "muted" } else { "unmuted" };
+        let _ = logger::append_line(match &result {
+            Ok(()) => format!("rust-daemon: microphone {state_label}; mic LED set"),
+            // Detached and asleep, or not connected: sent again on connect.
+            Err(err) => format!("rust-daemon: microphone {state_label}; mic LED not set: {err}"),
+        });
+        guard.touch();
+        // The settings app refreshes when the state file changes.
+        persist_state(&guard);
+        DaemonResponse::Ack
+    }
+    DaemonRequest::SetBacklightIdle { idle } => {
+        let level = state.read().await.status.backlight_level;
+        let result = tokio::task::spawn_blocking(move || {
+            crate::runtime::backlight_idle::set_idle(idle, level)
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+        match result {
+            Ok(()) => DaemonResponse::Ack,
+            Err(message) => DaemonResponse::Error { message },
+        }
+    }
+    DaemonRequest::StepMicVolume { up } => {
+        match forward_session_command(&state, SessionCommand::StepMicVolume { up }).await {
+            Ok(()) => DaemonResponse::Ack,
+            Err(message) => DaemonResponse::Error { message },
+        }
     }
     DaemonRequest::ApplyDisplayLayout { layout } => {
         apply_display_layout_request(&state, layout).await
@@ -319,6 +370,7 @@ async fn handle_lifecycle(
             if let Some(warning) = hardware::hid::set_backlight_if_keyboard_present(0) {
                 logger::append_line(format!("rust-daemon: lifecycle {:?}: {warning}", phase)).ok();
             }
+            crate::runtime::mic_led::set_dark(true);
 
             let mut guard = state.write().await;
             guard.push_recent_event(HardwareEvent::info(
@@ -343,6 +395,7 @@ async fn handle_lifecycle(
             if let Some(warning) = hardware::hid::set_backlight_if_keyboard_present(restore_level) {
                 logger::append_line(format!("rust-daemon: lifecycle {:?}: {warning}", phase)).ok();
             }
+            crate::runtime::mic_led::set_dark(false);
 
             let refreshed = crate::runtime::probe::current_status();
             let attached = refreshed.keyboard_attached;

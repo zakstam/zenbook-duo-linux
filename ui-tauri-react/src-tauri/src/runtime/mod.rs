@@ -1,9 +1,14 @@
+pub(crate) mod backlight_idle;
 pub(crate) mod bluetooth_hotkeys;
 pub mod client;
 pub mod compositor;
 pub mod daemon;
 pub mod host;
+pub(crate) mod keyboard_battery;
 pub mod logger;
+pub(crate) mod mic_chord;
+pub(crate) mod mic_led;
+pub(crate) mod osd;
 pub mod logind;
 pub mod monitor;
 pub mod paths;

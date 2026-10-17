@@ -36,6 +36,10 @@ pub struct DuoSettings {
     pub touchscreen_disabled: Vec<String>,
     #[serde(default)]
     pub saved_display_layout: Option<DisplayLayout>,
+    /// Turn the keyboard backlight off after this many seconds without input
+    /// (keys, touchpad, mouse, touch); 0 keeps it on.
+    #[serde(default)]
+    pub keyboard_backlight_idle_secs: u32,
 }
 
 impl Default for DuoSettings {
@@ -52,6 +56,7 @@ impl Default for DuoSettings {
             setup_completed: DEFAULT_SETUP_COMPLETED,
             touchscreen_disabled: Vec::new(),
             saved_display_layout: None,
+            keyboard_backlight_idle_secs: 0,
         }
     }
 }

@@ -1,13 +1,14 @@
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+pub(crate) mod backlight_idle;
 pub(crate) mod brightness_sync;
 mod lying_flat;
+pub(crate) mod mic_mute;
 pub(crate) mod rotation;
 pub(crate) mod touch_mapping;
 
@@ -203,6 +204,16 @@ pub(crate) fn dispatch_session_command(payload: SessionCommand) -> SessionRespon
             Err(message) => SessionResponse::Error { message },
         },
         SessionCommand::OpenEmojiPicker => SessionResponse::Ack,
+        SessionCommand::KeyboardBatteryWarning { level, critical } => {
+            match crate::runtime::keyboard_battery::show_warning(level, critical) {
+                Ok(()) => SessionResponse::Ack,
+                Err(message) => SessionResponse::Error { message },
+            }
+        }
+        SessionCommand::StepMicVolume { up } => match mic_mute::step_volume(up) {
+            Ok(()) => SessionResponse::Ack,
+            Err(message) => SessionResponse::Error { message },
+        },
     }
 }
 
@@ -631,6 +642,17 @@ fn dock_mode_notification_message(attached: bool) -> &'static str {
 }
 
 fn send_dock_mode_notification(attached: bool) -> Result<(), String> {
+    let label = if attached {
+        "Keyboard attached"
+    } else {
+        "Keyboard detached"
+    };
+    if crate::runtime::osd::show_in_session(&crate::runtime::osd::Osd::new(
+        "input-keyboard-symbolic",
+        label,
+    )) {
+        return Ok(());
+    }
     send_runtime_notification(
         "Zenbook Duo Control",
         dock_mode_notification_message(attached),

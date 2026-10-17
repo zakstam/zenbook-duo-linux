@@ -11,6 +11,9 @@ export const DEFAULT_DUO_STATUS: DuoStatus = {
   displayBrightness: 0,
   maxBrightness: 1,
   serviceActive: false,
+  fnLock: false,
+  keyboardBattery: null,
+  micMuted: null,
   orientation: "normal",
 };
 
@@ -26,6 +29,7 @@ export const DEFAULT_DUO_SETTINGS: DuoSettings = {
   setupCompleted: false,
   touchscreenDisabled: [],
   savedDisplayLayout: null,
+  keyboardBacklightIdleSecs: 0,
 };
 
 export function withDuoSettingsDefaults(settings: Partial<DuoSettings>): DuoSettings {
@@ -36,5 +40,7 @@ export function withDuoSettingsDefaults(settings: Partial<DuoSettings>): DuoSett
     invertSensorRotation: settings.invertSensorRotation ?? DEFAULT_DUO_SETTINGS.invertSensorRotation,
     touchscreenDisabled: settings.touchscreenDisabled ?? DEFAULT_DUO_SETTINGS.touchscreenDisabled,
     savedDisplayLayout: settings.savedDisplayLayout ?? DEFAULT_DUO_SETTINGS.savedDisplayLayout,
+    keyboardBacklightIdleSecs:
+      settings.keyboardBacklightIdleSecs ?? DEFAULT_DUO_SETTINGS.keyboardBacklightIdleSecs,
   };
 }

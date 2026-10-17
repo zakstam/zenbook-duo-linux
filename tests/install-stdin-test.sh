@@ -106,7 +106,7 @@ assert_setup_packages() {
     exit 1
   }
 
-  local expected=$'dnf:usbutils iio-sensor-proxy systemd '"${dnf_desktop}"$'\napt:usbutils iio-sensor-proxy systemd '"${apt_desktop}"$'\npacman:usbutils iio-sensor-proxy systemd '"${pacman_desktop}"$'\nhint:usbutils, iio-sensor-proxy, systemd, '"${manual_hint}"
+  local expected=$'dnf:usbutils iio-sensor-proxy systemd upower pulseaudio-utils '"${dnf_desktop}"$'\napt:usbutils iio-sensor-proxy systemd upower pulseaudio-utils '"${apt_desktop}"$'\npacman:usbutils iio-sensor-proxy systemd upower libpulse '"${pacman_desktop}"$'\nhint:usbutils, iio-sensor-proxy, systemd, upower, pactl (pulseaudio-utils), '"${manual_hint}"
   if [[ "${output}" != "${expected}" ]]; then
     echo "FAIL: setup package matrix mismatch for ${label}" >&2
     echo "Got:" >&2
@@ -280,9 +280,9 @@ if ! grep -q 'command -v pacman' "${ROOT_DIR}/setup-common.sh"; then
 fi
 
 for common_packages in \
-  'DUO_COMMON_DNF_PACKAGES=(usbutils iio-sensor-proxy systemd)' \
-  'DUO_COMMON_APT_PACKAGES=(usbutils iio-sensor-proxy systemd)' \
-  'DUO_COMMON_PACMAN_PACKAGES=(usbutils iio-sensor-proxy systemd)'; do
+  'DUO_COMMON_DNF_PACKAGES=(usbutils iio-sensor-proxy systemd upower pulseaudio-utils)' \
+  'DUO_COMMON_APT_PACKAGES=(usbutils iio-sensor-proxy systemd upower pulseaudio-utils)' \
+  'DUO_COMMON_PACMAN_PACKAGES=(usbutils iio-sensor-proxy systemd upower libpulse)'; do
   if ! grep -q "${common_packages}" "${ROOT_DIR}/setup-common.sh"; then
     echo "FAIL: shared setup helper should centralize common dependency list ${common_packages}" >&2
     exit 1
