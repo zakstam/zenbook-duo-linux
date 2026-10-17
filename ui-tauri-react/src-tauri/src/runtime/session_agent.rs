@@ -1,6 +1,5 @@
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 use std::process::Command;
@@ -631,6 +630,17 @@ fn dock_mode_notification_message(attached: bool) -> &'static str {
 }
 
 fn send_dock_mode_notification(attached: bool) -> Result<(), String> {
+    let label = if attached {
+        "Keyboard attached"
+    } else {
+        "Keyboard detached"
+    };
+    if crate::runtime::osd::show_in_session(&crate::runtime::osd::Osd::new(
+        "input-keyboard-symbolic",
+        label,
+    )) {
+        return Ok(());
+    }
     send_runtime_notification(
         "Zenbook Duo Control",
         dock_mode_notification_message(attached),

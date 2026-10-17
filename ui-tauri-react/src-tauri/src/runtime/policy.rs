@@ -60,7 +60,9 @@ pub fn apply_transition_policy(
             state.status.bluetooth_enabled = bluetooth_enabled;
         }
 
-        actions.push(PolicyAction::SetBacklight(state.settings.default_backlight));
+        // Keep the level used while detached instead of resetting
+        // to the configured default on every attach.
+        actions.push(PolicyAction::SetBacklight(previous.backlight_level));
         actions.push(PolicyAction::ApplyDisplayMode {
             attached: true,
             scale: state.settings.default_scale,

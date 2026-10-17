@@ -175,6 +175,18 @@ match payload {
     DaemonRequest::SetOrientation { orientation } => {
         apply_orientation(&state, orientation).await
     }
+    DaemonRequest::SetFnLock { locked } => {
+        crate::usb_media_remap_helper::save_fn_lock(locked);
+        let mut guard = state.write().await;
+        guard.status.fn_lock = locked;
+        let _ = logger::append_line(format!(
+            "rust-daemon: set Fn lock request -> {}",
+            if locked { "on" } else { "off" }
+        ));
+        guard.touch();
+        persist_state(&guard);
+        DaemonResponse::Ack
+    }
     DaemonRequest::ApplyDisplayLayout { layout } => {
         apply_display_layout_request(&state, layout).await
     }

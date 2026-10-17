@@ -6,6 +6,10 @@ use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use signal_hook::flag;
 use std::collections::HashSet;
+
+use crate::runtime::bluetooth_hotkeys::{
+    parse_hotkey_report, BluetoothHotkeyAction, REPORT_FN_LOCK, REPORT_ID, REPORT_RELEASE,
+};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -72,19 +76,26 @@ where
         device_path.display()
     ));
 
+    // The keyboard's own Fn lock is only known for the UX8406MA's keyboard.
+    // Others keep the F-key remap with Fn pass-through (run_pass_through).
+    let id = device.input_id();
+    let hardware_fn_lock = crate::hardware::hid::has_hardware_fn_lock(id.vendor(), id.product());
+
     let mut keys = AttributeSet::<Key>::new();
     if let Some(supported) = device.supported_keys() {
         for key in supported.iter() {
             keys.insert(key);
         }
     }
-
     for key in [
         Key::KEY_MUTE,
         Key::KEY_VOLUMEDOWN,
         Key::KEY_VOLUMEUP,
         Key::KEY_BRIGHTNESSDOWN,
         Key::KEY_BRIGHTNESSUP,
+        // ASUS keys (see handle_vendor_report).
+        Key::KEY_MICMUTE,
+        Key::KEY_PROG2,
     ] {
         keys.insert(key);
     }
@@ -109,10 +120,269 @@ where
 
     let pause_file = base_dir.join("usb_media_remap.paused");
 
+    if !hardware_fn_lock {
+        log_info(&format!(
+            "Keyboard {:04x}:{:04x}: Fn lock in software (F-key remap, Fn passes F-keys through)",
+            id.vendor(),
+            id.product()
+        ));
+        let result = run_pass_through(&mut device, &device_path, &mut uinput, &args, &terminate, &pause_file);
+        let _ = device.ungrab();
+        log_info("Stopping helper");
+        return result;
+    }
+
+    // The ASUS functions arrive as vendor reports on the keyboard's hidraw
+    // nodes (hidraw reads are not affected by the evdev grab).
+    let mut vendor_readers = open_vendor_readers(&device_path);
+    let expected_readers = vendor_readers.len();
+    let mut last_reader_reopen = Instant::now();
+
+    // The keyboard does Fn itself; it only needs to be told its mode, again
+    // after every connect. Paused, the top row sends plain F1-F12.
+    let mut mode = wanted_mode(&pause_file);
+    send_mode_after_connect(mode);
+    log_info(&format!(
+        "Top row: {} (Fn lock is the keyboard's own; Fn+Esc switches)",
+        if mode { "F1-F12" } else { "media keys" }
+    ));
+    let mut last_check = Instant::now();
+
+    let mut keys_state = KeyState::default();
+
+    while !terminate.load(Ordering::Relaxed) {
+        let mut idle = true;
+
+        let mut reports = Vec::new();
+        vendor_readers.retain_mut(|(path, reader)| {
+            let mut report = [0u8; 64];
+            loop {
+                match reader.read(&mut report) {
+                    Ok(0) => return false,
+                    Ok(n) => {
+                        idle = false;
+                        reports.push(report[..n].to_vec());
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return true,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        log_info(&format!("Stopped reading {}: {e}", path.display()));
+                        return false;
+                    }
+                }
+            }
+        });
+        for report in reports {
+            handle_vendor_report(&mut uinput, &args, &mut keys_state, &report)?;
+        }
+
+        if last_check.elapsed() >= Duration::from_secs(1) {
+            last_check = Instant::now();
+            // Fn lock or the pause changed (Control Panel, Fn+Esc detached).
+            let wanted = wanted_mode(&pause_file);
+            if wanted != mode {
+                mode = wanted;
+                set_mode(mode);
+                log_info(&format!("Top row: {}", if mode { "F1-F12" } else { "media keys" }));
+            }
+        }
+
+        // The keyboard re-creates its vendor interface after every
+        // backlight write, so reopen the hidraw nodes once they come back.
+        if vendor_readers.len() < expected_readers
+            && last_reader_reopen.elapsed() >= Duration::from_secs(1)
+        {
+            last_reader_reopen = Instant::now();
+            let reopened = open_vendor_readers(&device_path);
+            if reopened.len() >= expected_readers {
+                log_info(&format!("Reopened {} keyboard hidraw nodes", reopened.len()));
+                vendor_readers = reopened;
+                set_mode(mode);
+            }
+        }
+
+        let events: Vec<InputEvent> = match device.fetch_events() {
+            Ok(events) => events.collect(),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Vec::new(),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(format!("Failed to read events: {e}")),
+        };
+        if events.is_empty() {
+            if idle {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            continue;
+        }
+        for event in events {
+            if terminate.load(Ordering::Relaxed) {
+                break;
+            }
+            if event.event_type() == EventType::KEY {
+                emit_key(&mut uinput, Key::new(event.code()), event.value())?;
+            }
+        }
+    }
+
+    let _ = device.ungrab();
+    log_info("Stopping helper");
+    Ok(())
+}
+
+pub fn log_error(message: &str) {
+    eprintln!("USB-REMAP - ERROR: {}", message);
+    log_line("ERROR", message);
+}
+
+pub fn log_info(message: &str) {
+    eprintln!("USB-REMAP - INFO: {}", message);
+    log_line("INFO", message);
+}
+
+fn log_line(level: &str, message: &str) {
+    // Best-effort: derive the log location from --pid-file (or default).
+    let pid_file = pid_file_from_env_args();
+    let base_dir = base_dir_from_pid_file(&pid_file);
+    let _ = ensure_dir(&base_dir);
+    let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
+    let log_path = base_dir.join("duo.log");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
+        let _ = writeln!(file, "{} - USB-REMAP - {}: {}", timestamp, level, message);
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Args {
+    pid_file: String,
+    user: Option<String>,
+    device: Option<PathBuf>,
+    stop: bool,
+}
+
+fn parse_args<I>(mut args: I) -> Args
+where
+    I: Iterator<Item = String>,
+{
+    let mut pid_file = default_pid_file();
+    let mut user = None;
+    let mut device = None;
+    let mut stop = false;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--pid-file" => {
+                if let Some(value) = args.next() {
+                    pid_file = value;
+                }
+            }
+            "--user" => {
+                if let Some(value) = args.next() {
+                    user = Some(value);
+                }
+            }
+            "--device" => {
+                if let Some(value) = args.next() {
+                    device = Some(PathBuf::from(value));
+                }
+            }
+            "--stop" => stop = true,
+            _ => {}
+        }
+    }
+
+    Args {
+        pid_file,
+        user,
+        device,
+        stop,
+    }
+}
+
+/// What the helper keeps between events: the key held for a vendor report
+/// until its release report.
+#[derive(Default)]
+struct KeyState {
+    held: Option<Key>,
+    active_report: Option<u8>,
+}
+
+/// An ASUS vendor report (`5a <code>`, then `5a 00` on release): the top
+/// row's ASUS functions (backlight, brightness, screen arrows, mic, emoji,
+/// ASUS hub) and Fn+Esc. The same reports as detached.
+fn handle_vendor_report(
+    uinput: &mut evdev::uinput::VirtualDevice,
+    args: &Args,
+    state: &mut KeyState,
+    report: &[u8],
+) -> Result<(), String> {
+    if report.len() < 2 || report[0] != REPORT_ID {
+        return Ok(());
+    }
+    let code = report[1];
+    if code == REPORT_RELEASE {
+        state.active_report = None;
+        if let Some(key) = state.held.take() {
+            emit_key(uinput, key, 0)?;
+        }
+        return Ok(());
+    }
+    if code == REPORT_FN_LOCK {
+        let locked = !load_fn_lock();
+        save_fn_lock(locked);
+        notify_fn_lock(args.user.as_deref(), locked);
+        log_info(&format!("Fn lock {}", if locked { "on" } else { "off" }));
+        return Ok(());
+    }
+    let Some(action) = parse_hotkey_report(report) else {
+        return Ok(()); // e.g. the battery-level reports (5a 3d)
+    };
+    // The keyboard may repeat the report while the key is held.
+    if state.active_report == Some(code) {
+        return Ok(());
+    }
+    state.active_report = Some(code);
+    if let Some(key) = state.held.take() {
+        emit_key(uinput, key, 0)?;
+    }
+
+    match action {
+        BluetoothHotkeyAction::BacklightCycle => {
+            if let Some(level) = cycle_backlight() {
+                show_backlight_osd(args.user.as_deref(), level);
+            }
+        }
+        BluetoothHotkeyAction::BrightnessDown => {
+            handle_brightness_key(uinput, Key::KEY_BRIGHTNESSDOWN, 1, "down")?;
+            state.held = Some(Key::KEY_BRIGHTNESSDOWN);
+        }
+        BluetoothHotkeyAction::BrightnessUp => {
+            handle_brightness_key(uinput, Key::KEY_BRIGHTNESSUP, 1, "up")?;
+            state.held = Some(Key::KEY_BRIGHTNESSUP);
+        }
+        BluetoothHotkeyAction::Key(key) => {
+            emit_key(uinput, key, 1)?;
+            state.held = Some(key);
+        }
+        BluetoothHotkeyAction::Emoji => open_emoji_picker(args.user.as_deref()),
+        BluetoothHotkeyAction::ControlPanel => open_control_panel(args.user.as_deref()),
+    }
+    Ok(())
+}
+
+/// The remap for keyboards without the known Fn lock command: F1-F6 and F11
+/// do their media functions in software, and F-keys pressed with Fn held
+/// (or after an Fn tap) pass through unmapped.
+fn run_pass_through(
+    device: &mut Device,
+    device_path: &Path,
+    uinput: &mut evdev::uinput::VirtualDevice,
+    args: &Args,
+    terminate: &AtomicBool,
+    pause_file: &Path,
+) -> Result<(), String> {
     // Fn may be reported on the grabbed node or on a sibling node of the same
     // keyboard. Siblings are only read, never grabbed, so the desktop keeps them.
-    let grabbed_reports_fn = reports_fn(&device);
-    let mut fn_watchers = open_fn_watchers(&device_path);
+    let grabbed_reports_fn = reports_fn(device);
+    let mut fn_watchers = open_fn_watchers(device_path);
     let mut fn_tap_readers = Vec::new();
     if grabbed_reports_fn || !fn_watchers.is_empty() {
         let mut nodes: Vec<String> = fn_watchers
@@ -127,7 +397,7 @@ where
             nodes.join(", ")
         ));
     } else {
-        fn_tap_readers = open_fn_tap_readers(&device_path);
+        fn_tap_readers = open_fn_tap_readers(device_path);
         if fn_tap_readers.is_empty() {
             log_info(
                 "No keyboard node reports the Fn key; Fn+F-keys cannot be told apart from F-keys. \
@@ -216,88 +486,17 @@ where
             let key = Key::new(event.code());
             if is_fn_event(&event) {
                 fn_state.observe_fn(event.value());
-                emit_key(&mut uinput, key, event.value())?;
+                emit_key(uinput, key, event.value())?;
                 continue;
             }
             match fn_state.route(key, event.value(), paused) {
-                Route::Raw => emit_key(&mut uinput, key, event.value())?,
-                Route::Remap => handle_event(&mut uinput, &args, event)?,
+                Route::Raw => emit_key(uinput, key, event.value())?,
+                Route::Remap => handle_event(uinput, args, event)?,
             }
         }
     }
 
-    let _ = device.ungrab();
-    log_info("Stopping helper");
     Ok(())
-}
-
-pub fn log_error(message: &str) {
-    eprintln!("USB-REMAP - ERROR: {}", message);
-    log_line("ERROR", message);
-}
-
-pub fn log_info(message: &str) {
-    eprintln!("USB-REMAP - INFO: {}", message);
-    log_line("INFO", message);
-}
-
-fn log_line(level: &str, message: &str) {
-    // Best-effort: derive the log location from --pid-file (or default).
-    let pid_file = pid_file_from_env_args();
-    let base_dir = base_dir_from_pid_file(&pid_file);
-    let _ = ensure_dir(&base_dir);
-    let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
-    let log_path = base_dir.join("duo.log");
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-        let _ = writeln!(file, "{} - USB-REMAP - {}: {}", timestamp, level, message);
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Args {
-    pid_file: String,
-    user: Option<String>,
-    device: Option<PathBuf>,
-    stop: bool,
-}
-
-fn parse_args<I>(mut args: I) -> Args
-where
-    I: Iterator<Item = String>,
-{
-    let mut pid_file = default_pid_file();
-    let mut user = None;
-    let mut device = None;
-    let mut stop = false;
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--pid-file" => {
-                if let Some(value) = args.next() {
-                    pid_file = value;
-                }
-            }
-            "--user" => {
-                if let Some(value) = args.next() {
-                    user = Some(value);
-                }
-            }
-            "--device" => {
-                if let Some(value) = args.next() {
-                    device = Some(PathBuf::from(value));
-                }
-            }
-            "--stop" => stop = true,
-            _ => {}
-        }
-    }
-
-    Args {
-        pid_file,
-        user,
-        device,
-        stop,
-    }
 }
 
 fn handle_event(
@@ -315,7 +514,9 @@ fn handle_event(
     match key {
         Key::KEY_F4 => {
             if value == 1 {
-                cycle_backlight();
+                if let Some(level) = cycle_backlight() {
+                    show_backlight_osd(args.user.as_deref(), level);
+                }
             }
             return Ok(());
         }
@@ -455,18 +656,6 @@ fn open_fn_tap_readers(grabbed: &Path) -> Vec<(PathBuf, fs::File)> {
     readers
 }
 
-/// The sysfs directory of the USB device an input event node belongs to.
-fn usb_device_dir(event_node: &Path) -> Option<PathBuf> {
-    let node = fs::canonicalize(event_node).ok()?;
-    let input_dir =
-        fs::canonicalize(Path::new("/sys/class/input").join(node.file_name()?).join("device"))
-            .ok()?;
-    input_dir
-        .ancestors()
-        .find(|dir| dir.join("idVendor").exists())
-        .map(Path::to_path_buf)
-}
-
 fn is_fn_event(event: &InputEvent) -> bool {
     event.event_type() == EventType::KEY && Key::new(event.code()) == Key::KEY_FN
 }
@@ -512,6 +701,88 @@ fn brightness_key_mapping(key: Key) -> Option<(Key, &'static str)> {
         Key::KEY_F6 => Some((Key::KEY_BRIGHTNESSUP, "up")),
         _ => None,
     }
+}
+
+/// The keyboard's mode: F1-F12 with Fn lock on or the remap paused.
+fn wanted_mode(pause_file: &Path) -> bool {
+    load_fn_lock() || pause_file.exists()
+}
+
+fn set_mode(f_keys: bool) {
+    if let Err(err) = crate::hardware::hid::set_fn_lock_usb(f_keys) {
+        log_error(&format!("Could not set the keyboard's Fn lock: {err}"));
+    }
+}
+
+/// Right after connecting, the keyboard ignores commands for a moment (seen
+/// in the Windows driver's traffic), so the mode is sent a few times.
+fn send_mode_after_connect(f_keys: bool) {
+    std::thread::spawn(move || {
+        for delay in [0, 1, 2] {
+            std::thread::sleep(Duration::from_secs(delay));
+            set_mode(f_keys);
+        }
+    });
+}
+
+fn fn_lock_path() -> PathBuf {
+    paths::system_runtime_dir().join("fn_lock")
+}
+
+pub(crate) fn load_fn_lock() -> bool {
+    fs::read_to_string(fn_lock_path()).is_ok_and(|s| s.trim() == "1")
+}
+
+pub(crate) fn save_fn_lock(locked: bool) {
+    // The daemon owns this directory (its socket lives there, and the session
+    // agent must be able to reach it), so only create it if missing and never
+    // change its permissions — ensure_dir() would force it to 0700.
+    let path = fn_lock_path();
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    let _ = fs::write(path, if locked { "1" } else { "0" });
+}
+
+/// Opens the hidraw nodes of the grabbed keyboard's USB device, read-only, for
+/// the vendor reports. hidraw reads are not affected by the evdev grab.
+fn open_vendor_readers(grabbed: &Path) -> Vec<(PathBuf, fs::File)> {
+    let Some(usb_dir) = usb_device_dir(grabbed) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir("/sys/class/hidraw") else {
+        return Vec::new();
+    };
+    let mut readers = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(hid_dir) = fs::canonicalize(entry.path().join("device")) else {
+            continue;
+        };
+        if !hid_dir.starts_with(&usb_dir) {
+            continue;
+        }
+        let path = Path::new("/dev").join(entry.file_name());
+        if let Ok(file) = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+        {
+            readers.push((path, file));
+        }
+    }
+    readers
+}
+
+/// The sysfs directory of the USB device an input event node belongs to.
+fn usb_device_dir(event_node: &Path) -> Option<PathBuf> {
+    let node = fs::canonicalize(event_node).ok()?;
+    let input_dir =
+        fs::canonicalize(Path::new("/sys/class/input").join(node.file_name()?).join("device"))
+            .ok()?;
+    input_dir
+        .ancestors()
+        .find(|dir| dir.join("idVendor").exists())
+        .map(Path::to_path_buf)
 }
 
 fn handle_brightness_key(
@@ -576,7 +847,7 @@ fn write_pid(path: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to write pid file: {e}"))
 }
 
-fn configure_nonblocking(device: &Device) -> Result<(), nix::Error> {
+pub(crate) fn configure_nonblocking(device: &Device) -> Result<(), nix::Error> {
     let fd = device.as_raw_fd();
     let current_flags = OFlag::from_bits_truncate(fcntl(fd, FcntlArg::F_GETFL)?);
     fcntl(fd, FcntlArg::F_SETFL(current_flags | OFlag::O_NONBLOCK))?;
@@ -639,12 +910,23 @@ fn find_keyboard_device() -> Option<PathBuf> {
     None
 }
 
-fn cycle_backlight() {
+/// The keyboard backlight pop-up, levels 0-3 as a level bar.
+pub(crate) fn show_backlight_osd(user: Option<&str>, level: u8) {
+    let Some(user) = user.map(str::to_string) else { return };
+    std::thread::spawn(move || {
+        let osd = crate::runtime::osd::Osd::new("keyboard-brightness-symbolic", "Keyboard backlight")
+            .with_level(f64::from(level) / 3.0);
+        crate::runtime::osd::show_for_user(&user, &osd);
+    });
+}
+
+/// Steps the keyboard backlight; returns the new level when it changed.
+fn cycle_backlight() -> Option<u8> {
     // Backlight state is shared with the main app via files next to the pid file.
     let pid_file = pid_file_from_env_args();
     let base_dir = base_dir_from_pid_file(&pid_file);
     if ensure_dir(&base_dir).is_err() {
-        return;
+        return None;
     }
 
     let kbl_lock_path = base_dir.join("kb_backlight_lock");
@@ -658,12 +940,12 @@ fn cycle_backlight() {
         .open(kbl_lock_path)
     {
         Ok(file) => file,
-        Err(_) => return,
+        Err(_) => return None,
     };
 
     let _lock = match Flock::lock(lock, FlockArg::LockExclusiveNonblock) {
         Ok(l) => l,
-        Err(_) => return,
+        Err(_) => return None,
     };
 
     let now = current_time_ms();
@@ -671,24 +953,31 @@ fn cycle_backlight() {
         .ok()
         .and_then(|s| s.trim().parse::<u128>().ok())
     {
-        if now.saturating_sub(last) < 600 {
-            return;
+        // Short enough not to drop presses at a normal typing pace.
+        if now.saturating_sub(last) < 250 {
+            return None;
         }
     }
 
     let _ = fs::write(&kbl_last_cycle_path, now.to_string());
 
-    let level = fs::read_to_string(&kbl_level_path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u8>().ok())
-        .unwrap_or(0);
+    // The daemon's level, which the Control Panel and the detached keyboard
+    // change too; this helper's own file only as a fallback.
+    let level = crate::hardware::sysfs::load_backlight_level().unwrap_or_else(|| {
+        fs::read_to_string(&kbl_level_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u8>().ok())
+            .unwrap_or(0)
+    });
     let next = (level + 1) % 4;
     if crate::commands::backlight::set_backlight_daemon_first(next).is_ok() {
         let _ = fs::write(&kbl_level_path, next.to_string());
+        return Some(next);
     }
+    None
 }
 
-fn open_emoji_picker(user: Option<&str>) {
+pub(crate) fn open_emoji_picker(user: Option<&str>) {
     let user = match user {
         Some(u) => u,
         None => return,
@@ -712,6 +1001,46 @@ fn open_emoji_picker(user: Option<&str>) {
         return;
     }
 
+    launch_in_user_session(user, uid, &["gnome-characters"]);
+}
+
+/// Starts a program for `user` as an app of their own session (a transient
+/// systemd user service), not as a child of the daemon: otherwise it would
+/// run in the daemon's system service, outside the login session (logind
+/// and portals don't know it), and be stopped whenever the daemon restarts.
+pub(crate) fn launch_in_user_session(user: &str, uid: u32, program: &[&str]) {
+    let child = user_session_command(user, uid)
+        .args(["systemd-run", "--user", "--quiet", "--collect", "--"])
+        .args(program)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    match child {
+        // systemd-run returns once the program is started: reap it then.
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(err) => log_error(&format!("Could not start {}: {err}", program.join(" "))),
+    }
+}
+
+/// The ASUS hub key: opens the Zenbook Duo Control Panel (or brings it to
+/// the front; it runs as a single instance), as MyASUS on Windows.
+pub(crate) fn open_control_panel(user: Option<&str>) {
+    let Some(user) = user else {
+        return;
+    };
+    let Ok(Some(account)) = nix::unistd::User::from_name(user) else {
+        return;
+    };
+    launch_in_user_session(user, account.uid.as_raw(), &["zenbook-duo-control"]);
+}
+
+/// A command that runs as `user` inside their desktop session (dbus + display env).
+pub(crate) fn user_session_command(user: &str, uid: u32) -> Command {
     let runtime_dir = format!("/run/user/{uid}");
     let bus_address = format!("unix:path={runtime_dir}/bus");
 
@@ -731,8 +1060,44 @@ fn open_emoji_picker(user: Option<&str>) {
     } else if Path::new("/tmp/.X11-unix/X0").exists() {
         cmd.arg("DISPLAY=:0");
     }
+    cmd
+}
 
-    let _ = cmd.arg("gnome-characters").spawn();
+/// The keyboard has no Fn lock LED, so show a pop-up (or, without the GNOME
+/// extension, a notification whose synchronous hint replaces the last one).
+pub(crate) fn notify_fn_lock(user: Option<&str>, locked: bool) {
+    let Some(user) = user.map(str::to_string) else { return };
+    // Named by what the top row sends: "Fn lock on/off" means opposite
+    // things on different laptops (Windows calls the media-key mode "on").
+    let (title, body) = if locked {
+        ("Top row: F1–F12", "Hold Fn for media keys. Fn+Esc switches back.")
+    } else {
+        ("Top row: media keys", "Hold Fn for F1–F12. Fn+Esc switches back.")
+    };
+    // In a thread: key handling never waits for the desktop.
+    std::thread::spawn(move || {
+        let osd = crate::runtime::osd::Osd::new("input-keyboard-symbolic", title);
+        if crate::runtime::osd::show_for_user(&user, &osd) {
+            return;
+        }
+        let Ok(Some(account)) = nix::unistd::User::from_name(&user) else {
+            return;
+        };
+        let _ = user_session_command(&user, account.uid.as_raw())
+            .args([
+                "notify-send",
+                "--transient",
+                "-a",
+                "Zenbook Duo",
+                "-i",
+                "input-keyboard",
+                "-h",
+                "string:x-canonical-private-synchronous:zenbook-duo-fn-lock",
+                title,
+                body,
+            ])
+            .status();
+    });
 }
 
 fn current_time_ms() -> u128 {

@@ -16,6 +16,8 @@ export interface DuoStatus {
   maxBrightness: number;
   serviceActive: boolean;
   orientation: Orientation;
+  /** Top row sends F1-F12 by default (toggled with Fn+Esc). */
+  fnLock: boolean;
 }
 
 export interface DisplayInfo {

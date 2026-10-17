@@ -117,6 +117,14 @@ export default function Status() {
                 </span>
               </div>
             </StatusRow>
+            <StatusRow label="Top row">
+              <span className={cn(
+                "text-[13px] font-medium",
+                status.fnLock ? "text-sky-500" : "text-muted-foreground"
+              )}>
+                {status.fnLock ? "F1–F12" : "Media keys"}
+              </span>
+            </StatusRow>
             <StatusRow label="USB remap">
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <span className="font-mono text-[11px] text-muted-foreground">
