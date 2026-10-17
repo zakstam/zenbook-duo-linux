@@ -152,19 +152,22 @@ install_duo_dependencies() {
 
 # Older installs appended a wildcard rule to /etc/sudoers. Remove it on
 # upgrade; the edited copy is checked with visudo before it replaces the file.
+# Temp files for sudoers are created and written as root (sudo mktemp + sudo
+# tee): a user-owned one could be swapped between the visudo check and the
+# install, letting any program of the user install its own sudoers rules.
 remove_legacy_duo_sudoers() {
   local legacy='/usr/bin/tee /sys/class/backlight/\*/brightness'
   sudo grep -q "${legacy}" /etc/sudoers 2>/dev/null || return 0
   local tmp
-  tmp="$(mktemp)"
-  sudo cat /etc/sudoers | sed "\|${legacy}|d" > "${tmp}"
+  tmp="$(sudo mktemp)" || return 0
+  sudo sed "\|${legacy}|d" /etc/sudoers | sudo tee "${tmp}" >/dev/null
   if sudo visudo -cqf "${tmp}"; then
     sudo install -m 0440 -o root -g root "${tmp}" /etc/sudoers
     echo "Removed the old wildcard brightness rule from /etc/sudoers"
   else
     echo "WARNING: could not remove the old brightness rule from /etc/sudoers; remove it with visudo" >&2
   fi
-  rm -f "${tmp}"
+  sudo rm -f "${tmp}"
 }
 
 configure_duo_sudoers() {
@@ -173,18 +176,19 @@ configure_duo_sudoers() {
   # Written to sudoers.d and syntax-checked with visudo instead of appending to /etc/sudoers.
   remove_legacy_duo_sudoers
   if [ -n "${TARGET_USER}" ]; then
-    local tmp dir
-    tmp="$(mktemp)"
+    local tmp dir rules=""
     for dir in /sys/class/backlight/*; do
       [ -e "${dir}/brightness" ] || continue
-      echo "${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/tee ${dir}/brightness" >> "${tmp}"
+      rules+="${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/tee ${dir}/brightness"$'\n'
     done
+    tmp="$(sudo mktemp)" || return 0
+    printf '%s' "${rules}" | sudo tee "${tmp}" >/dev/null
     if sudo visudo -cqf "${tmp}"; then
       sudo install -m 0440 -o root -g root "${tmp}" /etc/sudoers.d/zenbook-duo
     else
       echo "WARNING: generated sudoers rule failed validation; skipped" >&2
     fi
-    rm -f "${tmp}"
+    sudo rm -f "${tmp}"
   fi
 }
 

@@ -316,6 +316,39 @@ if [[ "${remap_default_output}" != $'false\ntrue' ]]; then
   exit 1
 fi
 
+# Sudoers temp files must be created and written as root: a user-owned one
+# could be swapped between the visudo check and the install.
+sudoers_tmp_output="$(FAKE_SUDOERS="${temp_root}/fake-sudoers" bash --noprofile --norc -c '
+  set -euo pipefail
+  source "'"${ROOT_DIR}"'/setup-common.sh"
+  printf "root ALL=(ALL) ALL\nzaks ALL=NOPASSWD:/usr/bin/tee /sys/class/backlight/*/brightness\n" > "${FAKE_SUDOERS}"
+  mktemp() { echo "user-mktemp"; command mktemp "$@"; }
+  sudo() {
+    local args=() a
+    for a in "$@"; do [ "${a}" = /etc/sudoers ] && a="${FAKE_SUDOERS}"; args+=("${a}"); done
+    case "$1" in
+      mktemp) echo "root-mktemp" >&2; command mktemp ;;
+      visudo) return 0 ;;
+      install) echo "installed $(grep -c backlight "${args[-2]}" || true) -> ${args[-1]}" >&2 ;;
+      *) command "${args[@]}" ;;
+    esac
+  }
+  TARGET_USER=testuser
+  configure_duo_sudoers
+' 2>&1)" || {
+  echo "FAIL: configure_duo_sudoers should run" >&2
+  printf '%s\n' "${sudoers_tmp_output}" >&2
+  exit 1
+}
+
+if grep -q 'user-mktemp' <<< "${sudoers_tmp_output}" \
+  || [[ "$(grep -c 'root-mktemp' <<< "${sudoers_tmp_output}")" != 2 ]] \
+  || ! grep -q 'installed 0 -> .*sudoers$' <<< "${sudoers_tmp_output}"; then
+  echo "FAIL: sudoers temp files should be root-owned and the legacy rule removed" >&2
+  printf 'Got:\n%s\n' "${sudoers_tmp_output}" >&2
+  exit 1
+fi
+
 cat > "${temp_root}/settings-defaults-test.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
