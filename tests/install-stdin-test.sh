@@ -13,6 +13,11 @@ if [[ "${output}" != *"install.sh - unified installer for Zenbook Duo Linux"* ]]
   exit 1
 fi
 
+if ! grep -q 'PartOf=graphical-session.target' "${ROOT_DIR}/install-rust-runtime.sh"; then
+  echo "FAIL: user service should restart with every graphical login" >&2
+  exit 1
+fi
+
 empty_array_output="$(bash --noprofile --norc -c 'set -euo pipefail; BASH_SOURCE=(); source <(head -n 9 "'"${ROOT_DIR}"'/install.sh"); printf "%s\n" "${SCRIPT_DIR}"' 2>&1)" || {
   echo "FAIL: init should survive an empty BASH_SOURCE array" >&2
   exit 1
@@ -429,6 +434,32 @@ for setup_script in setup-gnome.sh setup-kde.sh setup-niri.sh setup-hyprland.sh;
     exit 1
   fi
 done
+
+saved_defaults_output="$(bash --noprofile --norc -c '
+  set -euo pipefail
+  source "'"${ROOT_DIR}"'/setup-common.sh"
+  home="$(mktemp -d)"
+  mkdir -p "${home}/.config/zenbook-duo"
+  echo "{\"defaultBacklight\": 2, \"defaultScale\": 1.6666666666666667, \"usbMediaRemapEnabled\": false}" \
+    > "${home}/.config/zenbook-duo/settings.json"
+  TARGET_HOME="${home}"
+  DEFAULT_BACKLIGHT=0 DEFAULT_SCALE=1.67 USB_MEDIA_REMAP_ENABLED=true
+  load_duo_saved_defaults
+  printf "%s %s %s\n" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}"
+  DEFAULT_BACKLIGHT=0 DEFAULT_SCALE=1.25 USB_MEDIA_REMAP_ENABLED=true DUO_GIVEN_SCALE=1
+  load_duo_saved_defaults
+  printf "%s %s %s\n" "${DEFAULT_BACKLIGHT}" "${DEFAULT_SCALE}" "${USB_MEDIA_REMAP_ENABLED}"
+  rm -rf "${home}"
+' 2>&1)" || {
+  echo "FAIL: load_duo_saved_defaults should be callable" >&2
+  exit 1
+}
+
+if [[ "${saved_defaults_output}" != $'2 1.67 false\n2 1.25 false' ]]; then
+  echo "FAIL: a reinstall should default to the saved settings, unless given explicitly" >&2
+  printf 'Got:\n%s\n' "${saved_defaults_output}" >&2
+  exit 1
+fi
 
 if ! grep -q 'PKG_MGR="pacman"' "${ROOT_DIR}/install-ui.sh"; then
   echo "FAIL: install-ui.sh should detect pacman-based systems" >&2

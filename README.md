@@ -24,7 +24,7 @@ You need `systemd`, the Rust toolchain (`cargo`, the runtime is built on your ma
 curl -fsSL https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install.sh | bash
 ```
 
-It asks for a default keyboard backlight level (0-3), a screen scale (1, 1.25, 1.33, 1.5, 1.67 or 2; default 1.67) and whether to turn on the USB media keys, then builds and installs everything, including the **Zenbook Duo Control** app. After the first install, log out and back in once. To update, run the same command again.
+It asks for a default keyboard backlight level (0-3), a screen scale (1, 1.25, 1.33, 1.5, 1.67 or 2; default 1.67) and whether to turn on the USB media keys, then builds and installs everything, including the **Zenbook Duo Control** app. After the first install, log out and back in once. To update, run the same command again; pressing Enter at its questions keeps your current settings.
 
 Options (add after `bash -s --`, e.g. `... | bash -s -- --skip-ui`):
 
