@@ -34,6 +34,8 @@ export const setPanelBrightness = (panel: "top" | "bottom" | "both", percent: nu
 // Keyboard
 export const setFnLock = (locked: boolean) =>
   invoke<void>("set_fn_lock", { locked });
+export const openKeyboardShortcuts = () =>
+  invoke<void>("open_keyboard_shortcuts");
 
 // Display
 export const getMonitorNames = () =>
@@ -192,6 +194,7 @@ export const controlsApi = {
   getPanelBrightness,
   setPanelBrightness,
   setFnLock,
+  openKeyboardShortcuts,
   isServiceActive,
   restartService,
   listTouchscreens,

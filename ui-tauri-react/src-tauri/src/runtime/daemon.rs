@@ -40,6 +40,7 @@ pub async fn run() -> Result<(), String> {
     configure_daemon_socket(paths::daemon_socket_path().as_path())
         .map_err(|e| format!("Failed to configure daemon socket: {e}"))?;
     let state = Arc::new(RwLock::new(initialize_state()));
+    crate::runtime::key_overrides::publish(&state.read().await.settings.key_overrides);
     crate::runtime::bluetooth_hotkeys::start(state.clone());
     crate::runtime::monitor::start(state.clone());
     crate::runtime::logind::start(state.clone());
@@ -150,6 +151,7 @@ match payload {
     },
     DaemonRequest::SaveSettings { settings } => {
         let mut guard = state.write().await;
+        crate::runtime::key_overrides::publish(&settings.key_overrides);
         guard.settings = settings;
         guard.touch();
         persist_state(&guard);

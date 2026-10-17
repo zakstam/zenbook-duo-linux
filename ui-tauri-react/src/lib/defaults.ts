@@ -30,6 +30,7 @@ export const DEFAULT_DUO_SETTINGS: DuoSettings = {
   touchscreenDisabled: [],
   savedDisplayLayout: null,
   keyboardBacklightIdleSecs: 0,
+  keyOverrides: {},
 };
 
 export function withDuoSettingsDefaults(settings: Partial<DuoSettings>): DuoSettings {
@@ -42,5 +43,6 @@ export function withDuoSettingsDefaults(settings: Partial<DuoSettings>): DuoSett
     savedDisplayLayout: settings.savedDisplayLayout ?? DEFAULT_DUO_SETTINGS.savedDisplayLayout,
     keyboardBacklightIdleSecs:
       settings.keyboardBacklightIdleSecs ?? DEFAULT_DUO_SETTINGS.keyboardBacklightIdleSecs,
+    keyOverrides: settings.keyOverrides ?? DEFAULT_DUO_SETTINGS.keyOverrides,
   };
 }

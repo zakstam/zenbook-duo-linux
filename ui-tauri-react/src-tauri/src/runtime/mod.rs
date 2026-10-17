@@ -4,6 +4,7 @@ pub mod client;
 pub mod compositor;
 pub mod daemon;
 pub mod host;
+pub(crate) mod key_overrides;
 pub(crate) mod keyboard_battery;
 pub mod logger;
 pub(crate) mod mic_chord;

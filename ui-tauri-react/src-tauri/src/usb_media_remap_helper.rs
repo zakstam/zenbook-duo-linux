@@ -8,9 +8,10 @@ use signal_hook::flag;
 use std::collections::HashSet;
 
 use crate::runtime::bluetooth_hotkeys::{
-    parse_hotkey_report, BluetoothHotkeyAction, ShiftF7Detector, REPORT_FN_LOCK, REPORT_ID,
-    REPORT_RELEASE,
+    consumer_fkey, parse_hotkey_report, report_fkey, BluetoothHotkeyAction, Filtered, ShiftF7Detector,
+    SuperPFilter, REPORT_FN_LOCK, REPORT_ID, REPORT_RELEASE,
 };
+use crate::runtime::key_overrides::KeyOverride;
 use crate::runtime::mic_chord::{request_step, ChordKey, MicChord};
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -84,8 +85,8 @@ where
     let hardware_fn_lock = crate::hardware::hid::has_hardware_fn_lock(id.vendor(), id.product());
 
     // Mute and volume come from the keyboard's consumer-control node. It is
-    // grabbed too, so they can drive the mic-volume chord; otherwise
-    // everything is passed on unchanged.
+    // grabbed too, so they can be overridden and drive the mic-volume chord;
+    // otherwise everything is passed on unchanged.
     let mut consumer = if hardware_fn_lock {
         open_consumer_node(&device_path)
     } else {
@@ -110,6 +111,10 @@ where
         Key::KEY_MICMUTE,
         Key::KEY_PROG2,
     ] {
+        keys.insert(key);
+    }
+    // Key combinations a top-row key can be set to send.
+    for key in crate::runtime::key_overrides::emittable_keys() {
         keys.insert(key);
     }
 
@@ -325,18 +330,22 @@ where
     }
 }
 
-/// What the helper keeps between events: the mic-volume chord, the Shift+F7
-/// detector, and the key held for a vendor report until its release report.
+/// What the helper keeps between events: the mic-volume chord, key
+/// overrides, the F7 Super+P filter, the Shift+F7 detector, and the key held
+/// for a vendor report until its release report.
 #[derive(Default)]
 struct KeyState {
     mic_chord: MicChord,
+    overrides: crate::runtime::key_overrides::Loaded,
+    super_p: SuperPFilter,
     shift_f7: ShiftF7Detector,
     held: Option<Key>,
     active_report: Option<u8>,
 }
 
-/// A key from the keyboard: passed on, except the mic-volume chord and the
-/// Shift+F7 signal.
+/// A key from the keyboard: passed on, except the mic-volume chord, the
+/// Shift+F7 signal, and keys overridden in the Control Panel (mute, volume,
+/// and F7, which the keyboard sends as Super+P).
 fn handle_key_event(
     uinput: &mut evdev::uinput::VirtualDevice,
     args: &Args,
@@ -359,7 +368,46 @@ fn handle_key_event(
             return Ok(());
         }
     }
-    emit_key(uinput, key, value)
+
+    // F7's Super+P is only told apart from a real Super+P while F7 is overridden.
+    let f7_overridden = state.overrides.get(7) != KeyOverride::Default;
+    let filtered = if f7_overridden || state.super_p.is_pending() {
+        state.super_p.filter(key, value)
+    } else {
+        vec![Filtered::Pass(key, value)]
+    };
+    for filtered in filtered {
+        let function = match filtered {
+            Filtered::PlainF7(value) => Some((7, value)),
+            Filtered::Pass(key, value) => consumer_fkey(key).map(|n| (n, value)),
+        };
+        if let Some((n, value)) = function {
+            let over = state.overrides.get(n);
+            match crate::runtime::key_overrides::apply(&over, n, value, args.user.as_deref(), &mut |k, v| {
+                emit_key(uinput, k, v)
+            }) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(err) => {
+                    log_error(&format!("F{n} override failed: {err}"));
+                    continue;
+                }
+            }
+        }
+        match filtered {
+            Filtered::PlainF7(value) => {
+                if value == 1 {
+                    emit_key(uinput, Key::KEY_LEFTMETA, 1)?;
+                    emit_key(uinput, Key::KEY_P, 1)?;
+                } else if value == 0 {
+                    emit_key(uinput, Key::KEY_P, 0)?;
+                    emit_key(uinput, Key::KEY_LEFTMETA, 0)?;
+                }
+            }
+            Filtered::Pass(key, value) => emit_key(uinput, key, value)?,
+        }
+    }
+    Ok(())
 }
 
 /// An ASUS vendor report (`5a <code>`, then `5a 00` on release): the top
@@ -393,9 +441,11 @@ fn handle_vendor_report(
         log_info(&format!("Fn lock {}", if locked { "on" } else { "off" }));
         return Ok(());
     }
-    let Some(action) = parse_hotkey_report(report) else {
+    let action = parse_hotkey_report(report);
+    let fkey = report_fkey(report);
+    if action.is_none() && fkey.is_none() {
         return Ok(()); // e.g. the battery-level reports (5a 3d)
-    };
+    }
     // The keyboard may repeat the report while the key is held.
     if state.active_report == Some(code) {
         return Ok(());
@@ -405,32 +455,51 @@ fn handle_vendor_report(
         emit_key(uinput, key, 0)?;
     }
 
+    if let Some(n) = fkey {
+        let over = state.overrides.get(n);
+        if over != KeyOverride::Default {
+            let mut pressed = None;
+            let result = crate::runtime::key_overrides::apply(&over, n, 1, args.user.as_deref(), &mut |k, v| {
+                emit_key(uinput, k, v)?;
+                pressed = (v == 1 && crate::runtime::key_overrides::holds_key(&over)).then_some(k);
+                Ok(())
+            });
+            if let Err(err) = result {
+                log_error(&format!("F{n} override failed: {err}"));
+            }
+            // The plain F-key stays down until the release report.
+            state.held = pressed;
+            return Ok(());
+        }
+    }
+
     match action {
-        BluetoothHotkeyAction::BacklightCycle => {
+        Some(BluetoothHotkeyAction::BacklightCycle) => {
             if let Some(level) = cycle_backlight() {
                 show_backlight_osd(args.user.as_deref(), level);
             }
         }
-        BluetoothHotkeyAction::BrightnessDown => {
+        Some(BluetoothHotkeyAction::BrightnessDown) => {
             handle_brightness_key(uinput, Key::KEY_BRIGHTNESSDOWN, 1, "down")?;
             state.held = Some(Key::KEY_BRIGHTNESSDOWN);
         }
-        BluetoothHotkeyAction::BrightnessUp => {
+        Some(BluetoothHotkeyAction::BrightnessUp) => {
             handle_brightness_key(uinput, Key::KEY_BRIGHTNESSUP, 1, "up")?;
             state.held = Some(Key::KEY_BRIGHTNESSUP);
         }
         // The mic key: mute on release, or mic volume with Up/Down.
-        BluetoothHotkeyAction::Key(Key::KEY_MICMUTE) => {
+        Some(BluetoothHotkeyAction::Key(Key::KEY_MICMUTE)) => {
             state.mic_chord.mic(1);
         }
-        BluetoothHotkeyAction::Key(key) => {
+        Some(BluetoothHotkeyAction::Key(key)) => {
             crate::runtime::osd::report_app_key(args.user.as_deref(), key);
             emit_key(uinput, key, 1)?;
             state.held = Some(key);
         }
-        BluetoothHotkeyAction::Emoji => open_emoji_picker(args.user.as_deref()),
-        BluetoothHotkeyAction::ControlPanel => open_control_panel(args.user.as_deref()),
-        BluetoothHotkeyAction::ScreenCycle => request_screen_cycle(),
+        Some(BluetoothHotkeyAction::Emoji) => open_emoji_picker(args.user.as_deref()),
+        Some(BluetoothHotkeyAction::ControlPanel) => open_control_panel(args.user.as_deref()),
+        Some(BluetoothHotkeyAction::ScreenCycle) => request_screen_cycle(),
+        None => {}
     }
     Ok(())
 }

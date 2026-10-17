@@ -12,6 +12,7 @@ use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use tokio::sync::RwLock;
 
 use crate::models::{ConnectionType, EventCategory, HardwareEvent};
+use crate::runtime::key_overrides;
 use crate::runtime::mic_chord::{request_step, ChordKey, MicChord};
 use crate::runtime::{logger, state::RuntimeState};
 
@@ -28,7 +29,8 @@ const REPORT_EMOJI: u8 = 0x7e; // F11
 const REPORT_ASUS_HUB: u8 = 0x86; // F12
 pub(crate) const REPORT_SCREEN_TOGGLE: u8 = 0x6a; // lower-screen key right of F12
 
-// The vendor reports and the Shift+F7 detector below are shared with the USB remap helper: docked and detached, the keyboard
+// The vendor reports, the F7 Super+P filter and the Shift+F7 detector below
+// are shared with the USB remap helper: docked and detached, the keyboard
 // sends the same reports once it handles Fn itself.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +147,128 @@ fn open_key_watcher() -> Option<Device> {
     Some(device)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Filtered {
+    Pass(Key, i32),
+    /// The plain F7 key, which the keyboard sends as Super+P.
+    PlainF7(i32),
+}
+
+/// Turns the Super+P the keyboard sends for a plain F7 press into F7. Super is
+/// held back until the next key shows whether it starts that sequence, so a
+/// real Super+P is also read as F7 while Fn lock is on.
+#[derive(Debug, Default)]
+pub(crate) struct SuperPFilter {
+    meta_pending: bool,
+    swallow_meta_release: bool,
+    f7_down: bool,
+}
+
+impl SuperPFilter {
+    /// Whether it is holding something back (Super, or F7 is down).
+    pub(crate) fn is_pending(&self) -> bool {
+        self.meta_pending || self.swallow_meta_release || self.f7_down
+    }
+
+    pub(crate) fn filter(&mut self, key: Key, value: i32) -> Vec<Filtered> {
+        let mut out = Vec::new();
+        if key == Key::KEY_LEFTMETA {
+            match value {
+                1 => self.meta_pending = true,
+                2 => {
+                    if !self.meta_pending && !self.swallow_meta_release {
+                        out.push(Filtered::Pass(key, 2));
+                    }
+                }
+                _ => {
+                    if self.meta_pending {
+                        self.meta_pending = false;
+                        out.push(Filtered::Pass(key, 1));
+                        out.push(Filtered::Pass(key, 0));
+                    } else if self.swallow_meta_release {
+                        self.swallow_meta_release = false;
+                    } else {
+                        out.push(Filtered::Pass(key, 0));
+                    }
+                }
+            }
+            return out;
+        }
+        if key == Key::KEY_P {
+            if value == 1 && self.meta_pending {
+                self.meta_pending = false;
+                self.swallow_meta_release = true;
+                self.f7_down = true;
+                out.push(Filtered::PlainF7(1));
+                return out;
+            }
+            if self.f7_down {
+                if value == 0 {
+                    self.f7_down = false;
+                }
+                out.push(Filtered::PlainF7(value));
+                return out;
+            }
+        }
+        if self.meta_pending && value == 1 {
+            self.meta_pending = false;
+            out.push(Filtered::Pass(Key::KEY_LEFTMETA, 1));
+        }
+        out.push(Filtered::Pass(key, value));
+        out
+    }
+}
+
+/// The detached keyboard's event device, grabbed while volume, mute or F7
+/// are overridden (Function Keys in the Control Panel): the keyboard sends
+/// those as ordinary keys. Everything else is passed on unchanged.
+struct BluetoothRemap {
+    device: Device,
+    out: VirtualDevice,
+    super_p: SuperPFilter,
+}
+
+/// The top-row key whose ASUS function a vendor report is.
+pub(crate) fn report_fkey(report: &[u8]) -> Option<u8> {
+    if report.len() < 2 || report[0] != REPORT_ID {
+        return None;
+    }
+    match report[1] {
+        REPORT_BACKLIGHT_CYCLE => Some(4),
+        REPORT_BRIGHTNESS_DOWN => Some(5),
+        REPORT_BRIGHTNESS_UP => Some(6),
+        REPORT_SCREEN_ARROWS => Some(8),
+        REPORT_MIC_MUTE => Some(9),
+        REPORT_EMOJI => Some(11),
+        REPORT_ASUS_HUB => Some(12),
+        REPORT_SCREEN_TOGGLE => Some(key_overrides::SCREEN_KEY),
+        _ => None,
+    }
+}
+
+/// The top-row key whose ASUS function a key the keyboard sends itself is:
+/// mute, volume, and F7 (Super+P, see SuperPFilter).
+pub(crate) fn consumer_fkey(key: Key) -> Option<u8> {
+    match key {
+        Key::KEY_MUTE => Some(1),
+        Key::KEY_VOLUMEDOWN => Some(2),
+        Key::KEY_VOLUMEUP => Some(3),
+        _ => None,
+    }
+}
+
+/// Keys whose ASUS function the keyboard sends as ordinary keys: overriding
+/// one needs the keyboard grabbed.
+const CONSUMER_FKEYS: [u8; 4] = [1, 2, 3, 7];
+
+/// Whether the Bluetooth keyboard should be grabbed: only to override
+/// volume, mute or F7.
+fn wanted_remap(overrides: &mut key_overrides::Loaded) -> bool {
+    CONSUMER_FKEYS
+        .iter()
+        .any(|n| overrides.get(*n) != key_overrides::KeyOverride::Default)
+}
+
 fn is_bluetooth_duo_keyboard(device: &Device) -> bool {
     device
         .name()
@@ -153,6 +277,129 @@ fn is_bluetooth_duo_keyboard(device: &Device) -> bool {
         && device
             .supported_keys()
             .is_some_and(|keys| keys.contains(Key::KEY_A))
+}
+
+fn open_bluetooth_remap() -> Result<BluetoothRemap, String> {
+    let (path, mut device) = evdev::enumerate()
+        .find(|(_, device)| is_bluetooth_duo_keyboard(device))
+        .ok_or_else(|| "Bluetooth keyboard event device not found".to_string())?;
+    device
+        .grab()
+        .map_err(|e| format!("Failed to grab {}: {e}", path.display()))?;
+    crate::usb_media_remap_helper::configure_nonblocking(&device)
+        .map_err(|e| format!("Failed to make {} non-blocking: {e}", path.display()))?;
+
+    let mut keys = AttributeSet::<Key>::new();
+    if let Some(supported) = device.supported_keys() {
+        for key in supported.iter() {
+            keys.insert(key);
+        }
+    }
+    for key in EMITTED_KEYS {
+        keys.insert(key);
+    }
+    keys.insert(Key::KEY_F7);
+    keys.insert(Key::KEY_F10);
+    for key in key_overrides::emittable_keys() {
+        keys.insert(key);
+    }
+    // Same vendor/product as the keyboard, so libinput keeps pairing it with
+    // the keyboard's touchpad for disable-while-typing.
+    let out = VirtualDeviceBuilder::new()
+        .and_then(|builder| {
+            builder
+                .name("Zenbook Duo Bluetooth Remap")
+                .input_id(device.input_id())
+                .with_keys(&keys)
+        })
+        .and_then(|builder| builder.build())
+        .map_err(|e| format!("Failed to create Bluetooth remap device: {e}"))?;
+    let _ = logger::append_line(format!(
+        "rust-daemon: key overrides, grabbed Bluetooth keyboard {}",
+        path.display()
+    ));
+    Ok(BluetoothRemap {
+        device,
+        out,
+        super_p: SuperPFilter::default(),
+    })
+}
+
+fn open_bluetooth_remap_logged() -> Option<BluetoothRemap> {
+    match open_bluetooth_remap() {
+        Ok(remap) => Some(remap),
+        Err(err) => {
+            let _ = logger::append_line(format!("rust-daemon: Bluetooth key overrides unavailable: {err}"));
+            None
+        }
+    }
+}
+
+impl BluetoothRemap {
+    fn forward_events(
+        &mut self,
+        chord: &mut MicChord,
+        overrides: &mut key_overrides::Loaded,
+        shift_f7: &mut ShiftF7Detector,
+    ) -> Result<(), String> {
+        let user = std::env::var("ZENBOOK_DUO_USER").ok();
+        let events: Vec<InputEvent> = match self.device.fetch_events() {
+            Ok(events) => events.collect(),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(e) => return Err(format!("Bluetooth keyboard read failed: {e}")),
+        };
+        for event in events {
+            if event.event_type() != EventType::KEY {
+                continue;
+            }
+            shift_f7.feed_event(&event);
+            for filtered in self.super_p.filter(Key::new(event.code()), event.value()) {
+                // The mic key held + Up/Down or the volume keys: mic volume.
+                if let Filtered::Pass(key, value) = filtered {
+                    match chord.key(key, value) {
+                        ChordKey::Pass => {}
+                        ChordKey::Swallow => continue,
+                        ChordKey::Step(step) => {
+                            request_step(step);
+                            continue;
+                        }
+                    }
+                }
+                // The key's ASUS function as the keyboard sends it itself;
+                // overridden ones do that instead.
+                let function = match filtered {
+                    Filtered::PlainF7(value) => Some((7, value)),
+                    Filtered::Pass(key, value) => consumer_fkey(key).map(|n| (n, value)),
+                };
+                if let Some((n, value)) = function {
+                    let over = overrides.get(n);
+                    let out = &mut self.out;
+                    match key_overrides::apply(&over, n, value, user.as_deref(), &mut |k, v| emit_on(out, k, v)) {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(err) => {
+                            let _ = logger::append_line(format!("rust-daemon: F{n} override failed: {err}"));
+                            continue;
+                        }
+                    }
+                }
+                // Not overridden: pass on what the keyboard sent.
+                match filtered {
+                    Filtered::PlainF7(value) => {
+                        if value == 1 {
+                            emit_on(&mut self.out, Key::KEY_LEFTMETA, 1)?;
+                            emit_on(&mut self.out, Key::KEY_P, 1)?;
+                        } else if value == 0 {
+                            emit_on(&mut self.out, Key::KEY_P, 0)?;
+                            emit_on(&mut self.out, Key::KEY_LEFTMETA, 0)?;
+                        }
+                    }
+                    Filtered::Pass(key, value) => emit_on(&mut self.out, key, value)?,
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 fn emit_on(device: &mut VirtualDevice, key: Key, value: i32) -> Result<(), String> {
@@ -351,6 +598,10 @@ fn create_virtual_keyboard() -> Option<VirtualDevice> {
     for key in EMITTED_KEYS {
         keys.insert(key);
     }
+    // Key combinations a top-row key can be set to send.
+    for key in key_overrides::emittable_keys() {
+        keys.insert(key);
+    }
     let device = VirtualDeviceBuilder::new()
         .and_then(|builder| builder.name("Zenbook Duo Bluetooth Keys").with_keys(&keys))
         .and_then(|builder| builder.build());
@@ -411,6 +662,7 @@ fn watch_reports(
     hardware_fn_lock: bool,
 ) -> Result<(), String> {
     let mut active_action: Option<BluetoothHotkeyAction> = None;
+    let mut active_override: Option<u8> = None;
     let mut buffer = [0_u8; 64];
 
     let flags = OFlag::from_bits_truncate(
@@ -418,6 +670,10 @@ fn watch_reports(
     );
     fcntl(file.as_raw_fd(), FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))
         .map_err(|e| format!("Failed to make hidraw non-blocking: {e}"))?;
+    let mut overrides = key_overrides::Loaded::default();
+    let mut remap = wanted_remap(&mut overrides)
+        .then(open_bluetooth_remap_logged)
+        .flatten();
     let mut last_fn_lock_check = std::time::Instant::now();
     let mut fn_lock_sent = crate::usb_media_remap_helper::load_fn_lock();
     if hardware_fn_lock {
@@ -430,6 +686,9 @@ fn watch_reports(
 
     loop {
         let mut fds = vec![file.as_raw_fd()];
+        if let Some(remap) = &remap {
+            fds.push(remap.device.as_raw_fd());
+        }
         if let Some(grab) = &mic_grab {
             fds.push(grab.device.as_raw_fd());
         }
@@ -442,7 +701,8 @@ fn watch_reports(
             request_step(step);
         }
 
-        // Only gets events while nothing grabs the keyboard.
+        // Only gets events while nothing grabs the keyboard; a grab feeds the
+        // detector itself (forward_events).
         let watcher_lost = key_watcher.as_mut().is_some_and(|watcher| match watcher.fetch_events() {
             Ok(events) => {
                 events.for_each(|event| shift_f7.feed_event(&event));
@@ -461,6 +721,7 @@ fn watch_reports(
                     let report = &buffer[..count];
                     if is_release_report(report) {
                         active_action = None;
+                        active_override = None;
                         if let Some(key) = held.take() {
                             emit_key(keys, key, 0)?;
                         }
@@ -483,6 +744,33 @@ fn watch_reports(
                         continue;
                     }
 
+                    // A key set to do something else (Function Keys in the Control Panel).
+                    if let Some(n) = report_fkey(report) {
+                        let over = overrides.get(n);
+                        if over != key_overrides::KeyOverride::Default {
+                            // The keyboard repeats the report while the key is held.
+                            if active_override == Some(n) {
+                                continue;
+                            }
+                            active_override = Some(n);
+                            if let Some(key) = held.take() {
+                                emit_key(keys, key, 0)?;
+                            }
+                            let user = std::env::var("ZENBOOK_DUO_USER").ok();
+                            let mut pressed = None;
+                            let result = key_overrides::apply(&over, n, 1, user.as_deref(), &mut |k, v| {
+                                emit_key(keys, k, v)?;
+                                pressed = (v == 1 && crate::runtime::key_overrides::holds_key(&over)).then_some(k);
+                                Ok(())
+                            });
+                            if let Err(err) = result {
+                                let _ = logger::append_line(format!("rust-daemon: F{n} override failed: {err}"));
+                            }
+                            // The plain F-key stays down until the release report.
+                            *held = pressed;
+                            continue;
+                        }
+                    }
                     let Some(action) = parse_hotkey_report(report) else {
                         continue;
                     };
@@ -503,7 +791,10 @@ fn watch_reports(
                         )
                     {
                         chord.mic(1);
-                        mic_grab = open_mic_hold_grab();
+                        // Already grabbed (key overrides): the chord runs through that grab.
+                        if remap.is_none() {
+                            mic_grab = open_mic_hold_grab();
+                        }
                         continue;
                     }
                     match handle_action(action, &state, keys) {
@@ -538,12 +829,30 @@ fn watch_reports(
                 set_hardware_fn_lock(locked);
                 fn_lock_sent = locked;
             }
+            // The key overrides changed.
+            let wanted = wanted_remap(&mut overrides);
+            if wanted != remap.is_some() && !chord.is_held() {
+                let _ = logger::append_line(format!(
+                    "rust-daemon: Bluetooth keyboard grab for key overrides {}",
+                    if wanted { "on" } else { "off" }
+                ));
+                // Release the old grab first, or the new one can't take the device.
+                drop(remap.take());
+                remap = wanted.then(open_bluetooth_remap_logged).flatten();
+            }
         }
 
         if let Some(grab) = mic_grab.as_mut() {
             if let Err(err) = grab.forward_events(&mut chord) {
                 let _ = logger::append_line(format!("rust-daemon: {err}; ending mic key grab"));
                 mic_grab = None;
+            }
+        }
+
+        if let Some(active) = remap.as_mut() {
+            if let Err(err) = active.forward_events(&mut chord, &mut overrides, &mut shift_f7) {
+                let _ = logger::append_line(format!("rust-daemon: {err}; releasing the key-override grab"));
+                remap = None;
             }
         }
     }
@@ -854,6 +1163,49 @@ mod tests {
                 panic!("{code:#x} should map to a key");
             }
         }
+    }
+
+    #[test]
+    fn super_p_from_plain_f7_becomes_f7() {
+        let mut filter = SuperPFilter::default();
+        assert!(filter.filter(Key::KEY_LEFTMETA, 1).is_empty());
+        assert_eq!(filter.filter(Key::KEY_P, 1), vec![Filtered::PlainF7(1)]);
+        assert_eq!(filter.filter(Key::KEY_P, 0), vec![Filtered::PlainF7(0)]);
+        assert!(filter.filter(Key::KEY_LEFTMETA, 0).is_empty());
+        // Back to normal afterwards.
+        assert_eq!(filter.filter(Key::KEY_P, 1), vec![Filtered::Pass(Key::KEY_P, 1)]);
+    }
+
+    #[test]
+    fn other_super_shortcuts_pass_through() {
+        let mut filter = SuperPFilter::default();
+        assert!(filter.filter(Key::KEY_LEFTMETA, 1).is_empty());
+        assert_eq!(
+            filter.filter(Key::KEY_A, 1),
+            vec![
+                Filtered::Pass(Key::KEY_LEFTMETA, 1),
+                Filtered::Pass(Key::KEY_A, 1)
+            ]
+        );
+        assert_eq!(filter.filter(Key::KEY_A, 0), vec![Filtered::Pass(Key::KEY_A, 0)]);
+        assert_eq!(
+            filter.filter(Key::KEY_LEFTMETA, 0),
+            vec![Filtered::Pass(Key::KEY_LEFTMETA, 0)]
+        );
+    }
+
+    #[test]
+    fn super_tapped_alone_still_reaches_the_desktop() {
+        let mut filter = SuperPFilter::default();
+        assert!(filter.filter(Key::KEY_LEFTMETA, 1).is_empty());
+        assert!(filter.filter(Key::KEY_LEFTMETA, 2).is_empty());
+        assert_eq!(
+            filter.filter(Key::KEY_LEFTMETA, 0),
+            vec![
+                Filtered::Pass(Key::KEY_LEFTMETA, 1),
+                Filtered::Pass(Key::KEY_LEFTMETA, 0)
+            ]
+        );
     }
 
     #[test]
