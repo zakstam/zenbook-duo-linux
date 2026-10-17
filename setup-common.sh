@@ -150,23 +150,50 @@ install_duo_dependencies() {
   fi
 }
 
-add_duo_sudoers() {
-  local entry="$1"
-  if ! sudo grep -Fq "${entry}" /etc/sudoers 2>/dev/null; then
-    echo "${entry}" | sudo tee -a /etc/sudoers >/dev/null
+# Older installs appended a wildcard rule to /etc/sudoers. Remove it on
+# upgrade; the edited copy is checked with visudo before it replaces the file.
+remove_legacy_duo_sudoers() {
+  local legacy='/usr/bin/tee /sys/class/backlight/\*/brightness'
+  sudo grep -q "${legacy}" /etc/sudoers 2>/dev/null || return 0
+  local tmp
+  tmp="$(mktemp)"
+  sudo cat /etc/sudoers | sed "\|${legacy}|d" > "${tmp}"
+  if sudo visudo -cqf "${tmp}"; then
+    sudo install -m 0440 -o root -g root "${tmp}" /etc/sudoers
+    echo "Removed the old wildcard brightness rule from /etc/sudoers"
+  else
+    echo "WARNING: could not remove the old brightness rule from /etc/sudoers; remove it with visudo" >&2
   fi
+  rm -f "${tmp}"
 }
 
 configure_duo_sudoers() {
+  # Exact brightness paths only (a '*' in sudoers args also matches
+  # spaces, so the earlier wildcard rule allowed writing any file as root).
+  # Written to sudoers.d and syntax-checked with visudo instead of appending to /etc/sudoers.
+  remove_legacy_duo_sudoers
   if [ -n "${TARGET_USER}" ]; then
-    add_duo_sudoers "${TARGET_USER} ALL=NOPASSWD:/usr/bin/tee /sys/class/backlight/*/brightness"
+    local tmp dir
+    tmp="$(mktemp)"
+    for dir in /sys/class/backlight/*; do
+      [ -e "${dir}/brightness" ] || continue
+      echo "${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/tee ${dir}/brightness" >> "${tmp}"
+    done
+    if sudo visudo -cqf "${tmp}"; then
+      sudo install -m 0440 -o root -g root "${tmp}" /etc/sudoers.d/zenbook-duo
+    else
+      echo "WARNING: generated sudoers rule failed validation; skipped" >&2
+    fi
+    rm -f "${tmp}"
   fi
 }
 
 configure_duo_input_access() {
-  if [ -n "${TARGET_USER}" ] && ! groups "${TARGET_USER}" | grep -q '\binput\b'; then
-    sudo usermod -aG input "${TARGET_USER}"
-    echo "Added ${TARGET_USER} to input group (logout/login required for full effect)"
+  # Not adding the user to the 'input' group (it grants read access
+  # to every keyboard). The uaccess udev rule below covers the Duo keyboard.
+  if [ -n "${TARGET_USER}" ] && id -nG "${TARGET_USER}" | grep -qw input; then
+    echo "Note: ${TARGET_USER} is in the 'input' group (added by older versions). It is no"
+    echo "longer needed; remove it with: sudo gpasswd -d ${TARGET_USER} input"
   fi
 
   echo 'SUBSYSTEM=="input", ATTRS{name}=="*ASUS Zenbook Duo Keyboard", TAG+="uaccess", MODE="0660", GROUP="input"' | sudo tee /etc/udev/rules.d/90-zenbook-duo-keyboard.rules >/dev/null

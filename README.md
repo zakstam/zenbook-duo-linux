@@ -58,7 +58,7 @@ The same options work from a local checkout:
 sudo -E ./install.sh                # allowed, but a real sudo user session is required
 ```
 
-After a fresh install, log out and back in so group membership and session environment changes take effect. If you are only updating and something looks stale, restart the user session agent:
+After a fresh install, log out and back in so session environment changes take effect. If you are only updating and something looks stale, restart the user session agent:
 
 ```bash
 systemctl --user restart zenbook-duo-session-agent.service
@@ -125,10 +125,9 @@ The installer/setup scripts make system-level changes because the project contro
   - KDE Plasma: `kscreen` / `kscreen-doctor`
   - Hyprland: `hyprland` (provides `hyprctl`)
   - Niri: `niri`
-- Adds the target user to the `input` group. Log out/in after first install.
-- Installs a udev rule for the Zenbook Duo keyboard.
+- Installs a udev rule that gives the logged-in user access to the Zenbook Duo keyboard (`uaccess`). The user is not added to the `input` group, which would grant read access to every keyboard.
 - Removes the old Zenbook Duo hwdb remap if present because it breaks the USB Fn layer.
-- Adds the sudoers entry needed for brightness writes used by the session agent.
+- Adds sudoers rules for the brightness writes used by the session agent: one exact `tee` rule per backlight in `/etc/sudoers.d/zenbook-duo`, checked with `visudo`. The wildcard rule older versions appended to `/etc/sudoers` is removed on upgrade.
 - Installs Rust runtime binaries under `/usr/local/libexec/zenbook-duo`.
 - Installs/enables these services:
   - `zenbook-duo-rust-daemon.service` — system daemon and hardware authority.
@@ -214,10 +213,6 @@ If Fn is not reported, use pause as an Fn-lock: bind `zenbook-duo-control --togg
 
 Do not install hwdb remaps for `KEYBOARD_KEY_7003*` on USB; it overrides the Fn layer.
 
-### Keyboard backlight scanning loops
-
-If you see repeated `KBLIGHT - Device lost, re-scanning` messages, log out and back in so your session picks up the `input` group membership.
-
 ### USB Fn layer is broken after upgrading from an older install
 
 Remove the old hwdb remap and retrigger udev:
@@ -296,7 +291,7 @@ Options:
 ./uninstall.sh --keep-config  # keep ~/.config/zenbook-duo
 ```
 
-The uninstall script does not remove your user from the `input` group. To do that manually:
+Older versions added your user to the `input` group, which is no longer needed. The uninstall script does not remove that membership; to do it manually:
 
 ```bash
 sudo gpasswd -d "$USER" input
