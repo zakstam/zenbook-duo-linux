@@ -226,6 +226,22 @@ match payload {
             Err(message) => DaemonResponse::Error { message },
         }
     }
+    DaemonRequest::CycleScreens => {
+        // Same scale as the attach/detach layouts, so the cycle never rescales.
+        let (attached, scale) = {
+            let guard = state.read().await;
+            (
+                matches!(guard.status.connection_type, crate::models::ConnectionType::Usb),
+                guard.settings.default_scale,
+            )
+        };
+        match forward_session_command(&state, SessionCommand::CycleScreens { attached, scale })
+            .await
+        {
+            Ok(()) => DaemonResponse::Ack,
+            Err(message) => DaemonResponse::Error { message },
+        }
+    }
     DaemonRequest::ApplyDisplayLayout { layout } => {
         apply_display_layout_request(&state, layout).await
     }
@@ -595,6 +611,11 @@ async fn replay_current_display_mode_with_disconnect(
         return Ok(());
     }
 
+    // On GNOME the dock mode keeps external screens as they are, while a saved
+    // layout of the panels alone would turn them off.
+    let exact_saved_layout = exact_saved_layout.filter(|_| {
+        !(external_active && saved_internal_only && backend == Some(SessionBackend::Gnome))
+    });
     if let Some(layout) = exact_saved_layout {
         return forward_session_command_with_disconnect(
             state,
@@ -619,9 +640,14 @@ fn should_skip_internal_replay_for_external(
     external_active: bool,
     saved_internal_only: bool,
 ) -> bool {
+    // Hyprland applies outputs one by one, and the GNOME session agent adds the
+    // external screens to the panel layout.
     external_active
         && saved_internal_only
-        && backend != Some(SessionBackend::Hyprland)
+        && !matches!(
+            backend,
+            Some(SessionBackend::Hyprland) | Some(SessionBackend::Gnome)
+        )
 }
 
 pub(crate) async fn handle_lid_closed_change(
@@ -2827,7 +2853,7 @@ mod tests {
 
     #[test]
     fn full_layout_backends_keep_external_display_replay_guard() {
-        for backend in [SessionBackend::Gnome, SessionBackend::Kde, SessionBackend::Niri] {
+        for backend in [SessionBackend::Kde, SessionBackend::Niri] {
             assert!(should_skip_internal_replay_for_external(
                 Some(backend),
                 true,
@@ -2835,8 +2861,17 @@ mod tests {
             ));
         }
         assert!(!should_skip_internal_replay_for_external(
-            Some(SessionBackend::Gnome),
+            Some(SessionBackend::Kde),
             false,
+            true,
+        ));
+    }
+
+    #[test]
+    fn gnome_replay_is_not_skipped_when_external_output_is_active() {
+        assert!(!should_skip_internal_replay_for_external(
+            Some(SessionBackend::Gnome),
+            true,
             true,
         ));
     }

@@ -26,8 +26,9 @@ const REPORT_SCREEN_ARROWS: u8 = 0x9c; // F8
 const REPORT_MIC_MUTE: u8 = 0x7c; // F9
 const REPORT_EMOJI: u8 = 0x7e; // F11
 const REPORT_ASUS_HUB: u8 = 0x86; // F12
+pub(crate) const REPORT_SCREEN_TOGGLE: u8 = 0x6a; // lower-screen key right of F12
 
-// The vendor reports below are shared with the USB remap helper: docked and detached, the keyboard
+// The vendor reports and the Shift+F7 detector below are shared with the USB remap helper: docked and detached, the keyboard
 // sends the same reports once it handles Fn itself.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,8 @@ pub(crate) enum BluetoothHotkeyAction {
     /// remap helper emits when the keyboard is docked.
     Key(Key),
     Emoji,
+    /// The lower-screen key: the daemon cycles the internal screens.
+    ScreenCycle,
     /// The ASUS hub key (F12): opens the Zenbook Duo Control Panel, the
     /// counterpart of MyASUS, which the key opens on Windows.
     ControlPanel,
@@ -79,6 +82,67 @@ fn restore_fn_lock_after_connect() {
             set_hardware_fn_lock(crate::usb_media_remap_helper::load_fn_lock());
         }
     });
+}
+
+/// Recognises the detached keyboard's Shift+F7. For F7 the keyboard sends
+/// Super+P, and with Shift held it releases Shift in the same report that
+/// presses Super (same event time), then sends P. Nobody can do that by
+/// hand, so it tells Shift+F7 apart from F7 and from a real Shift, Super, P.
+#[derive(Debug, Default)]
+pub(crate) struct ShiftF7Detector {
+    shift_released: Option<std::time::SystemTime>,
+    super_from_shift: bool,
+}
+
+/// Events of one keyboard report differ by microseconds at most.
+const SAME_REPORT: Duration = Duration::from_millis(3);
+
+impl ShiftF7Detector {
+    /// Feeds one key event; true when it completes a Shift+F7.
+    pub(crate) fn feed(&mut self, key: Key, value: i32, time: std::time::SystemTime) -> bool {
+        match (key, value) {
+            (Key::KEY_LEFTSHIFT | Key::KEY_RIGHTSHIFT, 0) => {
+                self.shift_released = Some(time);
+                self.super_from_shift = false;
+                false
+            }
+            (Key::KEY_LEFTMETA, 1) => {
+                self.super_from_shift = self.shift_released.take().is_some_and(|released| {
+                    time.duration_since(released).map_or(true, |d| d <= SAME_REPORT)
+                });
+                false
+            }
+            (Key::KEY_P, 1) => std::mem::take(&mut self.super_from_shift),
+            (_, 1) => {
+                self.shift_released = None;
+                self.super_from_shift = false;
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn feed_event(&mut self, event: &InputEvent) {
+        let user = std::env::var("ZENBOOK_DUO_USER").ok();
+        self.feed_event_for(event, user.as_deref());
+    }
+
+    /// Feeds a key event; on a Shift+F7, tells `user`'s desktop.
+    pub(crate) fn feed_event_for(&mut self, event: &InputEvent, user: Option<&str>) {
+        if event.event_type() == EventType::KEY
+            && self.feed(Key::new(event.code()), event.value(), event.timestamp())
+        {
+            crate::runtime::osd::report_shift_f7(user);
+        }
+    }
+}
+
+/// The detached keyboard's event device, only read (not grabbed), to see
+/// Shift+F7 while nothing grabs the keyboard.
+fn open_key_watcher() -> Option<Device> {
+    let (_, device) = evdev::enumerate().find(|(_, device)| is_bluetooth_duo_keyboard(device))?;
+    crate::usb_media_remap_helper::configure_nonblocking(&device).ok()?;
+    Some(device)
 }
 
 fn is_bluetooth_duo_keyboard(device: &Device) -> bool {
@@ -361,16 +425,33 @@ fn watch_reports(
     }
     let mut chord = MicChord::default();
     let mut mic_grab: Option<MicHoldGrab> = None;
+    let mut shift_f7 = ShiftF7Detector::default();
+    let mut key_watcher = open_key_watcher();
 
     loop {
         let mut fds = vec![file.as_raw_fd()];
         if let Some(grab) = &mic_grab {
             fds.push(grab.device.as_raw_fd());
         }
+        if let Some(watcher) = &key_watcher {
+            fds.push(watcher.as_raw_fd());
+        }
         // While the mic key is held, wake often enough for its volume repeat.
         wait_readable(&fds, if chord.is_held() { 50 } else { 1000 });
         if let Some(step) = chord.due(std::time::Instant::now()) {
             request_step(step);
+        }
+
+        // Only gets events while nothing grabs the keyboard.
+        let watcher_lost = key_watcher.as_mut().is_some_and(|watcher| match watcher.fetch_events() {
+            Ok(events) => {
+                events.for_each(|event| shift_f7.feed_event(&event));
+                false
+            }
+            Err(e) => e.kind() != std::io::ErrorKind::WouldBlock,
+        });
+        if watcher_lost {
+            key_watcher = None;
         }
 
         loop {
@@ -444,6 +525,9 @@ fn watch_reports(
         // Fn lock can also be changed elsewhere (Control Panel, docked keyboard).
         if last_fn_lock_check.elapsed() >= Duration::from_secs(1) {
             last_fn_lock_check = std::time::Instant::now();
+            if key_watcher.is_none() {
+                key_watcher = open_key_watcher();
+            }
             // Fn lock changed in the Control Panel or on the docked keyboard.
             let locked = crate::usb_media_remap_helper::load_fn_lock();
             if hardware_fn_lock && locked != fn_lock_sent {
@@ -525,6 +609,7 @@ pub(crate) fn parse_hotkey_report(report: &[u8]) -> Option<BluetoothHotkeyAction
         REPORT_MIC_MUTE => Some(BluetoothHotkeyAction::Key(Key::KEY_MICMUTE)),
         REPORT_EMOJI => Some(BluetoothHotkeyAction::Emoji),
         REPORT_ASUS_HUB => Some(BluetoothHotkeyAction::ControlPanel),
+        REPORT_SCREEN_TOGGLE => Some(BluetoothHotkeyAction::ScreenCycle),
         _ => None,
     }
 }
@@ -552,7 +637,11 @@ fn handle_action(
         BluetoothHotkeyAction::BrightnessDown | BluetoothHotkeyAction::BrightnessUp => {
             press_brightness_key(action, state, keys).map(Some)
         }
-        BluetoothHotkeyAction::Key(key) => emit_key(keys, key, 1).map(|()| Some(key)),
+        BluetoothHotkeyAction::Key(key) => {
+            let user = std::env::var("ZENBOOK_DUO_USER").ok();
+            crate::runtime::osd::report_app_key(user.as_deref(), key);
+            emit_key(keys, key, 1).map(|()| Some(key))
+        }
         BluetoothHotkeyAction::Emoji => {
             let user = std::env::var("ZENBOOK_DUO_USER").ok();
             crate::usb_media_remap_helper::open_emoji_picker(user.as_deref());
@@ -561,6 +650,21 @@ fn handle_action(
         BluetoothHotkeyAction::ControlPanel => {
             let user = std::env::var("ZENBOOK_DUO_USER").ok();
             crate::usb_media_remap_helper::open_control_panel(user.as_deref());
+            Ok(None)
+        }
+        BluetoothHotkeyAction::ScreenCycle => {
+            // Through the daemon's own socket, like the USB remap helper; in a
+            // thread so the hotkey loop never waits for the layout change.
+            std::thread::spawn(|| {
+                let result = crate::runtime::client::request(
+                    crate::ipc::protocol::DaemonRequest::CycleScreens,
+                );
+                if !matches!(result, Ok(crate::ipc::protocol::DaemonResponse::Ack)) {
+                    let _ = logger::append_line(format!(
+                        "rust-daemon: Bluetooth screen cycle failed: {result:?}"
+                    ));
+                }
+            });
             Ok(None)
         }
     }
@@ -677,6 +781,7 @@ fn next_brightness_value(current: u32, max: u32, action: BluetoothHotkeyAction) 
         BluetoothHotkeyAction::BacklightCycle
         | BluetoothHotkeyAction::Key(_)
         | BluetoothHotkeyAction::Emoji
+        | BluetoothHotkeyAction::ScreenCycle
         | BluetoothHotkeyAction::ControlPanel => current,
     }
 }
@@ -684,6 +789,30 @@ fn next_brightness_value(current: u32, max: u32, action: BluetoothHotkeyAction) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_the_keyboards_shift_f7() {
+        use std::time::{Duration as D, UNIX_EPOCH};
+        let at = |ms: u64| UNIX_EPOCH + D::from_micros(ms * 1000);
+        let mut d = ShiftF7Detector::default();
+        // Shift held, then the keyboard's F7: Shift up and Super down together, P.
+        assert!(!d.feed(Key::KEY_LEFTSHIFT, 1, at(0)));
+        assert!(!d.feed(Key::KEY_LEFTSHIFT, 0, at(400)));
+        assert!(!d.feed(Key::KEY_LEFTMETA, 1, at(400)));
+        assert!(d.feed(Key::KEY_P, 1, at(410)));
+        // Plain F7: Super+P without Shift.
+        assert!(!d.feed(Key::KEY_LEFTMETA, 1, at(1000)));
+        assert!(!d.feed(Key::KEY_P, 1, at(1010)));
+        // By hand: Shift released, Super pressed a little later.
+        assert!(!d.feed(Key::KEY_LEFTSHIFT, 0, at(2000)));
+        assert!(!d.feed(Key::KEY_LEFTMETA, 1, at(2080)));
+        assert!(!d.feed(Key::KEY_P, 1, at(2100)));
+        // Another key between Super and P.
+        assert!(!d.feed(Key::KEY_LEFTSHIFT, 0, at(3000)));
+        assert!(!d.feed(Key::KEY_LEFTMETA, 1, at(3000)));
+        assert!(!d.feed(Key::KEY_A, 1, at(3005)));
+        assert!(!d.feed(Key::KEY_P, 1, at(3010)));
+    }
 
     #[test]
     fn parses_captured_bluetooth_hotkey_reports() {
@@ -708,6 +837,7 @@ mod tests {
         assert_eq!(report(0x7c), Some(BluetoothHotkeyAction::Key(Key::KEY_MICMUTE)));
         assert_eq!(report(0x7e), Some(BluetoothHotkeyAction::Emoji));
         assert_eq!(report(0x86), Some(BluetoothHotkeyAction::ControlPanel));
+        assert_eq!(report(0x6a), Some(BluetoothHotkeyAction::ScreenCycle));
         // Fn+Esc and the 5a 3d battery-level reports are not hotkeys.
         assert_eq!(report(0x4e), None);
         assert_eq!(report(0x3d), None);

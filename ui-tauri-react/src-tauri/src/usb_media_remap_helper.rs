@@ -8,7 +8,8 @@ use signal_hook::flag;
 use std::collections::HashSet;
 
 use crate::runtime::bluetooth_hotkeys::{
-    parse_hotkey_report, BluetoothHotkeyAction, REPORT_FN_LOCK, REPORT_ID, REPORT_RELEASE,
+    parse_hotkey_report, BluetoothHotkeyAction, ShiftF7Detector, REPORT_FN_LOCK, REPORT_ID,
+    REPORT_RELEASE,
 };
 use crate::runtime::mic_chord::{request_step, ChordKey, MicChord};
 use std::env;
@@ -243,7 +244,7 @@ where
             if terminate.load(Ordering::Relaxed) {
                 break;
             }
-            handle_key_event(&mut uinput, &mut keys_state, &event)?;
+            handle_key_event(&mut uinput, &args, &mut keys_state, &event)?;
         }
     }
 
@@ -324,18 +325,21 @@ where
     }
 }
 
-/// What the helper keeps between events: the mic-volume chord, and the key
-/// held for a vendor report until its release report.
+/// What the helper keeps between events: the mic-volume chord, the Shift+F7
+/// detector, and the key held for a vendor report until its release report.
 #[derive(Default)]
 struct KeyState {
     mic_chord: MicChord,
+    shift_f7: ShiftF7Detector,
     held: Option<Key>,
     active_report: Option<u8>,
 }
 
-/// A key from the keyboard: passed on, except the mic-volume chord.
+/// A key from the keyboard: passed on, except the mic-volume chord and the
+/// Shift+F7 signal.
 fn handle_key_event(
     uinput: &mut evdev::uinput::VirtualDevice,
+    args: &Args,
     state: &mut KeyState,
     event: &InputEvent,
 ) -> Result<(), String> {
@@ -344,6 +348,7 @@ fn handle_key_event(
     }
     let key = Key::new(event.code());
     let value = event.value();
+    state.shift_f7.feed_event_for(event, args.user.as_deref());
 
     // Mic key held + Up/Down or the volume keys: mic volume.
     match state.mic_chord.key(key, value) {
@@ -359,7 +364,7 @@ fn handle_key_event(
 
 /// An ASUS vendor report (`5a <code>`, then `5a 00` on release): the top
 /// row's ASUS functions (backlight, brightness, screen arrows, mic, emoji,
-/// ASUS hub) and Fn+Esc. The same reports as detached.
+/// ASUS hub), Fn+Esc and the lower-screen key. The same reports as detached.
 fn handle_vendor_report(
     uinput: &mut evdev::uinput::VirtualDevice,
     args: &Args,
@@ -419,11 +424,13 @@ fn handle_vendor_report(
             state.mic_chord.mic(1);
         }
         BluetoothHotkeyAction::Key(key) => {
+            crate::runtime::osd::report_app_key(args.user.as_deref(), key);
             emit_key(uinput, key, 1)?;
             state.held = Some(key);
         }
         BluetoothHotkeyAction::Emoji => open_emoji_picker(args.user.as_deref()),
         BluetoothHotkeyAction::ControlPanel => open_control_panel(args.user.as_deref()),
+        BluetoothHotkeyAction::ScreenCycle => request_screen_cycle(),
     }
     Ok(())
 }
@@ -803,6 +810,22 @@ fn open_consumer_node(grabbed: &Path) -> Option<Device> {
         }
     }
     None
+}
+
+/// The lower-screen key (right of F12) has no key code; it is a vendor report
+/// on the keyboard's interface 4. The daemon has the session agent cycle the
+/// internal screens. Runs in a thread so key handling never waits for it.
+pub(crate) fn request_screen_cycle() {
+    std::thread::spawn(|| {
+        match crate::runtime::client::request(crate::ipc::protocol::DaemonRequest::CycleScreens) {
+            Ok(crate::ipc::protocol::DaemonResponse::Ack) => {}
+            Ok(crate::ipc::protocol::DaemonResponse::Error { message }) => {
+                log_error(&format!("Screen cycle failed: {message}"))
+            }
+            Ok(other) => log_error(&format!("Unexpected screen cycle response: {other:?}")),
+            Err(err) => log_error(&format!("Screen cycle request failed: {err}")),
+        }
+    });
 }
 
 fn fn_lock_path() -> PathBuf {

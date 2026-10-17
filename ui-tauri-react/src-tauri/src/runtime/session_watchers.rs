@@ -1,6 +1,6 @@
 use crate::ipc::protocol::SessionBackend;
 use crate::runtime::session_agent::{
-    backlight_idle, brightness_sync::BrightnessSync, mic_mute, rotation::RotationWatcherSupervisor,
+    backlight_idle, brightness_sync::BrightnessSync, external_screens, mic_mute, rotation::RotationWatcherSupervisor,
     send_runtime_notification,
 };
 
@@ -24,6 +24,11 @@ pub(crate) fn start_all() {
         tokio::spawn(async {
             if let Err(err) = backlight_idle::watch_screen_power().await {
                 log::warn!("session-agent screen power watcher failed: {err}");
+            }
+        });
+        tokio::spawn(async {
+            if let Err(err) = external_screens::watch_hotplug().await {
+                log::warn!("session-agent external screen watcher failed: {err}");
             }
         });
     }

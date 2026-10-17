@@ -44,7 +44,8 @@ If it can't tell which desktop you're on, clone the repo and run the setup scrip
 ## What it does
 
 - Switches between one and two screens when the keyboard is attached or removed, over USB or Bluetooth.
-- Auto-rotates the screens. Laying the Duo flat with both screens up turns only the top screen around for the person opposite.
+- Auto-rotates the screens while the keyboard is off. Laying the Duo flat with both screens up turns only the top screen around for the person opposite. Attaching the keyboard turns the screen upright again.
+- GNOME: external screens keep their place when the keyboard is attached or removed. The screen key (right of F12) cycles the Duo screens: both, top only, bottom only, off. The Control app's Displays page names the screens as GNOME Settings does and snaps a dragged screen to a place GNOME accepts.
 - Keeps brightness in sync between the screens and handles the keyboard backlight and brightness keys, including over Bluetooth. **Controls → Display Brightness** in the Control app sets each screen on its own, or both together.
 - Optionally turns the top row into media keys when docked (F1-F3 volume, F4 backlight, F5/F6 brightness, F11 emoji).
 - On the UX8406MA keyboard, **Fn+Esc** switches the top row between media keys and F1-F12, docked and detached; hold Fn for the other one. The setting is under **Controls → Function Keys** in the Control app. The ASUS key (F12) opens the Control app.

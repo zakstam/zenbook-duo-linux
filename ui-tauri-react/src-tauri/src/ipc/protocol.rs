@@ -71,6 +71,8 @@ pub enum DaemonRequest {
         connector: String,
         enabled: bool,
     },
+    /// The lower-screen key: cycle which internal screens are on.
+    CycleScreens,
     /// Fn lock, shared by the USB remap helper and the Bluetooth hotkey
     /// watcher, which pick up a change within a second.
     SetFnLock {
@@ -185,6 +187,10 @@ pub enum SessionCommand {
         urgent: bool,
     },
     OpenEmojiPicker,
+    CycleScreens {
+        attached: bool,
+        scale: f64,
+    },
     /// Mic key + Up/Down: one step of the microphone volume.
     StepMicVolume {
         up: bool,

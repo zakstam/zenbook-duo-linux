@@ -92,6 +92,7 @@ async fn wait_for_watch(
 
 /// Follows Mutter's display power saving: screens blanked (any mode but 0,
 /// e.g. after the screen-blank delay) turn the keyboard backlight off too.
+/// Not when the screen key turned them off: the keyboard is in use then.
 pub(crate) async fn watch_screen_power() -> Result<(), String> {
     let connection = zbus::Connection::session()
         .await
@@ -112,6 +113,12 @@ pub(crate) async fn watch_screen_power() -> Result<(), String> {
         let Ok(mode) = change.get().await else {
             continue;
         };
+        let by_key = super::screen_cycle::PANELS_OFF_BY_KEY.load(std::sync::atomic::Ordering::SeqCst);
+        if mode == 0 {
+            super::screen_cycle::PANELS_OFF_BY_KEY.store(false, std::sync::atomic::Ordering::SeqCst);
+        } else if by_key && !blanked {
+            continue;
+        }
         if (mode != 0) != blanked {
             blanked = mode != 0;
             report(blanked).await;

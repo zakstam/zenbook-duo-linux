@@ -33,6 +33,12 @@ fn daemon_ack_or_transport_fallback(
     }
 }
 
+/// The monitors' names by connector, as GNOME Settings shows them.
+#[tauri::command]
+pub fn get_monitor_names() -> std::collections::HashMap<String, String> {
+    crate::hardware::display_layout::monitor_names()
+}
+
 #[tauri::command]
 pub fn get_display_layout() -> Result<DisplayLayout, String> {
     daemon_display_layout_or_transport_fallback(

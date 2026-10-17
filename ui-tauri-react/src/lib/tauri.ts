@@ -36,6 +36,8 @@ export const setFnLock = (locked: boolean) =>
   invoke<void>("set_fn_lock", { locked });
 
 // Display
+export const getMonitorNames = () =>
+  invoke<Record<string, string>>("get_monitor_names");
 export const getDisplayLayout = () =>
   invoke<DisplayLayout>("get_display_layout");
 export const applyDisplayLayout = (layout: DisplayLayout) =>
@@ -149,6 +151,7 @@ export const settingsApi = {
 };
 
 export const displayApi = {
+  getMonitorNames,
   getDisplayLayout,
   applyDisplayLayout,
   setOrientation,

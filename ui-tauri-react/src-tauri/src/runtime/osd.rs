@@ -87,6 +87,73 @@ pub(crate) fn show_for_user(user: &str, osd: &Osd) -> bool {
     run(command.arg("gdbus").args(gdbus_args(osd)))
 }
 
+/// The ASUS app keys (top-row label, accelerator they send), which do nothing
+/// until a shortcut is assigned to them in the desktop's settings.
+pub(crate) fn app_key(key: evdev::Key) -> Option<(&'static str, &'static str)> {
+    match key {
+        evdev::Key::KEY_PROG1 => Some(("F7", "XF86Launch1")),
+        evdev::Key::KEY_PROG2 => Some(("F8", "XF86Launch2")),
+        evdev::Key::KEY_PROG3 => Some(("F10", "XF86Launch3")),
+        evdev::Key::KEY_PROG4 => Some(("F12", "XF86Launch4")),
+        _ => None,
+    }
+}
+
+/// An app key was pressed: the extension shows a pop-up if no shortcut uses
+/// it. In a thread, so key handling never waits for the desktop.
+pub(crate) fn report_app_key(user: Option<&str>, key: evdev::Key) {
+    let (Some(user), Some((label, accelerator))) = (user.map(str::to_string), app_key(key)) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let Ok(Some(account)) = nix::unistd::User::from_name(&user) else {
+            return;
+        };
+        let mut command =
+            crate::usb_media_remap_helper::user_session_command(&user, account.uid.as_raw());
+        run(command.args([
+            "gdbus",
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.Shell",
+            "--object-path",
+            "/org/gnome/Shell/Extensions/ZenbookDuoGnomeTools",
+            "--method",
+            "org.gnome.Shell.Extensions.ZenbookDuoGnomeTools.AppKeyPressed",
+            label,
+            accelerator,
+        ]));
+    });
+}
+
+/// The detached keyboard's Shift+F7 (which reaches the desktop as plain
+/// Super+P): tells the extension, which shows the main-display switch then.
+/// In a thread, so key handling never waits for the desktop.
+pub(crate) fn report_shift_f7(user: Option<&str>) {
+    let Some(user) = user.map(str::to_string) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let Ok(Some(account)) = nix::unistd::User::from_name(&user) else {
+            return;
+        };
+        let mut command =
+            crate::usb_media_remap_helper::user_session_command(&user, account.uid.as_raw());
+        run(command.args([
+            "gdbus",
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.Shell",
+            "--object-path",
+            "/org/gnome/Shell/Extensions/ZenbookDuoGnomeTools",
+            "--method",
+            "org.gnome.Shell.Extensions.ZenbookDuoGnomeTools.ShiftF7Pressed",
+        ]));
+    });
+}
+
 fn run(command: &mut Command) -> bool {
     command
         .stdout(std::process::Stdio::null())
@@ -106,6 +173,13 @@ mod tests {
             &args[8..],
             ["--", "keyboard-brightness-symbolic", "Keyboard backlight", "0.667"]
         );
+    }
+
+    #[test]
+    fn app_keys_are_the_launch_keys() {
+        assert_eq!(app_key(evdev::Key::KEY_PROG1), Some(("F7", "XF86Launch1")));
+        assert_eq!(app_key(evdev::Key::KEY_PROG4), Some(("F12", "XF86Launch4")));
+        assert_eq!(app_key(evdev::Key::KEY_MICMUTE), None);
     }
 
     #[test]
