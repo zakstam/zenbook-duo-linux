@@ -3,10 +3,10 @@
 # Desktop-specific wrappers declare only their backend dependency deltas and then
 # call run_duo_setup.
 
-DUO_COMMON_DNF_PACKAGES=(usbutils iio-sensor-proxy systemd)
-DUO_COMMON_APT_PACKAGES=(usbutils iio-sensor-proxy systemd)
-DUO_COMMON_PACMAN_PACKAGES=(usbutils iio-sensor-proxy systemd)
-DUO_COMMON_MANUAL_DEPENDENCIES_HINT="usbutils, iio-sensor-proxy, systemd"
+DUO_COMMON_DNF_PACKAGES=(usbutils iio-sensor-proxy systemd upower pulseaudio-utils)
+DUO_COMMON_APT_PACKAGES=(usbutils iio-sensor-proxy systemd upower pulseaudio-utils)
+DUO_COMMON_PACMAN_PACKAGES=(usbutils iio-sensor-proxy systemd upower libpulse)
+DUO_COMMON_MANUAL_DEPENDENCIES_HINT="usbutils, iio-sensor-proxy, systemd, upower, pactl (pulseaudio-utils)"
 
 # Keep these defaults aligned with DuoSettings::default in the Rust runtime and
 # DEFAULT_DUO_SETTINGS in the frontend.

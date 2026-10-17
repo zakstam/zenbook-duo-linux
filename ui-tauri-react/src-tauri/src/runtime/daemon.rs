@@ -43,6 +43,7 @@ pub async fn run() -> Result<(), String> {
     crate::runtime::bluetooth_hotkeys::start(state.clone());
     crate::runtime::monitor::start(state.clone());
     crate::runtime::logind::start(state.clone());
+    crate::runtime::keyboard_battery::start(state.clone());
 
     loop {
         let (stream, _) = listener
@@ -156,6 +157,7 @@ match payload {
     }
     DaemonRequest::SetBacklight { level } => match hardware::hid::set_backlight(level) {
         Ok(()) => {
+            crate::runtime::backlight_idle::level_set();
             let mut guard = state.write().await;
             guard.status.backlight_level = level;
             let _ = logger::append_line(format!(
@@ -174,6 +176,71 @@ match payload {
     },
     DaemonRequest::SetOrientation { orientation } => {
         apply_orientation(&state, orientation).await
+    }
+    DaemonRequest::SetFnLock { locked } => {
+        crate::usb_media_remap_helper::save_fn_lock(locked);
+        let mut guard = state.write().await;
+        guard.status.fn_lock = locked;
+        let _ = logger::append_line(format!(
+            "rust-daemon: set Fn lock request -> {}",
+            if locked { "on" } else { "off" }
+        ));
+        guard.touch();
+        persist_state(&guard);
+        DaemonResponse::Ack
+    }
+    DaemonRequest::SetMicMute { muted } => {
+        let result = tokio::task::spawn_blocking(move || crate::runtime::mic_led::set_muted(muted))
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+        let mut guard = state.write().await;
+        guard.status.mic_muted = Some(muted);
+        let state_label = if muted { "muted" } else { "unmuted" };
+        let _ = logger::append_line(match &result {
+            Ok(()) => format!("rust-daemon: microphone {state_label}; mic LED set"),
+            // Detached and asleep, or not connected: sent again on connect.
+            Err(err) => format!("rust-daemon: microphone {state_label}; mic LED not set: {err}"),
+        });
+        guard.touch();
+        // The settings app refreshes when the state file changes.
+        persist_state(&guard);
+        DaemonResponse::Ack
+    }
+    DaemonRequest::SetBacklightIdle { idle } => {
+        let level = state.read().await.status.backlight_level;
+        let result = tokio::task::spawn_blocking(move || {
+            crate::runtime::backlight_idle::set_idle(idle, level)
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+        match result {
+            Ok(()) => DaemonResponse::Ack,
+            Err(message) => DaemonResponse::Error { message },
+        }
+    }
+    DaemonRequest::StepMicVolume { up } => {
+        match forward_session_command(&state, SessionCommand::StepMicVolume { up }).await {
+            Ok(()) => DaemonResponse::Ack,
+            Err(message) => DaemonResponse::Error { message },
+        }
+    }
+    DaemonRequest::CycleScreens => {
+        // Same scale as the attach/detach layouts, so the cycle never rescales.
+        let (attached, scale) = {
+            let guard = state.read().await;
+            (
+                matches!(guard.status.connection_type, crate::models::ConnectionType::Usb),
+                guard.settings.default_scale,
+            )
+        };
+        match forward_session_command(&state, SessionCommand::CycleScreens { attached, scale })
+            .await
+        {
+            Ok(()) => DaemonResponse::Ack,
+            Err(message) => DaemonResponse::Error { message },
+        }
     }
     DaemonRequest::ApplyDisplayLayout { layout } => {
         apply_display_layout_request(&state, layout).await
@@ -319,6 +386,7 @@ async fn handle_lifecycle(
             if let Some(warning) = hardware::hid::set_backlight_if_keyboard_present(0) {
                 logger::append_line(format!("rust-daemon: lifecycle {:?}: {warning}", phase)).ok();
             }
+            crate::runtime::mic_led::set_dark(true);
 
             let mut guard = state.write().await;
             guard.push_recent_event(HardwareEvent::info(
@@ -343,6 +411,7 @@ async fn handle_lifecycle(
             if let Some(warning) = hardware::hid::set_backlight_if_keyboard_present(restore_level) {
                 logger::append_line(format!("rust-daemon: lifecycle {:?}: {warning}", phase)).ok();
             }
+            crate::runtime::mic_led::set_dark(false);
 
             let refreshed = crate::runtime::probe::current_status();
             let attached = refreshed.keyboard_attached;
@@ -542,6 +611,11 @@ async fn replay_current_display_mode_with_disconnect(
         return Ok(());
     }
 
+    // On GNOME the dock mode keeps external screens as they are, while a saved
+    // layout of the panels alone would turn them off.
+    let exact_saved_layout = exact_saved_layout.filter(|_| {
+        !(external_active && saved_internal_only && backend == Some(SessionBackend::Gnome))
+    });
     if let Some(layout) = exact_saved_layout {
         return forward_session_command_with_disconnect(
             state,
@@ -566,9 +640,14 @@ fn should_skip_internal_replay_for_external(
     external_active: bool,
     saved_internal_only: bool,
 ) -> bool {
+    // Hyprland applies outputs one by one, and the GNOME session agent adds the
+    // external screens to the panel layout.
     external_active
         && saved_internal_only
-        && backend != Some(SessionBackend::Hyprland)
+        && !matches!(
+            backend,
+            Some(SessionBackend::Hyprland) | Some(SessionBackend::Gnome)
+        )
 }
 
 pub(crate) async fn handle_lid_closed_change(
@@ -2774,7 +2853,7 @@ mod tests {
 
     #[test]
     fn full_layout_backends_keep_external_display_replay_guard() {
-        for backend in [SessionBackend::Gnome, SessionBackend::Kde, SessionBackend::Niri] {
+        for backend in [SessionBackend::Kde, SessionBackend::Niri] {
             assert!(should_skip_internal_replay_for_external(
                 Some(backend),
                 true,
@@ -2782,8 +2861,17 @@ mod tests {
             ));
         }
         assert!(!should_skip_internal_replay_for_external(
-            Some(SessionBackend::Gnome),
+            Some(SessionBackend::Kde),
             false,
+            true,
+        ));
+    }
+
+    #[test]
+    fn gnome_replay_is_not_skipped_when_external_output_is_active() {
+        assert!(!should_skip_internal_replay_for_external(
+            Some(SessionBackend::Gnome),
+            true,
             true,
         ));
     }

@@ -26,8 +26,18 @@ export const getStatus = () => invoke<DuoStatus>("get_status");
 export const getBacklight = () => invoke<number>("get_backlight");
 export const setBacklight = (level: number) =>
   invoke<void>("set_backlight", { level });
+export const getPanelBrightness = () =>
+  invoke<{ panel: "top" | "bottom"; percent: number }[]>("get_panel_brightness");
+export const setPanelBrightness = (panel: "top" | "bottom" | "both", percent: number) =>
+  invoke<void>("set_panel_brightness", { panel, percent });
+
+// Keyboard
+export const setFnLock = (locked: boolean) =>
+  invoke<void>("set_fn_lock", { locked });
 
 // Display
+export const getMonitorNames = () =>
+  invoke<Record<string, string>>("get_monitor_names");
 export const getDisplayLayout = () =>
   invoke<DisplayLayout>("get_display_layout");
 export const applyDisplayLayout = (layout: DisplayLayout) =>
@@ -141,6 +151,7 @@ export const settingsApi = {
 };
 
 export const displayApi = {
+  getMonitorNames,
   getDisplayLayout,
   applyDisplayLayout,
   setOrientation,
@@ -178,6 +189,9 @@ export const profilesApi = {
 export const controlsApi = {
   getBacklight,
   setBacklight,
+  getPanelBrightness,
+  setPanelBrightness,
+  setFnLock,
   isServiceActive,
   restartService,
   listTouchscreens,

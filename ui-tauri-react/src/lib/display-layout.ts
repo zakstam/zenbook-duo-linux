@@ -1,8 +1,6 @@
 import type { DisplayInfo, DisplayLayout } from "@/types/duo";
 
 export const DISPLAY_CANVAS_SCALE = 0.12;
-export const MIN_DISPLAY_NODE_WIDTH = 220;
-export const MIN_DISPLAY_NODE_HEIGHT = 120;
 export const TOP_DISPLAY_CONNECTOR = "eDP-1";
 export const BOTTOM_DISPLAY_CONNECTOR = "eDP-2";
 
@@ -105,14 +103,65 @@ export function layoutToCanvasNodes(layout: DisplayLayout): DisplayCanvasNodeMod
         primary: display.primary,
         scale: display.scale,
       },
-      style: {
-        width: Math.max(MIN_DISPLAY_NODE_WIDTH, scaledWidth),
-        height: isDuoDisplay(display.connector)
-          ? scaledHeight
-          : Math.max(MIN_DISPLAY_NODE_HEIGHT, scaledHeight),
-      },
+      // True to size, so screens that look adjacent are adjacent.
+      style: { width: scaledWidth, height: scaledHeight },
     };
   });
+}
+
+interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Share of the shorter edge two neighbouring screens keep (as the display controls do). */
+export const EDGE_SHARE = 0.1;
+/** Within this many logical pixels of lined-up edges or centred, it snaps there. */
+const MAGNET = 60;
+
+function overlaps(a: Rect, b: Rect) {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+/**
+ * The allowed place nearest to `want` for a screen of `size`: against an
+ * edge of one of `others`, sharing at least EDGE_SHARE of the shorter edge
+ * (GNOME refuses screens that only touch at a corner or float apart), not
+ * overlapping any of them. Snaps to lined-up edges or centred when close.
+ */
+export function nearestAllowedPosition(
+  others: Rect[],
+  size: { width: number; height: number },
+  want: { x: number; y: number },
+): { x: number; y: number } {
+  let best: { x: number; y: number; distance: number } | null = null;
+  for (const r of others) {
+    for (const side of ["left", "right", "above", "below"] as const) {
+      const vertical = side === "left" || side === "right";
+      const edge = vertical ? r.height : r.width;
+      const own = vertical ? size.height : size.width;
+      const start = vertical ? r.y : r.x;
+      const keep = Math.max(1, Math.round(Math.min(edge, own) * EDGE_SHARE));
+      let along = Math.min(Math.max(vertical ? want.y : want.x, start - own + keep), start + edge - keep);
+      for (const magnet of [start, start + edge - own, start + (edge - own) / 2]) {
+        if (Math.abs(along - magnet) <= MAGNET) {
+          along = Math.round(magnet);
+          break;
+        }
+      }
+      const rect = {
+        x: side === "left" ? r.x - size.width : side === "right" ? r.x + r.width : along,
+        y: side === "above" ? r.y - size.height : side === "below" ? r.y + r.height : along,
+        ...size,
+      };
+      if (others.some((o) => overlaps(rect, o))) continue;
+      const distance = Math.hypot(rect.x - want.x, rect.y - want.y);
+      if (!best || distance < best.distance) best = { x: rect.x, y: rect.y, distance };
+    }
+  }
+  return best ? { x: best.x, y: best.y } : want;
 }
 
 export function updateDisplayPosition(layout: DisplayLayout, id: string, pos: { x: number; y: number }): DisplayLayout {
@@ -120,9 +169,17 @@ export function updateDisplayPosition(layout: DisplayLayout, id: string, pos: { 
     return normalizeDuoDisplays(layout);
   }
 
-  const snapped = snapDisplayPosition(pos);
-  const displays = layout.displays.map((display) =>
-    display.connector === id ? { ...display, x: snapped.x, y: snapped.y } : display,
+  const normalized = normalizeDuoDisplays(layout);
+  const dragged = normalized.displays.find((d) => d.connector === id);
+  if (!dragged) {
+    return normalized;
+  }
+  const others = normalized.displays
+    .filter((d) => d.connector !== id)
+    .map((d) => ({ x: d.x, y: d.y, ...displayLogicalSize(d) }));
+  const place = nearestAllowedPosition(others, displayLogicalSize(dragged), snapDisplayPosition(pos));
+  const displays = normalized.displays.map((display) =>
+    display.connector === id ? { ...display, x: Math.round(place.x), y: Math.round(place.y) } : display,
   );
 
   return normalizeDuoDisplays({ displays });
