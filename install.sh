@@ -223,5 +223,4 @@ else
 fi
 
 echo
-echo "If this is a fresh install, you may need to log out and back in."
-echo "If anything looks stale after updating, run: systemctl --user restart zenbook-duo-session-agent.service"
+echo "If this is a fresh install, log out and back in once."

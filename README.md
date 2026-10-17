@@ -1,221 +1,90 @@
 # Linux for the ASUS Zenbook Duo
 
-Linux support tooling for the ASUS Zenbook Duo. The project installs a Rust hardware runtime plus an optional Tauri/React Control Panel so the detachable keyboard, dual displays, rotation, brightness, backlight, hotkeys, touchscreen controls, and related laptop behavior keep working across USB/Bluetooth attach and detach, boot, resume, lock, and desktop-session transitions.
+Makes the Zenbook Duo's detachable keyboard and two screens work properly on Linux: the bottom screen turns on when you take the keyboard off and off when you put it back, and rotation, brightness, backlight and hotkeys keep working over USB and Bluetooth, through sleep, lock and reboot.
 
-This is intentionally device-specific. The goal is a dependable Zenbook Duo experience on the supported Linux desktop matrix, not a generic dual-screen laptop framework.
+![Zenbook Duo Control](sc.png)
 
-## What it does
+## Does it support my laptop?
 
-- Detects the Zenbook Duo keyboard over USB and Bluetooth.
-- Switches between docked and tablet-style display layouts when the keyboard is attached or removed.
-- Keeps keyboard backlight, display brightness, Bluetooth/Wi-Fi restore behavior, rotation, and saved settings coordinated through a Rust daemon.
-- Provides USB media remapping for Zenbook Duo top-row keys, including mute/volume, brightness, keyboard backlight cycling, and emoji launcher behavior where supported.
-- Auto-rotates the screens from the accelerometer. Laying the Duo opened flat on a table (both screens facing up) turns only the top screen around for the person opposite, as Windows does; picking it up rotates normally again.
-- Handles Bluetooth backlight and brightness hotkeys through the daemon.
-- Supports per-display touchscreen enable/disable for the built-in ELAN panels, persisted across reboot/resume.
-- On GNOME, maps Duo touch and stylus input to the matching internal panel so touch targets the correct screen.
-- Provides a Control Panel for status, display layout, controls, profiles, settings, logs, events, and diagnostics.
+| Model | Status |
+|-------|--------|
+| Zenbook Duo 2024 (UX8406MA) | Supported |
+| Zenbook Duo 2025 (UX8406CA) | Supported |
+| Zenbook Duo 2026 (UX8407AA) | Supported after [extra kernel and firmware setup](#zenbook-duo-2026-ux8407aa-setup) |
 
-Known boundaries:
+- **Desktops:** GNOME (Wayland), KDE Plasma (Wayland), niri and Hyprland. One install covers every one of these desktops on the machine; it follows whichever you log into.
+- **Distros:** anything with `dnf` (Fedora), `apt` (Debian, Ubuntu) or `pacman` (Arch, CachyOS).
+- **Not supported:** X11 sessions, other compositors, and atomic distros such as Bazzite or Silverblue. Airplane mode and the ASUS software keys are not handled.
 
-- Supported hardware target: ASUS Zenbook Duo.
-- Supported desktop backends: GNOME Wayland, KDE Plasma Wayland, Hyprland, and Niri.
-- X11 and other compositors are not first-class targets.
-- Some vendor-specific keys, such as airplane mode and ASUS software keys, are not implemented by this project.
-- Per-panel touch-to-output mapping is currently automatic on GNOME only; KDE and Niri need backend-specific support before this can be enabled safely.
+## Install or update
 
-## Quick start
-
-### Requirements
-
-- ASUS Zenbook Duo. The 2026 model (UX8407AA, keyboard `0b05:1cd7`) needs extra setup first; see [ASUS Zenbook Duo 2026 (UX8407AA)](#asus-zenbook-duo-2026-ux8407aa).
-- GNOME on Wayland, KDE Plasma on Wayland, Hyprland, or Niri.
-- `systemd` with working system and user service managers.
-- A supported package-manager family for automatic setup: `dnf`, `apt`, or `pacman`.
-- Rust toolchain with `cargo` available; the runtime is built locally during install.
-- A terminal, internet access, and your sudo/admin password.
-
-### One-line install or update
+You need `systemd`, the Rust toolchain (`cargo`, the runtime is built on your machine), internet access and your sudo password. Run this from a terminal inside your desktop session:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install.sh | bash
 ```
 
-`install.sh` detects GNOME, KDE Plasma, Hyprland, or Niri, runs the matching setup wrapper, installs the Rust runtime services, and then builds/installs the Control Panel unless you opt out.
+It asks for a default keyboard backlight level (0-3), a screen scale (1, 1.25, 1.33, 1.5, 1.67 or 2; default 1.67) and whether to turn on the USB media keys, then builds and installs everything, including the **Zenbook Duo Control** app. After the first install, log out and back in once. To update, run the same command again.
 
-Useful one-line variants:
+Options (add after `bash -s --`, e.g. `... | bash -s -- --skip-ui`):
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install.sh | bash -s -- --skip-ui
-curl -fsSL https://raw.githubusercontent.com/zakstam/zenbook-duo-linux/main/install.sh | bash -s -- --no-usb-media-remap
-```
+- `--skip-ui`: don't install the Control app.
+- `--no-usb-media-remap`: leave the USB media keys off by default.
 
-The same options work from a local checkout:
+If it can't tell which desktop you're on, clone the repo and run the setup script for your desktop: `./setup-gnome.sh`, `./setup-kde.sh`, `./setup-niri.sh` or `./setup-hyprland.sh`.
 
-```bash
-./install.sh --skip-ui              # install/update only the runtime services
-./install.sh --no-usb-media-remap   # leave USB media remap disabled by default
-sudo -E ./install.sh                # allowed, but a real sudo user session is required
-```
+### What it changes on your system
 
-After a fresh install, log out and back in so session environment changes take effect. If you are only updating and something looks stale, restart the user session agent:
+- Installs `usbutils`, `iio-sensor-proxy` and your desktop's display tool (`gdctl`, `kscreen-doctor`, `niri msg` or `hyprctl`).
+- Adds a udev rule so your logged-in user can read the Duo keyboard (`/etc/udev/rules.d/90-zenbook-duo-keyboard.rules`).
+- Adds one sudoers file, `/etc/sudoers.d/zenbook-duo`, allowing the exact screen-brightness writes it needs.
+- Installs two system services (`zenbook-duo-rust-daemon`, `zenbook-duo-rust-lifecycle`) and one user service (`zenbook-duo-session-agent`).
+- Keeps your settings in `~/.config/zenbook-duo`.
 
-```bash
-systemctl --user restart zenbook-duo-session-agent.service
-```
+## What it does
 
-### Local checkout install
+- Switches between one and two screens when the keyboard is attached or removed, over USB or Bluetooth.
+- Auto-rotates the screens. Laying the Duo flat with both screens up turns only the top screen around for the person opposite.
+- Keeps brightness in sync between the screens and handles the keyboard backlight and brightness keys, including over Bluetooth.
+- Optionally turns the top row into media keys when docked (F1-F3 volume, F4 backlight, F5/F6 brightness, F11 emoji).
+- Lets you turn touch off per screen (e.g. pen-only on the bottom screen), remembered across reboots.
+- The **Zenbook Duo Control** app (app menu, or `zenbook-duo-control`) shows status and lets you change layout, scale, profiles, settings, and see logs.
 
-```bash
-git clone https://github.com/zakstam/zenbook-duo-linux.git
-cd zenbook-duo-linux
-./install.sh
-```
+## Zenbook Duo 2026 (UX8407AA) setup
 
-If desktop auto-detection fails, run the matching setup wrapper directly:
+The stock kernel and firmware have bugs on this model that you must fix first. This was tested on CachyOS with KDE Plasma and a patched 7.2-rc5 kernel. The project handles the upside-down top panel itself; you only need the steps below.
 
-```bash
-./setup-gnome.sh
-# or
-./setup-kde.sh
-# or
-./setup-hyprland.sh
-# or
-./setup-niri.sh
-```
-
-The setup wrappers install the runtime services. To build or update only the Control Panel app, run:
-
-```bash
-./install-ui.sh
-```
-
-On desktop sessions, the UI installer prefers a graphical admin-password prompt for system install steps and falls back to terminal `sudo` when needed.
-
-## Control Panel
-
-Screenshots:
-
-![Zenbook Duo Control USB](sc.png)
-![Zenbook Duo Control Bluetooth](sc2.png)
-
-The Control Panel can be launched from your app menu as **Zenbook Duo Control**, or from a terminal:
-
-```bash
-zenbook-duo-control
-```
-
-Main pages:
-
-- **Status** — live keyboard, display, connectivity, service, version, and USB-remap status.
-- **Displays** — connected display layout, scale, refresh mode where available, and mapped touchscreen toggles.
-- **Controls** — keyboard backlight, orientation, service restart, and touchscreen toggles.
-- **Profiles** — save and activate common hardware configurations.
-- **Settings** — defaults such as backlight, scale, theme, start-on-boot, rotation inversion, and USB media remap.
-- **Logs / Events** — runtime log output and recent hardware/service events.
-- **Diagnostics** — evdev, HID, report descriptor, and hidraw capture helpers for debugging hardware behavior.
-
-## Installed components
-
-The installer/setup scripts make system-level changes because the project controls hardware and desktop-session behavior:
-
-- Installs common dependencies: `usbutils`, `iio-sensor-proxy`, and `systemd`.
-- Installs backend dependencies:
-  - GNOME: `mutter` / `gdctl` and `dconf` for touch/stylus output mapping
-  - KDE Plasma: `kscreen` / `kscreen-doctor`
-  - Hyprland: `hyprland` (provides `hyprctl`)
-  - Niri: `niri`
-- Installs a udev rule that gives the logged-in user access to the Zenbook Duo keyboard (`uaccess`). The user is not added to the `input` group, which would grant read access to every keyboard.
-- Removes the old Zenbook Duo hwdb remap if present because it breaks the USB Fn layer.
-- Adds sudoers rules for the brightness writes used by the session agent: one exact `tee` rule per backlight in `/etc/sudoers.d/zenbook-duo`, checked with `visudo`. The wildcard rule older versions appended to `/etc/sudoers` is removed on upgrade.
-- Installs Rust runtime binaries under `/usr/local/libexec/zenbook-duo`.
-- Installs/enables these services:
-  - `zenbook-duo-rust-daemon.service` — system daemon and hardware authority.
-  - `zenbook-duo-rust-lifecycle.service` — boot/shutdown and sleep lifecycle hook.
-  - `zenbook-duo-session-agent.service` — per-user session agent for compositor/session actions.
-- Stores user settings under `~/.config/zenbook-duo`.
-
-## Architecture snapshot
-
-- **Rust system daemon**: owns hardware state, policy, persistence, privileged operations, logs/events, Bluetooth hotkeys, and daemon IPC.
-- **Rust session agent**: runs in the user session and executes compositor-bound work such as GNOME/KDE/Hyprland/Niri display changes, brightness sync watchers, rotation handling, and desktop notifications.
-- **Tauri/React Control Panel**: client UI for status, controls, settings, profiles, logs, events, and diagnostics. It should use daemon/session APIs instead of owning hardware policy itself.
-- **Bash installers**: keep install/update simple while centralizing shared setup behavior in `setup-common.sh` and keeping desktop wrappers thin.
-
-## Supported matrix
-
-Desktop backends:
-
-| Desktop backend | Setup wrapper | Display command |
-|-----------------|---------------|-----------------|
-| GNOME on Wayland | `setup-gnome.sh` | `gdctl` |
-| KDE Plasma on Wayland | `setup-kde.sh` | `kscreen-doctor` |
-| Hyprland | `setup-hyprland.sh` | `hyprctl` |
-| Niri | `setup-niri.sh` | `niri msg` |
-
-The Hyprland backend owns only the two internal Duo panels discovered through DRM eDP metadata. External outputs are inspected but never reconfigured. Systems with nonstandard internal connector names can set `ZENBOOK_DUO_UPPER_CONNECTOR` and `ZENBOOK_DUO_LOWER_CONNECTOR` in the session-agent service environment.
-
-Package-manager families used by the automated setup paths:
-
-| Distro family | Package manager |
-|---------------|-----------------|
-| Fedora / RHEL-based | `dnf` |
-| Debian / Ubuntu-based | `apt` |
-| Arch / CachyOS | `pacman` |
-
-Other distributions may be possible with manual dependency installation and script adaptation, but they are not automated by the current setup flow.
+1. **Patch the kernel.** Take the Port B TCSS power patch (fixes the freeze, and the bottom screen staying off after detaching) and the ghost RT722 patch (fixes no audio) from [zenbook-duo26-Ubuntu26.04](https://github.com/therealarnold666/zenbook-duo26-Ubuntu26.04). Use only its patches, not its installer. On Arch-based distros, add them to your kernel PKGBUILD's `source` array, rebuild, and hold the kernel back from updates (`IgnorePkg` in `/etc/pacman.conf`).
+2. **Add to the kernel command line:**
+   ```
+   video=eDP-1:panel_orientation=upside_down xe.enable_psr=0 xe.enable_psr2_sel_fetch=0 xe.enable_panel_replay=0 xe.enable_dpcd_backlight=3
+   ```
+   This turns the boot console the right way up, avoids flicker and hangs, and makes brightness work. Do not add `xe.enable_dsb=0`, as it causes flicker on wake.
+3. **Auto-rotation firmware.** The stock `ish_ptl.bin` fails to load (`ISH loader: cmd 2 failed` in `dmesg`). Extract the ASUS-signed ISH firmware from ASUS's Windows "Intel Integrated Sensor Solution Driver" package and install it as `/usr/lib/firmware/intel/ish/ish_ptl.bin.zst`, keeping a backup of the original. Reboot. `accel_3d` should then appear under `/sys/bus/iio/devices/`. Firmware package updates put the broken file back, so re-apply it afterwards, or automate that with a package-manager hook.
+4. **KDE rotation.** Turn on **Settings → Flip sensor left/right** in the Control app. In System Settings → Display & Monitor, set Screen Rotation to **Manual** on both screens so KDE's own auto-rotate doesn't fight this one. The top screen showing "Rotated 180°" there is correct; leave it.
+5. **Upside-down login screen.** Once your session looks right, copy its display config to the login screen:
+   ```bash
+   sudo install -Dm644 -o sddm -g sddm ~/.config/kwinoutputconfig.json /var/lib/sddm/.config/kwinoutputconfig.json
+   ```
+   If you use `plasmalogin` instead of SDDM, use `/var/lib/plasmalogin/.config/kwinoutputconfig.json` and `plasmalogin:plasmalogin`.
 
 ## Troubleshooting
 
-### Nothing happens when docking or undocking
-
-Check both services:
+**Nothing happens when docking or undocking.** Check that both services are running and watch the log:
 
 ```bash
 systemctl status zenbook-duo-rust-daemon.service
 systemctl --user status zenbook-duo-session-agent.service
-```
-
-Watch daemon logs:
-
-```bash
 journalctl -u zenbook-duo-rust-daemon.service -f
 ```
 
-Also check the Control Panel **Logs**, **Events**, and **Diagnostics** pages.
+The Control app's **Logs** and **Events** pages show the same information.
 
-### Reboot, login, unlock, or resume comes up in the wrong layout
+**Wrong layout after login, unlock or resume.** Rerun the installer from inside your desktop session, then log out and back in once.
 
-The lifecycle service and session agent should re-sync the current attached/detached state after boot, login, resume, and unlock. If they do not:
+**F1-F12 don't work while docked.** With the USB media keys on, `Fn` gives plain F-keys only if the keyboard reports `Fn` over USB, and many don't. Instead, bind `zenbook-duo-control --toggle-remap-pause` to a shortcut (or use **Pause** in the app): while paused the top row sends plain F1-F12.
 
-```bash
-systemctl --user status zenbook-duo-session-agent.service
-systemctl --user show-environment | grep -E 'DISPLAY|WAYLAND_DISPLAY|NIRI_SOCKET|HYPRLAND_INSTANCE_SIGNATURE|XDG_CURRENT_DESKTOP|XDG_SESSION_DESKTOP|DESKTOP_SESSION|XDG_SESSION_TYPE'
-```
-
-An early `No supported session backend became ready before timeout; continuing to wait` warning is OK if the session agent remains active. If desktop-session environment variables are missing after reinstalling, rerun `./install.sh` from an active desktop session, then log out and back in once.
-
-### Keyboard media or Fn keys stop working after suspend or reattach
-
-The optional USB media remap helper is stopped before sleep and retried after resume. If recovery still fails, check daemon logs for `USB media remap auto-start failed` or repeated `No such device` messages:
-
-```bash
-journalctl -u zenbook-duo-rust-daemon.service -f
-```
-
-You do not need a separate `/etc/udev/rules.d/*uinput*` rule for this project.
-
-### USB top row and the Fn layer
-
-When docked over USB, the optional USB media remap turns the top row into media keys (F1-F3 volume, F4 backlight, F5/F6 brightness, F11 emojis). Holding `Fn` sends plain `F1`-`F12` only if the keyboard reports the Fn key over USB. The remap logs which case applies when it starts: look for `Fn key reported by` or `No keyboard node reports the Fn key` in `/run/user/$UID/zenbook-duo/duo.log`.
-
-If Fn is not reported, use pause as an Fn-lock: bind `zenbook-duo-control --toggle-remap-pause` to a desktop shortcut (or use the Pause button in the app). While paused the top row sends plain `F1`-`F12`, and you get a notification on each toggle.
-
-Do not install hwdb remaps for `KEYBOARD_KEY_7003*` on USB; it overrides the Fn layer.
-
-### USB Fn layer is broken after upgrading from an older install
-
-Remove the old hwdb remap and retrigger udev:
+**Fn layer broken after upgrading from an old version.** Remove the old key remap:
 
 ```bash
 sudo rm -f /etc/udev/hwdb.d/90-zenbook-duo-keyboard.hwdb
@@ -223,125 +92,20 @@ sudo systemd-hwdb update
 sudo udevadm trigger
 ```
 
-The current setup scripts also remove that file automatically.
-
-## ASUS Zenbook Duo 2026 (UX8407AA)
-
-The 2026 model (Intel Core Ultra "Panther Lake", Intel Arc iGPU on the `xe` driver, keyboard USB ID `0b05:1cd7`) works with this project, but the stock kernel and firmware have several bugs that must be fixed first. Verified on CachyOS + KDE Plasma on Wayland with a patched 7.2-rc5 kernel. The kernel patches come from [zenbook-duo26-Ubuntu26.04](https://github.com/therealarnold666/zenbook-duo26-Ubuntu26.04) (an Ubuntu-targeted derivative of this project) — use its patches, but do not run its installer on non-Ubuntu distros; run this project's installer instead.
-
-This project detects the UX8407AA via DMI (`/sys/class/dmi/id/board_name`) and automatically compensates for its upside-down top panel in the KDE display backend, so no code changes are needed — only the system-level steps below.
-
-### 1. Kernel patches — keyboard-detach freeze and audio
-
-This project does not ship these patches; get them from [zenbook-duo26-Ubuntu26.04](https://github.com/therealarnold666/zenbook-duo26-Ubuntu26.04).
-
-- **Detach freeze / bottom screen never re-enables**: the Port B C20 TCSS PHY loses its power ack when eDP-2 is toggled. Fix: the DMI-gated Port B TCSS power patch (i915/xe shared display code) from that repo.
-- **No audio** (`aplay -l` shows no cards): a ghost RT722 SoundWire device makes `sof_sdw` probing fail with `-EEXIST` (duplicate `SDW3-Playback-SimpleJack`). Fix: the ghost RT722 patch from that repo (adds UX8407AA to the SoundWire DMI ghost-device quirk table).
-
-Both apply cleanly to kernel 7.2-rc5. On Arch-based distros, append the patch files to your kernel PKGBUILD's `source` array (with `SKIP` checksums) and rebuild; then pin the patched kernel (e.g. `IgnorePkg` in `/etc/pacman.conf`) so an update does not replace it before the fixes land upstream.
-
-### 2. Kernel command line
-
-Add to your bootloader's kernel command line:
-
-```
-video=eDP-1:panel_orientation=upside_down xe.enable_psr=0 xe.enable_psr2_sel_fetch=0 xe.enable_panel_replay=0 xe.enable_dpcd_backlight=3
-```
-
-- `video=eDP-1:panel_orientation=upside_down` — the top panel is physically mounted 180° and there is no upstream DRM quirk yet; this fixes the console/LUKS-prompt orientation.
-- `xe.enable_psr=0 xe.enable_psr2_sel_fetch=0 xe.enable_panel_replay=0` — avoids PSR/panel-replay flicker and hangs on Panther Lake.
-- `xe.enable_dpcd_backlight=3` — enables brightness control (the default backlight path does not work on this panel).
-- Do **not** add `xe.enable_dsb=0` on the patched kernel: it forces a slow CPU display path and causes multi-blink flicker on wake from screen-off. It was only ever an interim mitigation for the detach freeze that the Port B TCSS power patch fixes properly.
-
-### 3. Auto-rotation — ASUS ISH firmware
-
-The accelerometer sits behind the Intel ISH, and the mainline `ish_ptl.bin` firmware fails to load on this machine (`ISH loader: cmd 2 failed` in dmesg, no IIO devices). Fix: extract the ASUS-signed ISH firmware from ASUS's Windows "Intel Integrated Sensor Solution Driver" package and install it (compressed) as `/usr/lib/firmware/intel/ish/ish_ptl.bin.zst`, keeping a backup of the mainline blob. After a reboot, `accel_3d` appears under `/sys/bus/iio/devices/` and `iio-sensor-proxy` works.
-
-Note: linux-firmware package updates will restore the broken mainline blob — re-apply the ASUS blob after firmware updates (a pacman/apt post-transaction hook that compares and restores it automates this).
-
-### 4. Rotation settings (KDE)
-
-- Only the top panel (eDP-1) is mounted upside down; the app applies the per-panel 180° offset automatically on UX8407AA.
-- Set `"invertSensorRotation": true` in `~/.config/zenbook-duo/settings.json` (or toggle it in the Control Panel UI).
-- Set Screen Rotation to **Manual** for both screens in KDE System Settings → Display & Monitor. Otherwise KWin's own tablet-mode auto-rotate (which does not know about the flipped panel) fights this app whenever the keyboard is detached.
-- In the KDE session, eDP-1 showing as "Rotated 180°" in display settings is the correct resting state — KWin ignores the kernel `panel_orientation` quirk, so do not manually reset it to normal.
-
-### 5. Login screen orientation
-
-The greeter runs its own KWin instance, which also ignores the panel-orientation quirk, so the login screen appears upside down. Fix: once your session displays correctly, copy your display config into the greeter's home:
-
-```bash
-sudo install -Dm644 -o sddm -g sddm ~/.config/kwinoutputconfig.json /var/lib/sddm/.config/kwinoutputconfig.json
-```
-
-On installs using `plasmalogin` instead of SDDM (some CachyOS setups), use `/var/lib/plasmalogin/.config/kwinoutputconfig.json` owned by `plasmalogin:plasmalogin`.
+If none of this helps, [open an issue](https://github.com/zakstam/zenbook-duo-linux/issues) with your model, distro, desktop and the daemon log.
 
 ## Uninstall
 
-To remove the runtime, services, udev/hwdb rules, sudoers entries, installed files, UI app, and user config:
-
 ```bash
+git clone https://github.com/zakstam/zenbook-duo-linux.git
+cd zenbook-duo-linux
 ./uninstall.sh
 ```
 
-Options:
+This removes the services, rules, sudoers file, the Control app and your settings. Add `--keep-ui` to keep the app or `--keep-config` to keep `~/.config/zenbook-duo`.
 
-```bash
-./uninstall.sh --keep-ui      # keep the Control Panel installed
-./uninstall.sh --keep-config  # keep ~/.config/zenbook-duo
-```
+Older versions added you to the `input` group, which is no longer needed. To remove that: `sudo gpasswd -d "$USER" input`.
 
-Older versions added your user to the `input` group, which is no longer needed. The uninstall script does not remove that membership; to do it manually:
+## Contributing
 
-```bash
-sudo gpasswd -d "$USER" input
-```
-
-## Development and maintainer notes
-
-### Runtime, installer, and frontend checks
-
-Use the root check script before changing installer, runtime, or UI behavior:
-
-```bash
-./check.sh installers   # shell syntax + installer smoke tests
-./check.sh rust         # Rust runtime unit tests
-./check.sh frontend     # React/TypeScript production build
-./check.sh all          # full compatibility pass
-```
-
-Run the narrow target for the area you touched; run `./check.sh all` before handing off broad cross-area changes.
-
-### UI development
-
-```bash
-cd ui-tauri-react
-npm install
-npm run dev
-```
-
-Useful build commands:
-
-```bash
-npm run build:frontend  # frontend-only production build
-npm run build:rust      # Rust-only release build
-npm run build:local     # Tauri release build without packaging bundles
-npm run build           # full Tauri build with configured bundles
-```
-
-### Release version bump
-
-```bash
-./bump-version.sh patch    # or minor, major, or an explicit version like 0.3.8
-```
-
-The helper updates `package.json`, `package-lock.json`, `Cargo.toml`, `Cargo.lock`, and `tauri.conf.json` together.
-
-### Maintainer checklist
-
-- Keep common installer behavior in `setup-common.sh`; keep desktop wrappers limited to backend-specific packages and manual dependency hints.
-- Keep settings defaults aligned across `setup-common.sh`, Rust `DuoSettings::default`, and frontend `DEFAULT_DUO_SETTINGS`.
-- Keep the daemon authoritative for hardware state, policy, persistence, privileged operations, and daemon IPC.
-- Keep the session agent narrow: compositor/session actions, display commands, brightness/rotation watchers, and user-session notifications.
-- Preserve GNOME, KDE, Hyprland, and Niri parity when changing shared behavior.
-- Update `tests/install-stdin-test.sh` whenever supported desktops, package managers, service units, defaults, or installer entrypoints change.
+Developer notes, checks and architecture are in [AGENTS.md](AGENTS.md).
