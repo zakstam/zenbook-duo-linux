@@ -7,11 +7,12 @@ use std::time::Duration;
 use std::os::unix::io::{AsRawFd, RawFd};
 
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
-use evdev::{AttributeSet, EventType, InputEvent, Key};
+use evdev::{AttributeSet, BusType, Device, EventType, InputEvent, Key};
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use tokio::sync::RwLock;
 
 use crate::models::{ConnectionType, EventCategory, HardwareEvent};
+use crate::runtime::mic_chord::{request_step, ChordKey, MicChord};
 use crate::runtime::{logger, state::RuntimeState};
 
 const HIDRAW_ROOT: &str = "/sys/class/hidraw";
@@ -80,6 +81,101 @@ fn restore_fn_lock_after_connect() {
     });
 }
 
+fn is_bluetooth_duo_keyboard(device: &Device) -> bool {
+    device
+        .name()
+        .is_some_and(|name| name.contains("Zenbook Duo Keyboard"))
+        && device.input_id().bus_type() == BusType::BUS_BLUETOOTH
+        && device
+            .supported_keys()
+            .is_some_and(|keys| keys.contains(Key::KEY_A))
+}
+
+fn emit_on(device: &mut VirtualDevice, key: Key, value: i32) -> Result<(), String> {
+    device
+        .emit(&[
+            InputEvent::new(EventType::KEY, key.code(), value),
+            InputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
+        ])
+        .map_err(|e| format!("Failed to emit {key:?}: {e}"))
+}
+
+/// The detached keyboard's event device, grabbed only while the mic key is
+/// held (Fn lock off), so Up/Down can change the mic volume without reaching
+/// the desktop. Other keys pass through `out`; any still down when the grab
+/// ends are released there, so none stays stuck.
+struct MicHoldGrab {
+    device: Device,
+    out: VirtualDevice,
+    pressed: std::collections::HashSet<u16>,
+}
+
+fn open_mic_hold_grab() -> Option<MicHoldGrab> {
+    let (_, mut device) = evdev::enumerate().find(|(_, device)| is_bluetooth_duo_keyboard(device))?;
+    // A key already down when the grab starts would have its release taken
+    // away from the desktop and stay stuck there: no chord then.
+    if device.get_key_state().map_or(true, |down| down.iter().next().is_some()) {
+        return None;
+    }
+    device.grab().ok()?;
+    crate::usb_media_remap_helper::configure_nonblocking(&device).ok()?;
+    let mut keys = AttributeSet::<Key>::new();
+    for key in device.supported_keys()?.iter() {
+        keys.insert(key);
+    }
+    let out = VirtualDeviceBuilder::new()
+        .and_then(|builder| {
+            builder
+                .name("Zenbook Duo Bluetooth Mic Chord")
+                .input_id(device.input_id())
+                .with_keys(&keys)
+        })
+        .and_then(|builder| builder.build())
+        .ok()?;
+    Some(MicHoldGrab {
+        device,
+        out,
+        pressed: std::collections::HashSet::new(),
+    })
+}
+
+impl MicHoldGrab {
+    fn forward_events(&mut self, chord: &mut MicChord) -> Result<(), String> {
+        let events: Vec<InputEvent> = match self.device.fetch_events() {
+            Ok(events) => events.collect(),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(e) => return Err(format!("Bluetooth keyboard read failed: {e}")),
+        };
+        for event in events {
+            if event.event_type() != EventType::KEY {
+                continue;
+            }
+            let key = Key::new(event.code());
+            match chord.key(key, event.value()) {
+                ChordKey::Pass => {
+                    if event.value() == 0 {
+                        self.pressed.remove(&key.code());
+                    } else {
+                        self.pressed.insert(key.code());
+                    }
+                    emit_on(&mut self.out, key, event.value())?;
+                }
+                ChordKey::Swallow => {}
+                ChordKey::Step(step) => request_step(step),
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for MicHoldGrab {
+    fn drop(&mut self) {
+        for code in self.pressed.drain() {
+            let _ = emit_on(&mut self.out, Key::new(code), 0);
+        }
+    }
+}
+
 /// Fn+Esc: flip the Fn lock shared with the USB remap helper and tell the
 /// keyboard its new mode.
 fn toggle_fn_lock() {
@@ -138,6 +234,7 @@ fn watch_loop(state: Arc<RwLock<RuntimeState>>) {
                     "rust-daemon: Bluetooth hotkey watcher opened {}",
                     path.display()
                 ));
+                crate::runtime::mic_led::restore_after_connect("Bluetooth");
                 restore_backlight_on_connect(&state);
                 let hardware_fn_lock = has_hardware_fn_lock(&path);
                 if !hardware_fn_lock {
@@ -262,9 +359,19 @@ fn watch_reports(
     if hardware_fn_lock {
         restore_fn_lock_after_connect();
     }
+    let mut chord = MicChord::default();
+    let mut mic_grab: Option<MicHoldGrab> = None;
 
     loop {
-        wait_readable(&[file.as_raw_fd()], 1000);
+        let mut fds = vec![file.as_raw_fd()];
+        if let Some(grab) = &mic_grab {
+            fds.push(grab.device.as_raw_fd());
+        }
+        // While the mic key is held, wake often enough for its volume repeat.
+        wait_readable(&fds, if chord.is_held() { 50 } else { 1000 });
+        if let Some(step) = chord.due(std::time::Instant::now()) {
+            request_step(step);
+        }
 
         loop {
             match file.read(&mut buffer) {
@@ -275,6 +382,14 @@ fn watch_reports(
                         active_action = None;
                         if let Some(key) = held.take() {
                             emit_key(keys, key, 0)?;
+                        }
+                        if chord.is_held() {
+                            // Before muting, so passed-through keys are let go.
+                            mic_grab = None;
+                            if chord.mic(0) {
+                                emit_key(keys, Key::KEY_MICMUTE, 1)?;
+                                emit_key(keys, Key::KEY_MICMUTE, 0)?;
+                            }
                         }
                         continue;
                     }
@@ -298,6 +413,17 @@ fn watch_reports(
 
                     if let Some(key) = held.take() {
                         emit_key(keys, key, 0)?;
+                    }
+                    // The mic key: mute on release, or mic volume with Up/Down.
+                    if action == BluetoothHotkeyAction::Key(Key::KEY_MICMUTE)
+                        && matches!(
+                            crate::hardware::sysfs::detect_connection_type(),
+                            ConnectionType::Bluetooth
+                        )
+                    {
+                        chord.mic(1);
+                        mic_grab = open_mic_hold_grab();
+                        continue;
                     }
                     match handle_action(action, &state, keys) {
                         Ok(pressed) => *held = pressed,
@@ -327,6 +453,13 @@ fn watch_reports(
                 ));
                 set_hardware_fn_lock(locked);
                 fn_lock_sent = locked;
+            }
+        }
+
+        if let Some(grab) = mic_grab.as_mut() {
+            if let Err(err) = grab.forward_events(&mut chord) {
+                let _ = logger::append_line(format!("rust-daemon: {err}; ending mic key grab"));
+                mic_grab = None;
             }
         }
     }
@@ -471,6 +604,7 @@ fn cycle_backlight(state: &Arc<RwLock<RuntimeState>>) -> Result<(), String> {
     let current = state.blocking_read().status.backlight_level;
     let next = (current + 1) % 4;
     crate::hardware::hid::set_backlight(next)?;
+    crate::runtime::backlight_idle::level_set();
 
     let mut guard = state.blocking_write();
     guard.status.backlight_level = next;

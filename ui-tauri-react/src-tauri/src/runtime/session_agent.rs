@@ -5,8 +5,10 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+pub(crate) mod backlight_idle;
 pub(crate) mod brightness_sync;
 mod lying_flat;
+pub(crate) mod mic_mute;
 pub(crate) mod rotation;
 pub(crate) mod touch_mapping;
 
@@ -202,6 +204,16 @@ pub(crate) fn dispatch_session_command(payload: SessionCommand) -> SessionRespon
             Err(message) => SessionResponse::Error { message },
         },
         SessionCommand::OpenEmojiPicker => SessionResponse::Ack,
+        SessionCommand::KeyboardBatteryWarning { level, critical } => {
+            match crate::runtime::keyboard_battery::show_warning(level, critical) {
+                Ok(()) => SessionResponse::Ack,
+                Err(message) => SessionResponse::Error { message },
+            }
+        }
+        SessionCommand::StepMicVolume { up } => match mic_mute::step_volume(up) {
+            Ok(()) => SessionResponse::Ack,
+            Err(message) => SessionResponse::Error { message },
+        },
     }
 }
 

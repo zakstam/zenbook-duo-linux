@@ -89,8 +89,15 @@ pub fn set_backlight_bluetooth(level: u8) -> Result<(), String> {
     send_vendor_feature_to(&[VENDOR_REPORT_ID, 0xBA, 0xC5, 0xC4, level.min(3)], Nodes::Bluetooth)
 }
 
-/// The keyboard's vendor report: ASUS keys, backlight and Fn lock.
+/// The keyboard's vendor report: ASUS keys, backlight and the mic-mute LED.
 const VENDOR_REPORT_ID: u8 = 0x5A;
+
+/// Turns the orange LED on the mic-mute key on or off (feature report
+/// `5a d0 7c <on>`, captured from the Windows driver). The keyboard does not
+/// remember it, so it has to be sent again after every reconnect.
+pub fn set_mic_led(on: bool) -> Result<(), String> {
+    send_vendor_feature_to(&[VENDOR_REPORT_ID, 0xD0, 0x7C, u8::from(on)], Nodes::Captured)
+}
 
 /// The keyboard's own Fn lock (feature report `5a d0 4e <on>`, captured from
 /// the Windows driver): on, the top row sends F1-F12 and Fn+key the ASUS
@@ -106,7 +113,7 @@ pub fn set_fn_lock_usb(locked: bool) -> Result<(), String> {
     send_vendor_feature_to(&[VENDOR_REPORT_ID, 0xD0, 0x4E, u8::from(locked)], Nodes::CapturedUsb)
 }
 
-/// The keyboards the Fn lock command was captured on: the
+/// The keyboards the Fn lock and mic LED commands were captured on: the
 /// UX8406MA's keyboard, docked (0b05:1b2c) and detached (0b05:1b2d). Other
 /// Duo keyboards keep the software Fn handling.
 const CAPTURED_KEYBOARDS: [&str; 2] = [":00000B05:00001B2C", ":00000B05:00001B2D"];
@@ -424,7 +431,7 @@ mod tests {
         assert!(is_duo_keyboard(docked) && is_duo_keyboard(detached) && is_duo_keyboard(other_model));
         assert!(!is_duo_keyboard("HID_ID=0003:00000B05:000019B6\nHID_NAME=ASUS Keyboard\n"));
 
-        // Backlight: every Duo keyboard. Fn lock: the captured ones.
+        // Backlight: every Duo keyboard. Fn lock and mic LED: the captured ones.
         assert!(Nodes::Usb.accepts(other_model));
         assert!(!Nodes::CapturedUsb.accepts(other_model) && !Nodes::Captured.accepts(other_model));
         assert!(Nodes::CapturedUsb.accepts(docked) && !Nodes::CapturedUsb.accepts(detached));

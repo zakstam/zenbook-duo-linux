@@ -52,6 +52,11 @@ pub fn start(state: Arc<RwLock<RuntimeState>>) {
                     log::warn!("failed to save monitored runtime state: {err}");
                 }
                 drop(guard);
+                if previous.connection_type != updated.connection_type
+                    && updated.connection_type == crate::models::ConnectionType::Usb
+                {
+                    crate::runtime::mic_led::restore_after_connect("USB");
+                }
                 apply_policy_actions(state.clone(), actions).await;
             } else {
                 drop(guard);

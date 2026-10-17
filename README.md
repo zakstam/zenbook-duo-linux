@@ -35,7 +35,7 @@ If it can't tell which desktop you're on, clone the repo and run the setup scrip
 
 ### What it changes on your system
 
-- Installs `usbutils`, `iio-sensor-proxy` and your desktop's display tool (`gdctl`, `kscreen-doctor`, `niri msg` or `hyprctl`).
+- Installs `usbutils`, `iio-sensor-proxy`, `upower`, `pactl` and your desktop's display tool (`gdctl`, `kscreen-doctor`, `niri msg` or `hyprctl`).
 - Adds a udev rule so your logged-in user can read the Duo keyboard (`/etc/udev/rules.d/90-zenbook-duo-keyboard.rules`).
 - Adds one sudoers file, `/etc/sudoers.d/zenbook-duo`, allowing the exact screen-brightness writes it needs.
 - Installs two system services (`zenbook-duo-rust-daemon`, `zenbook-duo-rust-lifecycle`) and one user service (`zenbook-duo-session-agent`).
@@ -48,6 +48,8 @@ If it can't tell which desktop you're on, clone the repo and run the setup scrip
 - Keeps brightness in sync between the screens and handles the keyboard backlight and brightness keys, including over Bluetooth. **Controls → Display Brightness** in the Control app sets each screen on its own, or both together.
 - Optionally turns the top row into media keys when docked (F1-F3 volume, F4 backlight, F5/F6 brightness, F11 emoji).
 - On the UX8406MA keyboard, **Fn+Esc** switches the top row between media keys and F1-F12, docked and detached; hold Fn for the other one. The setting is under **Controls → Function Keys** in the Control app. The ASUS key (F12) opens the Control app.
+- The mic-mute key's light follows the microphone, however it is muted. Hold the mic key and press the volume keys to change the microphone volume.
+- Shows the detached keyboard's battery on the Control app's Status page and warns at 20% and 10%. **Settings → Backlight Sleep** turns the keyboard backlight off after a while without input.
 - Lets you turn touch off per screen (e.g. pen-only on the bottom screen), remembered across reboots.
 - The **Zenbook Duo Control** app (app menu, or `zenbook-duo-control`) shows status and lets you change layout, scale, profiles, settings, and see logs.
 

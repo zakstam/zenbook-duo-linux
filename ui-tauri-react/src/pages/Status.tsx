@@ -117,12 +117,34 @@ export default function Status() {
                 </span>
               </div>
             </StatusRow>
+            <StatusRow label="Battery">
+              <span className={cn(
+                "font-mono text-[13px] tabular-nums",
+                status.keyboardBattery === null
+                  ? "text-muted-foreground"
+                  : status.keyboardBattery <= 10
+                    ? "font-semibold text-destructive"
+                    : status.keyboardBattery <= 20
+                      ? "font-semibold text-amber-500"
+                      : "text-foreground"
+              )}>
+                {status.keyboardBattery === null ? "—" : `${status.keyboardBattery}%`}
+              </span>
+            </StatusRow>
             <StatusRow label="Top row">
               <span className={cn(
                 "text-[13px] font-medium",
                 status.fnLock ? "text-sky-500" : "text-muted-foreground"
               )}>
                 {status.fnLock ? "F1–F12" : "Media keys"}
+              </span>
+            </StatusRow>
+            <StatusRow label="Microphone">
+              <span className={cn(
+                "text-[13px] font-medium",
+                status.micMuted ? "text-amber-500" : "text-muted-foreground"
+              )}>
+                {status.micMuted === null ? "—" : status.micMuted ? "Muted" : "On"}
               </span>
             </StatusRow>
             <StatusRow label="USB remap">

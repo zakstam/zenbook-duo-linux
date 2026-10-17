@@ -16,6 +16,12 @@ pub struct DuoStatus {
     /// Top row sends F1-F12 by default (toggled with Fn+Esc).
     #[serde(default)]
     pub fn_lock: bool,
+    /// The detachable keyboard's battery percentage, when it reports one.
+    #[serde(default)]
+    pub keyboard_battery: Option<u8>,
+    /// Whether the default microphone is muted, once the session reported it.
+    #[serde(default)]
+    pub mic_muted: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

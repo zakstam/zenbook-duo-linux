@@ -76,6 +76,21 @@ pub enum DaemonRequest {
     SetFnLock {
         locked: bool,
     },
+    /// From the session agent: the default microphone was muted or unmuted;
+    /// the LED on the mic-mute key follows.
+    SetMicMute {
+        muted: bool,
+    },
+    /// Mic key + Up/Down, from the keyboard watchers: the session agent
+    /// changes the microphone volume.
+    StepMicVolume {
+        up: bool,
+    },
+    /// From the session agent: no input for the backlight sleep time (idle),
+    /// or input again; the keyboard backlight goes off or back to its level.
+    SetBacklightIdle {
+        idle: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +185,15 @@ pub enum SessionCommand {
         urgent: bool,
     },
     OpenEmojiPicker,
+    /// Mic key + Up/Down: one step of the microphone volume.
+    StepMicVolume {
+        up: bool,
+    },
+    /// The detached keyboard's battery is low: a pop-up and a notification.
+    KeyboardBatteryWarning {
+        level: u8,
+        critical: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

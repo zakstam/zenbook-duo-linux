@@ -56,6 +56,26 @@ pub(crate) fn show_in_session(osd: &Osd) -> bool {
     run(Command::new("gdbus").args(gdbus_args(osd)))
 }
 
+/// A warning bubble that stays until OK is pressed (a newer one with the same
+/// id replaces it), from inside the desktop session. Returns whether the
+/// extension showed it.
+pub(crate) fn show_alert_in_session(id: &str, icon: &str, title: &str, message: &str) -> bool {
+    run(Command::new("gdbus").args([
+        "call",
+        "--session",
+        "--dest",
+        "org.gnome.Shell",
+        "--object-path",
+        "/org/gnome/Shell/Extensions/ZenbookDuoGnomeTools",
+        "--method",
+        "org.gnome.Shell.Extensions.ZenbookDuoGnomeTools.ShowAlert",
+        id,
+        icon,
+        title,
+        message,
+    ]))
+}
+
 /// Shows the pop-up in `user`'s desktop session, from a root process (the
 /// daemon or the USB remap helper). Returns whether the extension showed it.
 pub(crate) fn show_for_user(user: &str, osd: &Osd) -> bool {

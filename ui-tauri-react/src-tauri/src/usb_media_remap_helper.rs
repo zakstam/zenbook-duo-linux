@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use crate::runtime::bluetooth_hotkeys::{
     parse_hotkey_report, BluetoothHotkeyAction, REPORT_FN_LOCK, REPORT_ID, REPORT_RELEASE,
 };
+use crate::runtime::mic_chord::{request_step, ChordKey, MicChord};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -81,10 +82,21 @@ where
     let id = device.input_id();
     let hardware_fn_lock = crate::hardware::hid::has_hardware_fn_lock(id.vendor(), id.product());
 
+    // Mute and volume come from the keyboard's consumer-control node. It is
+    // grabbed too, so they can drive the mic-volume chord; otherwise
+    // everything is passed on unchanged.
+    let mut consumer = if hardware_fn_lock {
+        open_consumer_node(&device_path)
+    } else {
+        None
+    };
+
     let mut keys = AttributeSet::<Key>::new();
-    if let Some(supported) = device.supported_keys() {
-        for key in supported.iter() {
-            keys.insert(key);
+    for source in std::iter::once(&device).chain(consumer.as_ref()) {
+        if let Some(supported) = source.supported_keys() {
+            for key in supported.iter() {
+                keys.insert(key);
+            }
         }
     }
     for key in [
@@ -175,6 +187,10 @@ where
         for report in reports {
             handle_vendor_report(&mut uinput, &args, &mut keys_state, &report)?;
         }
+        // A volume key held with the mic key repeats its step.
+        if let Some(step) = keys_state.mic_chord.due(Instant::now()) {
+            request_step(step);
+        }
 
         if last_check.elapsed() >= Duration::from_secs(1) {
             last_check = Instant::now();
@@ -201,12 +217,22 @@ where
             }
         }
 
-        let events: Vec<InputEvent> = match device.fetch_events() {
+        let mut events: Vec<InputEvent> = match device.fetch_events() {
             Ok(events) => events.collect(),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Vec::new(),
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(format!("Failed to read events: {e}")),
         };
+        let consumer_lost = consumer.as_mut().is_some_and(|node| match node.fetch_events() {
+            Ok(more) => {
+                events.extend(more);
+                false
+            }
+            Err(e) => e.kind() != std::io::ErrorKind::WouldBlock,
+        });
+        if consumer_lost {
+            consumer = None;
+        }
         if events.is_empty() {
             if idle {
                 std::thread::sleep(Duration::from_millis(50));
@@ -217,12 +243,13 @@ where
             if terminate.load(Ordering::Relaxed) {
                 break;
             }
-            if event.event_type() == EventType::KEY {
-                emit_key(&mut uinput, Key::new(event.code()), event.value())?;
-            }
+            handle_key_event(&mut uinput, &mut keys_state, &event)?;
         }
     }
 
+    if let Some(node) = consumer.as_mut() {
+        let _ = node.ungrab();
+    }
     let _ = device.ungrab();
     log_info("Stopping helper");
     Ok(())
@@ -297,12 +324,37 @@ where
     }
 }
 
-/// What the helper keeps between events: the key held for a vendor report
-/// until its release report.
+/// What the helper keeps between events: the mic-volume chord, and the key
+/// held for a vendor report until its release report.
 #[derive(Default)]
 struct KeyState {
+    mic_chord: MicChord,
     held: Option<Key>,
     active_report: Option<u8>,
+}
+
+/// A key from the keyboard: passed on, except the mic-volume chord.
+fn handle_key_event(
+    uinput: &mut evdev::uinput::VirtualDevice,
+    state: &mut KeyState,
+    event: &InputEvent,
+) -> Result<(), String> {
+    if event.event_type() != EventType::KEY {
+        return Ok(());
+    }
+    let key = Key::new(event.code());
+    let value = event.value();
+
+    // Mic key held + Up/Down or the volume keys: mic volume.
+    match state.mic_chord.key(key, value) {
+        ChordKey::Pass => {}
+        ChordKey::Swallow => return Ok(()),
+        ChordKey::Step(step) => {
+            request_step(step);
+            return Ok(());
+        }
+    }
+    emit_key(uinput, key, value)
 }
 
 /// An ASUS vendor report (`5a <code>`, then `5a 00` on release): the top
@@ -322,6 +374,10 @@ fn handle_vendor_report(
         state.active_report = None;
         if let Some(key) = state.held.take() {
             emit_key(uinput, key, 0)?;
+        }
+        if state.mic_chord.is_held() && state.mic_chord.mic(0) {
+            emit_key(uinput, Key::KEY_MICMUTE, 1)?;
+            emit_key(uinput, Key::KEY_MICMUTE, 0)?;
         }
         return Ok(());
     }
@@ -357,6 +413,10 @@ fn handle_vendor_report(
         BluetoothHotkeyAction::BrightnessUp => {
             handle_brightness_key(uinput, Key::KEY_BRIGHTNESSUP, 1, "up")?;
             state.held = Some(Key::KEY_BRIGHTNESSUP);
+        }
+        // The mic key: mute on release, or mic volume with Up/Down.
+        BluetoothHotkeyAction::Key(Key::KEY_MICMUTE) => {
+            state.mic_chord.mic(1);
         }
         BluetoothHotkeyAction::Key(key) => {
             emit_key(uinput, key, 1)?;
@@ -723,6 +783,26 @@ fn send_mode_after_connect(f_keys: bool) {
             set_mode(f_keys);
         }
     });
+}
+
+/// The keyboard's consumer-control event node (mute, volume), grabbed.
+fn open_consumer_node(grabbed: &Path) -> Option<Device> {
+    let grabbed = fs::canonicalize(grabbed).unwrap_or_else(|_| grabbed.to_path_buf());
+    let usb_dir = usb_device_dir(&grabbed)?;
+    for (path, mut node) in evdev::enumerate() {
+        let real = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if real == grabbed || !usb_device_dir(&real).is_some_and(|dir| dir == usb_dir) {
+            continue;
+        }
+        if !node.supported_keys().is_some_and(|keys| keys.contains(Key::KEY_VOLUMEUP)) {
+            continue;
+        }
+        if node.grab().is_ok() && configure_nonblocking(&node).is_ok() {
+            log_info(&format!("Grabbed consumer keys {}", path.display()));
+            return Some(node);
+        }
+    }
+    None
 }
 
 fn fn_lock_path() -> PathBuf {
