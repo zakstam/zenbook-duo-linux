@@ -31,6 +31,10 @@ export const getPanelBrightness = () =>
 export const setPanelBrightness = (panel: "top" | "bottom" | "both", percent: number) =>
   invoke<void>("set_panel_brightness", { panel, percent });
 
+// Keyboard
+export const setFnLock = (locked: boolean) =>
+  invoke<void>("set_fn_lock", { locked });
+
 // Display
 export const getDisplayLayout = () =>
   invoke<DisplayLayout>("get_display_layout");
@@ -184,6 +188,7 @@ export const controlsApi = {
   setBacklight,
   getPanelBrightness,
   setPanelBrightness,
+  setFnLock,
   isServiceActive,
   restartService,
   listTouchscreens,

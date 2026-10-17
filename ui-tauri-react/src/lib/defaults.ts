@@ -11,6 +11,7 @@ export const DEFAULT_DUO_STATUS: DuoStatus = {
   displayBrightness: 0,
   maxBrightness: 1,
   serviceActive: false,
+  fnLock: false,
   orientation: "normal",
 };
 

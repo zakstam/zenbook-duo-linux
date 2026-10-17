@@ -13,6 +13,9 @@ pub struct DuoStatus {
     pub max_brightness: u32,
     pub service_active: bool,
     pub orientation: Orientation,
+    /// Top row sends F1-F12 by default (toggled with Fn+Esc).
+    #[serde(default)]
+    pub fn_lock: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -86,4 +89,20 @@ pub struct DisplayInfo {
 #[serde(rename_all = "camelCase")]
 pub struct DisplayLayout {
     pub displays: Vec<DisplayInfo>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_saved_before_fn_lock_existed_still_loads() {
+        let json = r#"{"keyboardAttached":true,"connectionType":"usb","monitorCount":1,
+            "wifiEnabled":true,"bluetoothEnabled":true,"backlightLevel":2,
+            "displayBrightness":400,"maxBrightness":400,"serviceActive":true,
+            "orientation":"normal"}"#;
+        let status: DuoStatus = serde_json::from_str(json).unwrap();
+        assert!(!status.fn_lock);
+        assert_eq!(status.backlight_level, 2);
+    }
 }

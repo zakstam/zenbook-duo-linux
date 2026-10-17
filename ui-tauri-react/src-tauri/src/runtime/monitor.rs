@@ -381,6 +381,13 @@ fn push_status_events(
         ));
     }
 
+    if old.fn_lock != new.fn_lock {
+        state.push_recent_event(HardwareEvent::info(
+            EventCategory::Keyboard,
+            if new.fn_lock { "Fn lock on" } else { "Fn lock off" },
+            "rust-daemon",
+        ));
+    }
     if old.backlight_level != new.backlight_level {
         state.push_recent_event(HardwareEvent::info(
             EventCategory::Keyboard,

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import BacklightSlider from "@/components/BacklightSlider";
 import DisplayBrightnessCard from "@/components/DisplayBrightnessCard";
+import FunctionKeysCard from "@/components/FunctionKeysCard";
 import OrientationButtons from "@/components/OrientationButtons";
 import { controlsApi } from "@/lib/tauri-adapters";
 import { useTouchscreens } from "@/hooks/use-touchscreens";
@@ -77,6 +78,7 @@ export default function Controls() {
         </div>
 
         <DisplayBrightnessCard />
+        <FunctionKeysCard />
 
         <div className="glass-card rounded-xl p-5">
           <div className="mb-5 flex items-center gap-2.5">

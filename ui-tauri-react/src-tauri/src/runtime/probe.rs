@@ -10,6 +10,7 @@ pub fn current_status() -> DuoStatus {
     let host = ProcessCommandRunner;
     status.wifi_enabled = wifi_enabled_with(&host);
     status.bluetooth_enabled = bluetooth_enabled_with(&host);
+    status.fn_lock = crate::usb_media_remap_helper::load_fn_lock();
     apply_layout_to_status(
         &mut status,
         display_layout::get_display_layout().ok().as_ref(),

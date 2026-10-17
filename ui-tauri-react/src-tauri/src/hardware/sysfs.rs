@@ -70,6 +70,11 @@ fn read_backlight_value(path: &Path) -> Option<u32> {
         .and_then(|s| s.trim().parse().ok())
 }
 
+/// The keyboard backlight level the daemon last set, if its state is readable.
+pub fn load_backlight_level() -> Option<u8> {
+    load_runtime_state().map(|state| state.status.backlight_level)
+}
+
 pub fn read_backlight_level() -> u8 {
     load_runtime_state()
         .map(|state| state.status.backlight_level)
@@ -171,6 +176,7 @@ pub fn get_full_status() -> DuoStatus {
         max_brightness: read_max_brightness(),
         service_active: is_service_active(),
         orientation: Orientation::Normal,
+        fn_lock: crate::usb_media_remap_helper::load_fn_lock(),
     }
 }
 

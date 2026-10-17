@@ -4,6 +4,7 @@ pub mod compositor;
 pub mod daemon;
 pub mod host;
 pub mod logger;
+pub(crate) mod osd;
 pub mod logind;
 pub mod monitor;
 pub mod paths;

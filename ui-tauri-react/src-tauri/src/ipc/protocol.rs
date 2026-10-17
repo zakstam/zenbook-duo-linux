@@ -71,6 +71,11 @@ pub enum DaemonRequest {
         connector: String,
         enabled: bool,
     },
+    /// Fn lock, shared by the USB remap helper and the Bluetooth hotkey
+    /// watcher, which pick up a change within a second.
+    SetFnLock {
+        locked: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -66,6 +66,7 @@ pub fn run() {
             commands::backlight::set_backlight,
             commands::backlight::get_panel_brightness,
             commands::backlight::set_panel_brightness,
+            commands::keyboard::set_fn_lock,
             commands::display::get_display_layout,
             commands::display::apply_display_layout,
             commands::display::set_orientation,
