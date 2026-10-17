@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { controlsApi } from "@/lib/tauri-adapters";
 import { useStoreSelector, useDispatch } from "@/lib/store";
 import { Slider } from "@/components/ui/slider";
@@ -14,20 +14,26 @@ const levels = [
 export default function BacklightSlider() {
   const status = useStoreSelector((s) => s.status);
   const dispatch = useDispatch();
-  const [pending, setPending] = useState(false);
-  const [localLevel, setLocalLevel] = useState<number | null>(null);
-  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The level picked here, shown until the daemon's status agrees with it.
+  const [picked, setPicked] = useState<number | null>(null);
+  const inFlight = useRef(false);
+  const queued = useRef<number | null>(null);
 
-  const displayLevel = localLevel ?? status.backlightLevel;
+  const actual = status.backlightLevel;
+  const displayLevel = picked ?? actual;
 
-  const handleChange = async (value: number[]) => {
-    const level = value[0];
-    if (level === undefined || level === displayLevel) return;
+  // The status caught up (or the keyboard changed it, e.g. Fn+F4): follow it.
+  useEffect(() => {
+    if (picked !== null && !inFlight.current && actual === picked) setPicked(null);
+  }, [actual, picked]);
 
-    if (clearTimer.current) clearTimeout(clearTimer.current);
-
-    setLocalLevel(level);
-    setPending(true);
+  // One request at a time; the last level picked always gets sent.
+  const send = async (level: number) => {
+    if (inFlight.current) {
+      queued.current = level;
+      return;
+    }
+    inFlight.current = true;
     try {
       await controlsApi.setBacklight(level);
       dispatch({
@@ -36,10 +42,20 @@ export default function BacklightSlider() {
       });
     } catch (err) {
       console.error("Failed to set backlight:", err);
+      setPicked(null);
     } finally {
-      setPending(false);
-      clearTimer.current = setTimeout(() => setLocalLevel(null), 2000);
+      inFlight.current = false;
+      const next = queued.current;
+      queued.current = null;
+      if (next !== null && next !== level) void send(next);
     }
+  };
+
+  const handleChange = (value: number[]) => {
+    const level = value[0];
+    if (level === undefined || level === displayLevel) return;
+    setPicked(level);
+    void send(level);
   };
 
   return (
@@ -52,7 +68,6 @@ export default function BacklightSlider() {
           step={1}
           value={[displayLevel]}
           onValueChange={handleChange}
-          disabled={pending}
           className="flex-1"
         />
         <span className="font-mono text-[11px] text-muted-foreground">3</span>
@@ -68,7 +83,6 @@ export default function BacklightSlider() {
                 : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
             )}
             onClick={() => handleChange([l.value])}
-            disabled={pending}
           >
             <span className="font-mono text-[12px] font-semibold">{l.label}</span>
             <span className="text-[10px] opacity-60">{l.desc}</span>

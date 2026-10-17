@@ -118,6 +118,22 @@ async fn watch_rotation() -> Result<RotationWatchExit, String> {
                 let Some(sensor_orientation) = sensor_orientation_value(&line) else {
                     continue;
                 };
+                remember_sensor_orientation(sensor_orientation);
+                // With the keyboard attached the Duo is a laptop: tilting it should
+                // not turn the screen.
+                if super::brightness_sync::keyboard_attached_from_runtime() {
+                    runtime_log_info(format!(
+                        "ignoring accelerometer orientation {sensor_orientation}: keyboard attached"
+                    ));
+                    continue;
+                }
+                // Table mode switched on by hand (display controls): stay put.
+                if !flat_detector.lying_flat() && table_mode_active() {
+                    runtime_log_info(format!(
+                        "ignoring accelerometer orientation {sensor_orientation}: table mode"
+                    ));
+                    continue;
+                }
                 let invert_sensor_rotation =
                     crate::commands::settings::load_settings_local().invert_sensor_rotation;
                 match display_orientation_from_sensor_value(sensor_orientation, invert_sensor_rotation)
@@ -149,6 +165,10 @@ async fn watch_rotation() -> Result<RotationWatchExit, String> {
                 else {
                     continue;
                 };
+                // Attached, the Duo is a laptop: lying flat changes nothing either.
+                if super::brightness_sync::keyboard_attached_from_runtime() {
+                    continue;
+                }
                 match flat_detector.update(reading) {
                     Some(true) => apply_lying_flat_layout(),
                     Some(false) => {
@@ -253,6 +273,50 @@ pub(super) fn monitor_sensor_accelerometer_claim_timeout(line: &str) -> bool {
 pub(super) fn parse_rotation_line(line: &str) -> Option<Orientation> {
     sensor_orientation_value(line)
         .and_then(|value| display_orientation_from_sensor_value(value, false))
+}
+
+/// The accelerometer's last reading, kept while the keyboard is attached so
+/// detaching can apply it (the sensor only reports changes).
+static LAST_SENSOR_ORIENTATION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn remember_sensor_orientation(value: &str) {
+    if let Ok(mut last) = LAST_SENSOR_ORIENTATION.lock() {
+        *last = Some(value.to_string());
+    }
+}
+
+/// Table mode (the GNOME extension's display controls): the top panel alone is
+/// upside down for someone across the table. Rotation turns both panels
+/// together, so that layout never comes from it, and it stays put meanwhile.
+fn table_mode_active() -> bool {
+    crate::hardware::display_layout::get_display_layout().is_ok_and(|layout| is_table_mode(&layout))
+}
+
+pub(super) fn is_table_mode(layout: &crate::models::DisplayLayout) -> bool {
+    let transform = |connector: &str| {
+        layout
+            .displays
+            .iter()
+            .find(|d| d.connector == connector)
+            .map(|d| d.transform)
+    };
+    transform("eDP-1") == Some(180) && transform("eDP-2") == Some(0)
+}
+
+/// After detaching: turn the screens the way the device is held, if not upright.
+pub(crate) fn apply_last_orientation() {
+    let Some(value) = LAST_SENSOR_ORIENTATION.lock().ok().and_then(|last| last.clone()) else {
+        return;
+    };
+    let invert = crate::commands::settings::load_settings_local().invert_sensor_rotation;
+    match display_orientation_from_sensor_value(&value, invert) {
+        Some(Orientation::Normal) | None => {}
+        Some(orientation) => {
+            if let Err(err) = crate::hardware::display_layout::set_orientation(&orientation) {
+                runtime_log_warn(format!("failed to apply {orientation:?} after detaching: {err}"));
+            }
+        }
+    }
 }
 
 fn sensor_orientation_value(line: &str) -> Option<&str> {

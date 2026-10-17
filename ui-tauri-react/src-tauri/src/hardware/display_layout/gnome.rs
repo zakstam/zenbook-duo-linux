@@ -14,6 +14,28 @@ pub(super) fn get_gnome_display_layout() -> Result<DisplayLayout, String> {
     parse_gdctl_output(&stdout)
 }
 
+/// The monitors' names by connector, from gdctl's monitor lines, e.g.
+/// "Monitor DP-2 (RTK 15.6\")" → DP-2: RTK 15.6". GNOME Settings shows the same.
+pub(super) fn monitor_names(output: &str) -> std::collections::HashMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let rest = &line[line.find("Monitor ")? + "Monitor ".len()..];
+            let (connector, name) = rest.split_once(' ')?;
+            let name = name.trim().strip_prefix('(')?.strip_suffix(')')?;
+            Some((connector.to_string(), name.to_string()))
+        })
+        .collect()
+}
+
+pub(super) fn get_gnome_monitor_names() -> std::collections::HashMap<String, String> {
+    compositor::command_output("gdctl", &["show"])
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| monitor_names(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default()
+}
+
 pub(super) fn parse_gdctl_output(output: &str) -> Result<DisplayLayout, String> {
     // gdctl output is a tree with box-drawing characters.
     // We parse two parts:
