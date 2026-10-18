@@ -116,6 +116,12 @@ match payload {
         let guard = state.read().await;
         let mut status = guard.status.clone();
         status.service_active = true;
+        status.hardware_fn_lock = hardware::hid::captured_keyboard_seen();
+        status.desktop = guard
+            .session_agent
+            .connected
+            .then_some(guard.session_agent.backend)
+            .flatten();
         DaemonResponse::Status { status }
     }
     DaemonRequest::GetVersion => DaemonResponse::Version {
@@ -230,13 +236,22 @@ match payload {
     }
     DaemonRequest::CycleScreens => {
         // Same scale as the attach/detach layouts, so the cycle never rescales.
-        let (attached, scale) = {
+        let (attached, scale, backend) = {
             let guard = state.read().await;
             (
                 matches!(guard.status.connection_type, crate::models::ConnectionType::Usb),
                 guard.settings.default_scale,
+                guard.session_agent.backend,
             )
         };
+        // The screen cycle is GNOME's; elsewhere the key does nothing unless
+        // it is set to something in Function Keys.
+        if backend != Some(SessionBackend::Gnome) {
+            let _ = logger::append_line(format!(
+                "rust-daemon: screen key ignored, the screen cycle is GNOME-only (desktop {backend:?})"
+            ));
+            return DaemonResponse::Ack;
+        }
         match forward_session_command(&state, SessionCommand::CycleScreens { attached, scale })
             .await
         {
@@ -1131,6 +1146,43 @@ mod tests {
         assert!(!guard.session_agent.connected);
         assert!(guard.session_agent.socket_path.is_none());
         assert!(!guard.status.service_active);
+    }
+
+    #[tokio::test]
+    async fn get_status_names_the_desktop_only_while_the_session_agent_is_connected() {
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.backend = Some(SessionBackend::Niri);
+        }
+        match dispatch_request(DaemonRequest::GetStatus, state.clone()).await {
+            DaemonResponse::Status { status } => {
+                assert_eq!(status.desktop, Some(SessionBackend::Niri))
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        state.write().await.session_agent.connected = false;
+        match dispatch_request(DaemonRequest::GetStatus, state).await {
+            DaemonResponse::Status { status } => assert_eq!(status.desktop, None),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn screen_key_does_nothing_off_gnome() {
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.backend = Some(SessionBackend::Hyprland);
+        }
+        // No session socket: forwarding would fail, so an Ack means it was skipped.
+        assert!(matches!(
+            dispatch_request(DaemonRequest::CycleScreens, state).await,
+            DaemonResponse::Ack
+        ));
     }
 
     #[tokio::test]

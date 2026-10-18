@@ -22,6 +22,14 @@ pub struct DuoStatus {
     /// Whether the default microphone is muted, once the session reported it.
     #[serde(default)]
     pub mic_muted: Option<bool>,
+    /// The keyboard has its own Fn lock (the UX8406MA's, 0b05:1b2c/1b2d): seen
+    /// docked or over Bluetooth since the daemon started. Gates the controls
+    /// that only work on it.
+    #[serde(default)]
+    pub hardware_fn_lock: bool,
+    /// The desktop the session agent runs in, while it is connected.
+    #[serde(default)]
+    pub desktop: Option<crate::ipc::protocol::SessionBackend>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

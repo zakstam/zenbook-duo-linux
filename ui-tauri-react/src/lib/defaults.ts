@@ -14,6 +14,8 @@ export const DEFAULT_DUO_STATUS: DuoStatus = {
   fnLock: false,
   keyboardBattery: null,
   micMuted: null,
+  hardwareFnLock: false,
+  desktop: null,
   orientation: "normal",
 };
 

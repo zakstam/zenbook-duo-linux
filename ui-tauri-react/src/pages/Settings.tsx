@@ -27,6 +27,8 @@ import { IconDeviceFloppy, IconKeyboard, IconPlayerPause, IconPlayerPlay, IconRo
 
 export default function Settings() {
   const connectionType = useStoreSelector((s) => s.status.connectionType);
+  // Backlight sleep uses GNOME's idle monitor; other desktops don't run it.
+  const onGnome = useStoreSelector((s) => s.status.desktop === "gnome");
   const settings = useStoreSelector((s) => s.settings);
   const dispatch = useDispatch();
   const { setTheme } = useTheme();
@@ -150,6 +152,8 @@ export default function Settings() {
 
           <div className="h-px bg-border/50" />
 
+          {onGnome && (
+          <>
           <SettingRow
             label="Backlight Sleep"
             description="Turn the keyboard backlight off after no input; any key, touch or pointer movement turns it back on"
@@ -173,6 +177,8 @@ export default function Settings() {
           </SettingRow>
 
           <div className="h-px bg-border/50" />
+          </>
+          )}
 
           <SettingRow label="Default Display Scale" description="Scale factor for newly connected displays">
             <Select

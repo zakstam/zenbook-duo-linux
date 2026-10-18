@@ -139,8 +139,15 @@ impl ShiftF7Detector {
     }
 }
 
+/// Whether the connected session agent runs in GNOME.
+fn session_is_gnome(state: &Arc<RwLock<RuntimeState>>) -> bool {
+    let guard = state.blocking_read();
+    guard.session_agent.connected
+        && guard.session_agent.backend == Some(crate::ipc::protocol::SessionBackend::Gnome)
+}
+
 /// The detached keyboard's event device, only read (not grabbed), to see
-/// Shift+F7 while nothing grabs the keyboard.
+/// Shift+F7 while nothing grabs the keyboard (GNOME only).
 fn open_key_watcher() -> Option<Device> {
     let (_, device) = evdev::enumerate().find(|(_, device)| is_bluetooth_duo_keyboard(device))?;
     crate::usb_media_remap_helper::configure_nonblocking(&device).ok()?;
@@ -682,7 +689,9 @@ fn watch_reports(
     let mut chord = MicChord::default();
     let mut mic_grab: Option<MicHoldGrab> = None;
     let mut shift_f7 = ShiftF7Detector::default();
-    let mut key_watcher = open_key_watcher();
+    // Shift+F7 is only for GNOME (the extension's display switch): the reader
+    // is opened, and dropped, as the live desktop changes (checked below).
+    let mut key_watcher: Option<Device> = None;
 
     loop {
         let mut fds = vec![file.as_raw_fd()];
@@ -784,7 +793,9 @@ fn watch_reports(
                         emit_key(keys, key, 0)?;
                     }
                     // The mic key: mute on release, or mic volume with Up/Down.
+                    // Only on the keyboard it was made on; others mute at once.
                     if action == BluetoothHotkeyAction::Key(Key::KEY_MICMUTE)
+                        && hardware_fn_lock
                         && matches!(
                             crate::hardware::sysfs::detect_connection_type(),
                             ConnectionType::Bluetooth
@@ -816,8 +827,12 @@ fn watch_reports(
         // Fn lock can also be changed elsewhere (Control Panel, docked keyboard).
         if last_fn_lock_check.elapsed() >= Duration::from_secs(1) {
             last_fn_lock_check = std::time::Instant::now();
-            if key_watcher.is_none() {
-                key_watcher = open_key_watcher();
+            if session_is_gnome(&state) {
+                if key_watcher.is_none() {
+                    key_watcher = open_key_watcher();
+                }
+            } else {
+                key_watcher = None;
             }
             // Fn lock changed in the Control Panel or on the docked keyboard.
             let locked = crate::usb_media_remap_helper::load_fn_lock();

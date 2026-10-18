@@ -215,6 +215,24 @@ fn is_duo_keyboard(uevent: &str) -> bool {
     uevent.contains("Zenbook Duo Keyboard") || uevent.contains("ASUS_DUO") || is_captured_keyboard(uevent)
 }
 
+/// Whether one of [`CAPTURED_KEYBOARDS`] has been connected (docked or over
+/// Bluetooth) since the daemon started. Sticky, so the controls for it don't
+/// come and go while the Bluetooth keyboard sleeps.
+pub fn captured_keyboard_seen() -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SEEN: AtomicBool = AtomicBool::new(false);
+    if SEEN.load(Ordering::Relaxed) {
+        return true;
+    }
+    let present = vendor_hidraw_nodes()
+        .iter()
+        .any(|(_, uevent)| is_captured_keyboard(uevent));
+    if present {
+        SEEN.store(true, Ordering::Relaxed);
+    }
+    present
+}
+
 pub(crate) fn is_captured_keyboard(uevent: &str) -> bool {
     uevent.lines().any(|line| {
         let id = line.trim().to_ascii_uppercase();

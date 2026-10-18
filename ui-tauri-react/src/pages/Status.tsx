@@ -131,14 +131,16 @@ export default function Status() {
                 {status.keyboardBattery === null ? "—" : `${status.keyboardBattery}%`}
               </span>
             </StatusRow>
-            <StatusRow label="Top row">
-              <span className={cn(
-                "text-[13px] font-medium",
-                status.fnLock ? "text-sky-500" : "text-muted-foreground"
-              )}>
-                {status.fnLock ? "F1–F12" : "Media keys"}
-              </span>
-            </StatusRow>
+            {status.hardwareFnLock && (
+              <StatusRow label="Top row">
+                <span className={cn(
+                  "text-[13px] font-medium",
+                  status.fnLock ? "text-sky-500" : "text-muted-foreground"
+                )}>
+                  {status.fnLock ? "F1–F12" : "Media keys"}
+                </span>
+              </StatusRow>
+            )}
             <StatusRow label="Microphone">
               <span className={cn(
                 "text-[13px] font-medium",

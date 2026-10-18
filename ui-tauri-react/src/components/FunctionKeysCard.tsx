@@ -2,7 +2,7 @@ import { useState } from "react";
 import { controlsApi } from "@/lib/tauri-adapters";
 import { refreshStatus, useDispatch, useStoreSelector } from "@/lib/store";
 import { autosavePersistedSetting } from "@/lib/settings-service";
-import type { KeyOverride } from "@/types/duo";
+import type { Desktop, KeyOverride } from "@/types/duo";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,34 +11,66 @@ import { IconAlertTriangle, IconExternalLink, IconKeyboard } from "@tabler/icons
 
 // The top row's ASUS functions (what the keys do without Fn, or with Fn when
 // the top row is in F1–F12 mode). XF86Launch1-4 can be bound to any action in
-// the desktop's keyboard shortcut settings.
-const TOP_ROW: { key: string; label: string; detail?: string }[] = [
-  { key: "F1", label: "Mute" },
-  { key: "F2", label: "Volume down" },
-  { key: "F3", label: "Volume up" },
-  { key: "F4", label: "Keyboard backlight" },
-  { key: "F5", label: "Brightness down" },
-  { key: "F6", label: "Brightness up" },
-  { key: "F7", label: "Share", detail: "Super+P (the GNOME extension opens its display controls)" },
-  { key: "F8", label: "Screen arrows", detail: "XF86Launch2" },
-  { key: "F9", label: "Mic mute", detail: "Hold it and press Up/Down or the volume keys for the mic volume" },
-  { key: "F10", label: "Bluetooth", detail: "The keyboard's own pairing button; sends nothing to the computer" },
-  { key: "F11", label: "Emoji picker" },
-  { key: "F12", label: "ASUS hub", detail: "Opens this Control Panel (MyASUS on Windows)" },
-  { key: "Screen", label: "Screen key", detail: "Right of F12: cycles the screens" },
-];
+// the desktop's keyboard shortcuts.
+function topRow(desktop: Desktop | null, hardwareFnLock: boolean): { key: string; label: string; detail?: string }[] {
+  return [
+    { key: "F1", label: "Mute" },
+    { key: "F2", label: "Volume down" },
+    { key: "F3", label: "Volume up" },
+    { key: "F4", label: "Keyboard backlight" },
+    { key: "F5", label: "Brightness down" },
+    { key: "F6", label: "Brightness up" },
+    { key: "F7", label: "Share", detail: "Super+P" },
+    { key: "F8", label: "Screen arrows", detail: "XF86Launch2" },
+    {
+      key: "F9",
+      label: "Mic mute",
+      // The mic-volume chord is only known on the UX8406MA's keyboard.
+      detail: hardwareFnLock ? "Hold it and press Up/Down or the volume keys for the mic volume" : undefined,
+    },
+    { key: "F10", label: "Bluetooth", detail: "The keyboard's own pairing button; sends nothing to the computer" },
+    { key: "F11", label: "Emoji picker" },
+    { key: "F12", label: "ASUS hub", detail: "Opens this Control Panel (MyASUS on Windows)" },
+    {
+      key: "Screen",
+      label: "Screen key",
+      // The screen cycle is GNOME's; elsewhere the key does nothing unless set here.
+      detail: desktop === "gnome" ? "Right of F12: cycles the screens" : "Right of F12: does nothing unless set here",
+    },
+  ];
+}
+
+/** Desktops with a keyboard shortcuts page the Control app can open. */
+function hasShortcutSettings(desktop: Desktop | null) {
+  return desktop === "gnome" || desktop === "kde";
+}
+
+/** Where the desktop binds a key, for the shortcut-key hint. */
+function bindHint(desktop: Desktop | null, keyName: string, pressed: string) {
+  switch (desktop) {
+    case "gnome":
+    case "kde":
+      return `In Keyboard shortcuts, give any action (or a custom shortcut) a new shortcut and press ${pressed} when asked (it shows as ${keyName}).`;
+    case "niri":
+      return `Bind ${keyName} in the binds section of your niri config, e.g. ${keyName} { spawn "foot"; }.`;
+    case "hyprland":
+      return `Bind ${keyName} in hyprland.conf, e.g. bind = , ${keyName}, exec, foot.`;
+    default:
+      return `Bind ${keyName} in your desktop's keyboard shortcuts.`;
+  }
+}
 
 type OverrideKind = KeyOverride["action"];
 
-// Keys GNOME has no use for, one per top-row key, for GNOME's own keyboard
-// shortcuts (the same list as the daemon's SHORTCUT_SIGNALS).
+// Keys no desktop uses on its own, one per top-row key, to bind in the
+// desktop's keyboard shortcuts (the same list as the daemon's SHORTCUT_SIGNALS).
 const SHORTCUT_SIGNALS = [
   "Launch1", "Launch3", "Launch4", "Launch5", "Launch6", "Launch7",
   "Launch8", "Launch9", "LaunchA", "LaunchB", "F19", "F24",
 ];
 
-/** How GNOME shows a signal when you press the key in its shortcut settings. */
-function gnomeName(signal: string) {
+/** The key's name (XKB keysym), as desktops show and bind it. */
+function keysymName(signal: string) {
   return signal.startsWith("Launch") ? `XF86${signal}` : signal;
 }
 
@@ -58,6 +90,7 @@ function KeyOverrideRow({
   disabled,
   takenSignals,
   onOpenShortcuts,
+  desktop,
 }: {
   fkey: string;
   label: string;
@@ -68,6 +101,7 @@ function KeyOverrideRow({
   /** Shortcut signals other keys use, with the key using each. */
   takenSignals: Map<string, string>;
   onOpenShortcuts: () => void;
+  desktop: Desktop | null;
 }) {
   const kind: OverrideKind = value?.action ?? "default";
   // The parent remounts the row when the saved text changes, so this starts fresh.
@@ -124,7 +158,7 @@ function KeyOverrideRow({
               {hasFKey && <SelectItem value="fKey">{fkey} key</SelectItem>}
               <SelectItem value="command">Run a command…</SelectItem>
               <SelectItem value="keys">Send keys…</SelectItem>
-              <SelectItem value="shortcut">GNOME shortcut</SelectItem>
+              <SelectItem value="shortcut">Shortcut key</SelectItem>
               <SelectItem value="nothing">Nothing</SelectItem>
             </SelectContent>
           </Select>
@@ -133,10 +167,8 @@ function KeyOverrideRow({
       {value?.action === "shortcut" && (
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
           <span className="min-w-0 flex-1">
-            In Keyboard shortcuts, give any action (or a custom shortcut) a new shortcut and press{" "}
-            {hasFKey ? fkey : "the screen key"} when asked (GNOME shows{" "}
-            <span className="font-mono">{gnomeName(value.signal)}</span>). If another app reacts to it,
-            pick another key:
+            {bindHint(desktop, keysymName(value.signal), hasFKey ? fkey : "the screen key")} If another
+            app reacts to it, pick another key:
           </span>
           <Select
             value={value.signal}
@@ -160,15 +192,17 @@ function KeyOverrideRow({
               ))}
             </SelectContent>
           </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 shrink-0 px-2"
-            title="Open keyboard shortcuts"
-            onClick={onOpenShortcuts}
-          >
-            <IconExternalLink className="size-3.5" stroke={1.5} />
-          </Button>
+          {hasShortcutSettings(desktop) && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0 px-2"
+              title="Open keyboard shortcuts"
+              onClick={onOpenShortcuts}
+            >
+              <IconExternalLink className="size-3.5" stroke={1.5} />
+            </Button>
+          )}
         </div>
       )}
       {(kind === "command" || kind === "keys") && (
@@ -201,6 +235,8 @@ export default function FunctionKeysCard() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fnLock = useStoreSelector((s) => s.status.fnLock);
+  const hardwareFnLock = useStoreSelector((s) => s.status.hardwareFnLock);
+  const desktop = useStoreSelector((s) => s.status.desktop);
   const overrides = useStoreSelector((s) => s.settings.keyOverrides) ?? {};
 
   /** The shortcut signals the other keys use, by signal → key. */
@@ -260,24 +296,27 @@ export default function FunctionKeysCard() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-[13px]">Top row sends F1–F12</p>
-          <p className="text-[11px] text-muted-foreground">
-            {fnLock
-              ? "Hold Fn for media keys"
-              : "Now media keys · hold Fn for F1–F12"}
-            {" · Fn+Esc switches"}
-          </p>
+      {/* The keyboard's own Fn lock: only the UX8406MA's keyboard has the known command. */}
+      {hardwareFnLock && (
+        <div className="mb-5 flex items-center justify-between gap-4 border-b border-border/50 pb-4">
+          <div>
+            <p className="text-[13px]">Top row sends F1–F12</p>
+            <p className="text-[11px] text-muted-foreground">
+              {fnLock
+                ? "Hold Fn for media keys"
+                : "Now media keys · hold Fn for F1–F12"}
+              {" · Fn+Esc switches"}
+            </p>
+          </div>
+          <Switch
+            checked={fnLock}
+            onCheckedChange={(checked) => void handleFnLock(checked)}
+            disabled={pending}
+          />
         </div>
-        <Switch
-          checked={fnLock}
-          onCheckedChange={(checked) => void handleFnLock(checked)}
-          disabled={pending}
-        />
-      </div>
+      )}
 
-      <div className="mt-5 border-t border-border/50 pt-4">
+      <div>
         <p className="mb-1 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
           Top-row keys
         </p>
@@ -286,7 +325,7 @@ export default function FunctionKeysCard() {
           same. Commands run as you, never as root.
         </p>
         <div className="divide-y divide-border/40">
-          {TOP_ROW.map(({ key, label, detail }) => (
+          {topRow(desktop, hardwareFnLock).map(({ key, label, detail }) => (
             <KeyOverrideRow
               key={`${key}:${overrideText(overrides[key])}`}
               fkey={key}
@@ -297,23 +336,28 @@ export default function FunctionKeysCard() {
               disabled={pending}
               takenSignals={signalsTakenBesides(key)}
               onOpenShortcuts={() => void handleOpenShortcuts()}
+              desktop={desktop}
             />
           ))}
         </div>
 
         <div className="mt-4 flex items-center justify-between gap-4">
           <p className="text-[11px] text-muted-foreground">
-            F8 sends XF86Launch2. To bind a key in your keyboard shortcuts instead, set it to send Launch1–9.
+            F8 sends XF86Launch2. To bind a key in your{" "}
+            {desktop === "niri" ? "niri config" : desktop === "hyprland" ? "hyprland.conf" : "keyboard shortcuts"}{" "}
+            instead, set it to Shortcut key.
           </p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="shrink-0 gap-2"
-            onClick={() => void handleOpenShortcuts()}
-          >
-            <IconExternalLink className="size-3.5" stroke={1.5} />
-            Keyboard shortcuts
-          </Button>
+          {hasShortcutSettings(desktop) && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 gap-2"
+              onClick={() => void handleOpenShortcuts()}
+            >
+              <IconExternalLink className="size-3.5" stroke={1.5} />
+              Keyboard shortcuts
+            </Button>
+          )}
         </div>
       </div>
 

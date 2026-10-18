@@ -135,6 +135,9 @@ pub(crate) fn report_shift_f7(user: Option<&str>) {
         return;
     };
     std::thread::spawn(move || {
+        if !live_desktop_is_gnome() {
+            return;
+        }
         let Ok(Some(account)) = nix::unistd::User::from_name(&user) else {
             return;
         };
@@ -152,6 +155,17 @@ pub(crate) fn report_shift_f7(user: Option<&str>) {
             "org.gnome.Shell.Extensions.ZenbookDuoGnomeTools.ShiftF7Pressed",
         ]));
     });
+}
+
+/// Whether the session agent last registered from GNOME, asked over the
+/// daemon's socket (for root processes outside the daemon's state, like the
+/// USB remap helper). Never call it while holding the daemon's state lock.
+pub(crate) fn live_desktop_is_gnome() -> bool {
+    use crate::ipc::protocol::{DaemonRequest, DaemonResponse, SessionBackend};
+    matches!(
+        crate::runtime::client::request(DaemonRequest::GetStatus),
+        Ok(DaemonResponse::Status { status }) if status.desktop == Some(SessionBackend::Gnome)
+    )
 }
 
 fn run(command: &mut Command) -> bool {

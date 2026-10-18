@@ -137,8 +137,8 @@ export default function DisplayBrightnessCard() {
             <p className="text-[13px]">Same brightness for both Duo screens</p>
             <p className="text-[11px] text-muted-foreground">
               {same
-                ? "The bottom screen follows the top one, also GNOME's brightness slider"
-                : "GNOME's brightness slider only changes the top screen"}
+                ? "The bottom screen follows the top one, however it is changed"
+                : "Each screen keeps its own brightness"}
             </p>
           </div>
           <Switch checked={same} onCheckedChange={(on) => void setSame(on)} />

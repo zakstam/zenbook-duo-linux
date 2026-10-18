@@ -22,7 +22,13 @@ export interface DuoStatus {
   keyboardBattery: number | null;
   /** Whether the default microphone is muted (the mic-mute key's LED), once known. */
   micMuted: boolean | null;
+  /** The keyboard has its own Fn lock (the UX8406MA's): Fn+Esc, the Fn-lock switch, the mic-volume chord. */
+  hardwareFnLock: boolean;
+  /** The desktop the session agent runs in, while it is connected. */
+  desktop: Desktop | null;
 }
+
+export type Desktop = "gnome" | "kde" | "hyprland" | "niri" | "unknown";
 
 export interface DisplayInfo {
   connector: string;

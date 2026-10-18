@@ -179,6 +179,8 @@ pub fn get_full_status() -> DuoStatus {
         fn_lock: crate::usb_media_remap_helper::load_fn_lock(),
         keyboard_battery: None,
         mic_muted: None,
+        hardware_fn_lock: false,
+        desktop: None,
     }
 }
 
