@@ -114,4 +114,4 @@ Older versions added you to the `input` group, which is no longer needed. To rem
 
 Developer notes, checks and architecture are in [AGENTS.md](AGENTS.md).
 
-Thanks to [Antonskt](https://github.com/Antonskt) for the per-screen brightness, the keyboard's Fn lock, mic-mute light and battery warnings, the GNOME screen handling, the Function Keys page and safer sudoers rules (#34, #35, #38–#43).
+Contributors: [Antonskt](https://github.com/Antonskt), [AnabolicRoo](https://github.com/AnabolicRoo), [thew1nt3rsoldier](https://github.com/thew1nt3rsoldier).
