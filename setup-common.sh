@@ -37,6 +37,10 @@ build_duo_setup_package_lists() {
 run_duo_setup() {
   : "${SETUP_SCRIPT_NAME:?SETUP_SCRIPT_NAME is required}"
 
+  # Values given in the environment win over the saved ones (see load_duo_saved_defaults).
+  DUO_GIVEN_BACKLIGHT="${DEFAULT_BACKLIGHT:+1}"
+  DUO_GIVEN_SCALE="${DEFAULT_SCALE:+1}"
+  DUO_GIVEN_REMAP="${USB_MEDIA_REMAP_ENABLED:+1}"
   DEFAULT_BACKLIGHT="${DEFAULT_BACKLIGHT:-${DUO_DEFAULT_BACKLIGHT}}"
   DEFAULT_SCALE="${DEFAULT_SCALE:-${DUO_DEFAULT_SCALE}}"
   USB_MEDIA_REMAP_ENABLED="${USB_MEDIA_REMAP_ENABLED:-${DUO_DEFAULT_USB_MEDIA_REMAP_ENABLED}}"
@@ -46,6 +50,7 @@ run_duo_setup() {
 
   parse_duo_setup_args "$@"
   resolve_duo_target_user
+  load_duo_saved_defaults
   prompt_duo_defaults
   install_duo_dependencies
   configure_duo_sudoers
@@ -62,10 +67,12 @@ parse_duo_setup_args() {
     case "$1" in
       --usb-media-remap)
         USB_MEDIA_REMAP_ENABLED=true
+        DUO_GIVEN_REMAP=1
         shift
         ;;
       --no-usb-media-remap)
         USB_MEDIA_REMAP_ENABLED=false
+        DUO_GIVEN_REMAP=1
         shift
         ;;
       *)
@@ -98,6 +105,46 @@ resolve_duo_target_user() {
     echo "ERROR: failed to resolve TARGET_USER=${TARGET_USER}"
     exit 1
   fi
+}
+
+# On a reinstall the questions default to the saved settings, so pressing
+# Enter keeps them; the installer's own defaults only apply to a first
+# install. Values given in the environment or as flags still win.
+load_duo_saved_defaults() {
+  local settings_file="${TARGET_HOME:-}/.config/zenbook-duo/settings.json"
+  [ -r "${settings_file}" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  local saved
+  saved="$(python3 - "${settings_file}" <<'PY' 2>/dev/null
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+def show(key, value):
+    if value is not None:
+        print(f"{key}={value}")
+backlight = data.get("defaultBacklight")
+show("backlight", backlight if isinstance(backlight, int) and 0 <= backlight <= 3 else None)
+scale = data.get("defaultScale")
+if isinstance(scale, (int, float)) and 0.5 <= scale <= 4:
+    # Saved as 5/3 or 4/3; asked as 1.67 or 1.33. Retired 1.66 and 1.75 become 1.67.
+    scale = round(scale, 2)
+    if abs(scale - 1.66) < 0.005 or abs(scale - 1.75) < 0.005:
+        scale = 1.67
+    show("scale", f"{scale:g}")
+remap = data.get("usbMediaRemapEnabled")
+show("remap", ("true" if remap else "false") if isinstance(remap, bool) else None)
+PY
+)" || return 0
+  local line
+  while IFS= read -r line; do
+    case "${line}" in
+      backlight=*) [ -n "${DUO_GIVEN_BACKLIGHT:-}" ] || DEFAULT_BACKLIGHT="${line#*=}" ;;
+      scale=*) [ -n "${DUO_GIVEN_SCALE:-}" ] || DEFAULT_SCALE="${line#*=}" ;;
+      remap=*) [ -n "${DUO_GIVEN_REMAP:-}" ] || USB_MEDIA_REMAP_ENABLED="${line#*=}" ;;
+    esac
+  done <<< "${saved}"
 }
 
 duo_prompt() {
