@@ -850,6 +850,22 @@ mod tests {
     }
 
     #[test]
+    fn reads_the_orientation_monitor_sensor_starts_with() {
+        assert_eq!(
+            rotation::initial_orientation_value("=== Has accelerometer (orientation: left-up, tilt: vertical)"),
+            Some("left-up")
+        );
+        assert_eq!(
+            rotation::initial_orientation_value("=== Has accelerometer (orientation: undefined)"),
+            None
+        );
+        assert_eq!(
+            rotation::initial_orientation_value("    Accelerometer orientation changed: normal"),
+            None
+        );
+    }
+
+    #[test]
     fn inverted_sensor_rotation_swaps_only_left_and_right() {
         assert_eq!(
             rotation::display_orientation_from_sensor_value("left-up", true),

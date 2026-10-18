@@ -115,6 +115,13 @@ async fn watch_rotation() -> Result<RotationWatchExit, String> {
                 else {
                     break;
                 };
+                // Only remembered: applying it would reset the screens each
+                // time the watcher restarts.
+                if let Some(initial) = initial_orientation_value(&line) {
+                    runtime_log_info(format!("accelerometer starts {initial}"));
+                    remember_sensor_orientation(initial);
+                    continue;
+                }
                 let Some(sensor_orientation) = sensor_orientation_value(&line) else {
                     continue;
                 };
@@ -309,16 +316,20 @@ pub(super) fn is_table_mode(layout: &crate::models::DisplayLayout) -> bool {
 /// After detaching: turn the screens the way the device is held, if not upright.
 pub(crate) fn apply_last_orientation() {
     let Some(value) = LAST_SENSOR_ORIENTATION.lock().ok().and_then(|last| last.clone()) else {
+        runtime_log_info("detached: no accelerometer reading yet, leaving the screens upright");
         return;
     };
     let invert = crate::commands::settings::load_settings_local().invert_sensor_rotation;
     match display_orientation_from_sensor_value(&value, invert) {
-        Some(Orientation::Normal) | None => {}
-        Some(orientation) => {
-            if let Err(err) = crate::hardware::display_layout::set_orientation(&orientation) {
-                runtime_log_warn(format!("failed to apply {orientation:?} after detaching: {err}"));
-            }
+        Some(Orientation::Normal) | None => {
+            runtime_log_info(format!("detached: held {value}, leaving the screens upright"));
         }
+        Some(orientation) => match crate::hardware::display_layout::set_orientation(&orientation) {
+            Ok(()) => runtime_log_info(format!("detached: held {value}, applied {orientation:?}")),
+            Err(err) => {
+                runtime_log_warn(format!("failed to apply {orientation:?} after detaching: {err}"))
+            }
+        },
     }
 }
 
@@ -326,6 +337,18 @@ fn sensor_orientation_value(line: &str) -> Option<&str> {
     line.split("Accelerometer orientation changed:")
         .nth(1)
         .map(str::trim)
+}
+
+/// The reading monitor-sensor starts with (`=== Has accelerometer
+/// (orientation: left-up, tilt: ...)`), so a Duo already turned when the
+/// watcher starts is known at the next detach.
+pub(super) fn initial_orientation_value(line: &str) -> Option<&str> {
+    let value = line
+        .strip_prefix("=== Has accelerometer (orientation:")?
+        .split([',', ')'])
+        .next()?
+        .trim();
+    (!value.is_empty() && value != "undefined").then_some(value)
 }
 
 pub(super) fn display_orientation_from_sensor_value(
@@ -346,11 +369,12 @@ pub(super) fn display_orientation_from_sensor_value(
 fn runtime_log_info(message: impl AsRef<str>) {
     let text = message.as_ref();
     let _ = crate::runtime::logger::append_line(format!("session-agent: {text}"));
-    log::info!("{text}");
+    // The daemon log is root's, so the journal is where the agent's lines land.
+    eprintln!("session-agent: {text}");
 }
 
 fn runtime_log_warn(message: impl AsRef<str>) {
     let text = message.as_ref();
     let _ = crate::runtime::logger::append_line(format!("session-agent: {text}"));
-    log::warn!("{text}");
+    eprintln!("session-agent: {text}");
 }
