@@ -140,9 +140,9 @@ match payload {
                 message: "Unexpected session-agent response while reading display layout"
                     .into(),
             },
-            Err(_) => match hardware::display_layout::get_display_layout() {
-                Ok(layout) => DaemonResponse::DisplayLayout { layout },
-                Err(message) => DaemonResponse::Error { message },
+            // The daemon has no desktop to ask; the caller reads it itself.
+            Err(_) => DaemonResponse::Error {
+                message: crate::ipc::protocol::SESSION_AGENT_NOT_CONNECTED.into(),
             },
         }
     }
@@ -1182,6 +1182,17 @@ mod tests {
         state.write().await.session_agent.connected = false;
         match dispatch_request(DaemonRequest::GetStatus, state).await {
             DaemonResponse::Status { status } => assert_eq!(status.desktop, None),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn display_layout_without_a_session_agent_says_it_is_not_connected() {
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        match dispatch_request(DaemonRequest::GetDisplayLayout, state).await {
+            DaemonResponse::Error { message } => {
+                assert_eq!(message, crate::ipc::protocol::SESSION_AGENT_NOT_CONNECTED)
+            }
             other => panic!("unexpected response: {other:?}"),
         }
     }

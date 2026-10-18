@@ -1,5 +1,5 @@
 use crate::hardware::display_layout;
-use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
+use crate::ipc::protocol::{DaemonRequest, DaemonResponse, SESSION_AGENT_NOT_CONNECTED};
 use crate::models::{DisplayLayout, Orientation};
 use crate::runtime::client;
 
@@ -10,6 +10,10 @@ fn daemon_display_layout_or_transport_fallback(
     match response {
         // Shown as the compositor has it; apply_display_layout stacks the screens.
         Ok(DaemonResponse::DisplayLayout { layout }) => Ok(layout),
+        // This app runs in the desktop, so it can read the layout itself.
+        Ok(DaemonResponse::Error { message }) if message == SESSION_AGENT_NOT_CONNECTED => {
+            fallback().map_err(|err| format!("{message}: {err}"))
+        }
         Ok(DaemonResponse::Error { message }) => Err(message),
         Ok(other) => Err(format!(
             "Unexpected daemon response while reading display layout: {other:?}"
@@ -144,6 +148,24 @@ mod tests {
             .find(|display| display.connector == "eDP-2")
             .expect("bottom screen present");
         assert_eq!((bottom.x, bottom.y), (1737, 0));
+    }
+
+    #[test]
+    fn display_layout_is_read_locally_while_the_session_agent_is_not_connected() {
+        let not_connected = || {
+            Ok(DaemonResponse::Error {
+                message: SESSION_AGENT_NOT_CONNECTED.into(),
+            })
+        };
+        assert!(
+            daemon_display_layout_or_transport_fallback(not_connected(), || Ok(empty_layout()))
+                .is_ok()
+        );
+        let err = daemon_display_layout_or_transport_fallback(not_connected(), || {
+            Err("no compositor".into())
+        })
+        .expect_err("both failing should fail");
+        assert!(err.starts_with(SESSION_AGENT_NOT_CONNECTED));
     }
 
     #[test]

@@ -7,6 +7,12 @@ use crate::models::{
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// The daemon's answer when no session agent is connected to a desktop. The
+/// daemon is a system service with no desktop of its own, so a client running
+/// in the desktop reads the layout itself when it sees this.
+pub const SESSION_AGENT_NOT_CONNECTED: &str =
+    "The Zenbook Duo session agent is not connected to your desktop yet";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Envelope<T> {
