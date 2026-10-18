@@ -12,3 +12,4 @@ Detects when the detachable keyboard is docked on the bottom screen (USB) or tak
 ## Journeys
 
 - Undocking the keyboard on GNOME at a fractional scale like 1.66x now switches to dual-screen mode without an error popup. (card ae019f84-475d-448b-8b67-a9c324046b87, 2026-10-04)
+- Turning the docked Duo leaves the screens put, and taking the keyboard off turns them to match how the Duo is held, even with a saved layout. (card c4a4a250-49e5-4ff2-82b0-64add9a6c8e0, 2026-10-18)
