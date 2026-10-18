@@ -21,6 +21,21 @@ Display backends:
 
 The Hyprland backend only reconfigures the two internal panels found through DRM eDP metadata. Nonstandard connector names can be set with `ZENBOOK_DUO_UPPER_CONNECTOR` and `ZENBOOK_DUO_LOWER_CONNECTOR` in the session agent's environment.
 
+## GNOME Shell extension (third-party)
+
+[Zenbook Duo GNOME Tools](https://github.com/Antonskt/zenbook-duo-gnome-tools) is maintained by its author (Antonskt), not in this repo, and the installer does not install it. The runtime calls it on the session bus: destination `org.gnome.Shell`, object `/org/gnome/Shell/Extensions/ZenbookDuoGnomeTools`, interface `org.gnome.Shell.Extensions.ZenbookDuoGnomeTools`. Every call must keep working when the extension is missing (other desktops, or GNOME without it):
+
+| Method | Called for | Code | Without the extension |
+|--------|------------|------|-----------------------|
+| `ShowOsd` | keyboard attached/detached, screen key cycle, keyboard backlight, Fn lock | `runtime/osd.rs` (from `session_agent.rs`, `session_agent/screen_cycle.rs`, `usb_media_remap_helper.rs`) | notification |
+| `ShowAlert` | keyboard battery warnings | `runtime/keyboard_battery.rs` | notification |
+| `ShowMicVolume` | mic-volume chord | `runtime/session_agent/mic_mute.rs` | no pop-up |
+| `AppKeyPressed` | app keys with no GNOME shortcut | `runtime/osd.rs` (from `bluetooth_hotkeys.rs`, `usb_media_remap_helper.rs`) | nothing |
+| `ShiftF7Pressed` | detached keyboard's Shift+F7, GNOME only | `runtime/osd.rs` (from `bluetooth_hotkeys.rs`, `usb_media_remap_helper.rs`) | nothing |
+| `SetTopBrightness` | top-panel brightness, so GNOME's slider follows | `hardware/panel_brightness.rs` | logind `SetBrightness` |
+
+Paths are under `ui-tauri-react/src-tauri/src/`. The author has said these method names and arguments stay stable; if one changes, update the callers and this table. The extension also reads `/var/lib/zenbook-duo/state.json`, talks to the daemon socket (`get_settings`/`save_settings`) and writes `defaultScale` and `syncBrightness` into `~/.config/zenbook-duo/settings.json`, so changes to those formats affect it. v1.0 (tag `dc1d152`, zip sha256 `565dd0bbade0a572f0a28438514ea36c83d00bc45957a1d373d874518ba21d0b`) was reviewed on 2026-10-18: plain JS, no network or subprocesses; re-review a new release before linking a different one.
+
 ## Checks
 
 ```bash
