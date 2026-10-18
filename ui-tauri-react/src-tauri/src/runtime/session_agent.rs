@@ -93,7 +93,16 @@ pub async fn run(live: session::LiveSession) -> Result<(), String> {
     let listener = bind_session_listener(paths::current_user_session_socket_path().as_path())?;
     exit_when_session_ends(live.clone());
 
-    let backend = BackendReadiness::wait_for_ready_backend().await;
+    let Some(backend) = BackendReadiness::wait_for_ready_backend().await else {
+        // Unregistered, the daemon can neither replay the saved layout nor
+        // read it, so start over and find the desktop again.
+        session_agent_log_warn(format!(
+            "{} did not answer within {}s; restarting to find the desktop again",
+            live.describe(),
+            READY_GIVE_UP_AFTER.as_secs()
+        ));
+        std::process::exit(SESSION_ENDED_EXIT_CODE);
+    };
     if backend != live.backend {
         session_agent_log_warn(format!(
             "followed desktop is {:?} but the ready backend is {:?}",
@@ -301,7 +310,7 @@ fn session_agent_log_warn(message: impl AsRef<str>) {
 pub(crate) struct BackendReadiness;
 
 impl BackendReadiness {
-    async fn wait_for_ready_backend() -> SessionBackend {
+    async fn wait_for_ready_backend() -> Option<SessionBackend> {
         wait_for_ready_backend().await
     }
 
@@ -361,39 +370,49 @@ fn gui_session_env_ready() -> bool {
     has_runtime_dir && (has_wayland || has_x11)
 }
 
-async fn wait_for_ready_backend() -> SessionBackend {
+/// How long the followed desktop gets to answer before the agent restarts.
+const READY_GIVE_UP_AFTER: Duration = Duration::from_secs(30);
+
+async fn wait_for_ready_backend() -> Option<SessionBackend> {
     wait_for_ready_backend_with(
         detect_backend,
         backend_is_ready,
         Duration::from_secs(15),
+        READY_GIVE_UP_AFTER,
         Duration::from_millis(500),
     )
     .await
 }
 
+/// The first backend that answers, or None once `give_up_after` has passed.
 async fn wait_for_ready_backend_with<D, R>(
     mut detect_hint: D,
     mut is_ready: R,
     first_notice_after: Duration,
+    give_up_after: Duration,
     retry_delay: Duration,
-) -> SessionBackend
+) -> Option<SessionBackend>
 where
     D: FnMut() -> SessionBackend,
     R: FnMut(&session::BackendProbe) -> bool,
 {
-    let first_notice_at = tokio::time::Instant::now() + first_notice_after;
+    let started = tokio::time::Instant::now();
     let mut warned_after_first_timeout = false;
 
     loop {
         let hinted_backend = detect_hint();
         let backend = detect_ready_backend_from(hinted_backend, &mut is_ready);
         if backend != SessionBackend::Unknown {
-            return backend;
+            return Some(backend);
         }
 
-        if !warned_after_first_timeout && tokio::time::Instant::now() >= first_notice_at {
-            log::warn!(
-                "No supported session backend became ready before timeout; continuing to wait"
+        let waited = started.elapsed();
+        if waited >= give_up_after {
+            return None;
+        }
+        if !warned_after_first_timeout && waited >= first_notice_after {
+            session_agent_log_warn(
+                "no supported desktop backend is ready yet; continuing to wait",
             );
             warned_after_first_timeout = true;
         }
@@ -1140,12 +1159,27 @@ mod tests {
                 probe.backend == SessionBackend::Kde && attempts >= 3
             },
             Duration::from_millis(1),
+            Duration::from_secs(60),
             Duration::from_millis(1),
         )
         .await;
 
-        assert_eq!(backend, SessionBackend::Kde);
+        assert_eq!(backend, Some(SessionBackend::Kde));
         assert!(attempts >= 3);
+    }
+
+    #[tokio::test]
+    async fn wait_for_ready_backend_gives_up_so_the_agent_can_restart() {
+        let backend = wait_for_ready_backend_with(
+            || SessionBackend::Hyprland,
+            |_| false,
+            Duration::from_millis(1),
+            Duration::from_millis(20),
+            Duration::from_millis(1),
+        )
+        .await;
+
+        assert_eq!(backend, None);
     }
 
     fn dual_internal_layout(refresh_rate: f64) -> DisplayLayout {
