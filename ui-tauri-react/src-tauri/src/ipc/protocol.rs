@@ -181,6 +181,9 @@ pub enum SessionCommand {
     SetOrientation {
         orientation: Orientation,
     },
+    /// Detached onto a saved layout: turn the screens the way the Duo is held
+    /// (rotation is ignored while docked, so it may have turned meanwhile).
+    RotateToHeld,
     ShowNotification {
         title: String,
         message: String,

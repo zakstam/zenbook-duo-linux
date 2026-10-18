@@ -634,12 +634,28 @@ async fn replay_current_display_mode_with_disconnect(
         !(external_active && saved_internal_only && backend == Some(SessionBackend::Gnome))
     });
     if let Some(layout) = exact_saved_layout {
-        return forward_session_command_with_disconnect(
+        forward_session_command_with_disconnect(
             state,
             SessionCommand::ApplyDisplayLayout { layout },
             disconnect_on_failure,
         )
-        .await;
+        .await?;
+        // The dock mode path rotates after detaching; the saved layout is
+        // upright, so turn it the way the Duo is held too.
+        if !attached {
+            if let Err(err) = forward_session_command_with_disconnect(
+                state,
+                SessionCommand::RotateToHeld,
+                false,
+            )
+            .await
+            {
+                let _ = logger::append_line(format!(
+                    "rust-daemon: rotating after detaching onto the saved layout failed: {err}"
+                ));
+            }
+        }
+        return Ok(());
     }
 
     replay_current_dock_mode_with_disconnect(
@@ -1361,6 +1377,57 @@ mod tests {
         drop(guard);
 
         server.await.expect("join session server");
+        let _ = fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn detaching_onto_a_saved_layout_then_rotates_to_how_the_duo_is_held() {
+        let socket_path = unique_test_socket_path("detached-saved-rotates");
+        let listener = UnixListener::bind(&socket_path).expect("bind test session socket");
+
+        let server = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.expect("accept test session client");
+                let (reader, mut writer) = stream.into_split();
+                let line = BufReader::new(reader)
+                    .lines()
+                    .next_line()
+                    .await
+                    .expect("read test request")
+                    .expect("session request line");
+                let envelope: Envelope<SessionCommand> =
+                    serde_json::from_str(&line).expect("decode session request");
+                seen.push(match envelope.payload {
+                    SessionCommand::ApplyDisplayLayout { .. } => "apply",
+                    SessionCommand::RotateToHeld => "rotate",
+                    other => panic!("unexpected session command: {other:?}"),
+                });
+                let reply = serde_json::to_string(&Envelope::new(SessionResponse::Ack))
+                    .expect("encode ack");
+                writer.write_all(reply.as_bytes()).await.expect("write ack");
+                writer.write_all(b"\n").await.expect("terminate ack");
+            }
+            seen
+        });
+
+        let state = Arc::new(RwLock::new(RuntimeState::default()));
+        {
+            let mut guard = state.write().await;
+            guard.session_agent.connected = true;
+            guard.session_agent.backend = Some(SessionBackend::Hyprland);
+            guard.session_agent.socket_path = Some(socket_path.to_string_lossy().into_owned());
+            guard.status.monitor_count = 2;
+            guard.settings.saved_display_layout = Some(DisplayLayout {
+                displays: vec![display("eDP-1", 0, 0, true), display("eDP-2", 0, 1080, false)],
+            });
+        }
+
+        replay_current_display_mode(&state, false, 5.0 / 3.0)
+            .await
+            .expect("replay should succeed");
+
+        assert_eq!(server.await.expect("join session server"), vec!["apply", "rotate"]);
         let _ = fs::remove_file(&socket_path);
     }
 

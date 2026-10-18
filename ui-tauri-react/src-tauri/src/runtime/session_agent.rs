@@ -191,6 +191,11 @@ pub(crate) fn dispatch_session_command(payload: SessionCommand) -> SessionRespon
                 Err(message) => SessionResponse::Error { message },
             }
         }
+        SessionCommand::RotateToHeld => {
+            rotation::apply_last_orientation();
+            apply_touch_mapping_best_effort("rotation", session::detect_backend_from_env());
+            SessionResponse::Ack
+        }
         SessionCommand::SetOrientation { orientation } => {
             match crate::hardware::display_layout::set_orientation(&orientation) {
                 Ok(()) => SessionResponse::Ack,
