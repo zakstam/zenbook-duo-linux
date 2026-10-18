@@ -17,3 +17,4 @@ Holds the user's preferences and the Settings page that edits them: default back
 
 - A user whose installer saved a scale of 1.75 opens Settings and sees 1.75 selected in Default Display Scale instead of an empty box. (card 9d6f1731-d4f1-4114-a4b2-12f24323f3ef, 2026-10-05)
 - Someone who had 1.66x or 1.75x saved as their default scale sees 1.67x selected after updating. (card 17880f60-1d4d-48f7-8e2d-ca8d73859792, 2026-10-16)
+- Backlight Sleep shows only on GNOME, and Function Keys explains how to bind a Shortcut key in the desktop actually running. (card c4a4a250-49e5-4ff2-82b0-64add9a6c8e0, 2026-10-18)

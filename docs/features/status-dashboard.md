@@ -17,3 +17,4 @@ Shows the machine's live state on the Status page: keyboard connection, displays
 ## Journeys
 
 - Switching to the Status page shows it instantly with no blinking cards, and it stays still while logs and events stream in the background. (card 3d42c96a-dabd-49f0-a286-8d9cf85a78bd, 2026-10-15)
+- The Status page shows the 'Top row' row only for the UX8406MA keyboard. (card c4a4a250-49e5-4ff2-82b0-64add9a6c8e0, 2026-10-18)
