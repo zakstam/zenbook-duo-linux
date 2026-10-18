@@ -358,16 +358,20 @@ fn live_hyprland_sessions(runtime_dir: &Path) -> Vec<(SystemTime, LiveSession)> 
             if !socket_answers(&socket) {
                 return None;
             }
+            // Hyprland answers on its socket a few ms before it writes the
+            // display into hyprland.lock. Until it has, the session is still
+            // starting: adopting it then leaves the agent without
+            // WAYLAND_DISPLAY, so it never becomes ready.
             let wayland_display = std::fs::read_to_string(entry.path().join("hyprland.lock"))
                 .ok()
                 .and_then(|lock| lock.lines().nth(1).map(|line| line.trim().to_string()))
-                .filter(|line| !line.is_empty());
+                .filter(|line| !line.is_empty())?;
             Some((
                 modified_time(&socket),
                 LiveSession {
                     backend: SessionBackend::Hyprland,
                     desktop_name: "Hyprland".into(),
-                    wayland_display,
+                    wayland_display: Some(wayland_display),
                     niri_socket: None,
                     hyprland_signature: Some(signature),
                 },
@@ -563,6 +567,28 @@ mod tests {
         assert_eq!(session.hyprland_signature.as_deref(), Some("sig1"));
         assert_eq!(session.wayland_display.as_deref(), Some("wayland-1"));
         assert_eq!(session.niri_socket, None);
+        let _ = std::fs::remove_dir_all(&runtime_dir);
+    }
+
+    #[test]
+    fn waits_until_hyprland_names_its_wayland_display() {
+        // Hyprland answers on its socket a few ms before it writes the display
+        // into hyprland.lock; adopting it then left the agent without
+        // WAYLAND_DISPLAY, stuck and unregistered for the whole boot.
+        let runtime_dir = temp_runtime_dir("hypr-starting");
+        let dir = runtime_dir.join("hypr").join("sig4");
+        std::fs::create_dir_all(&dir).expect("hypr dir");
+        let _hypr =
+            std::os::unix::net::UnixListener::bind(dir.join(".socket.sock")).expect("bind hypr");
+        let manager = env_map(&[("XDG_CURRENT_DESKTOP", "Hyprland")]);
+
+        assert_eq!(discover_live_session(&runtime_dir, &manager), None);
+        std::fs::write(dir.join("hyprland.lock"), "4242\n").expect("pid-only lock");
+        assert_eq!(discover_live_session(&runtime_dir, &manager), None);
+
+        std::fs::write(dir.join("hyprland.lock"), "4242\nwayland-1\n").expect("lock");
+        let session = discover_live_session(&runtime_dir, &manager).expect("hyprland ready");
+        assert_eq!(session.wayland_display.as_deref(), Some("wayland-1"));
         let _ = std::fs::remove_dir_all(&runtime_dir);
     }
 
