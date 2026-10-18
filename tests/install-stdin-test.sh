@@ -324,16 +324,28 @@ if [[ "${remap_default_output}" != $'false\ntrue' ]]; then
   exit 1
 fi
 
-# Sudoers temp files must be created and written as root: a user-owned one
+# Brightness goes through logind: the installer grants no passwordless sudo
+# and a reinstall removes the rules earlier versions added. Temp files for
+# /etc/sudoers edits must be created and written as root: a user-owned one
 # could be swapped between the visudo check and the install.
-sudoers_tmp_output="$(FAKE_SUDOERS="${temp_root}/fake-sudoers" bash --noprofile --norc -c '
+if grep -q 'NOPASSWD' "${ROOT_DIR}/setup-common.sh"; then
+  echo "FAIL: the installer should not grant passwordless sudo" >&2
+  exit 1
+fi
+
+sudoers_tmp_output="$(FAKE_SUDOERS="${temp_root}/fake-sudoers" FAKE_SUDOERS_D="${temp_root}/fake-sudoers.d-zenbook-duo" bash --noprofile --norc -c '
   set -euo pipefail
   source "'"${ROOT_DIR}"'/setup-common.sh"
   printf "root ALL=(ALL) ALL\nzaks ALL=NOPASSWD:/usr/bin/tee /sys/class/backlight/*/brightness\n" > "${FAKE_SUDOERS}"
+  echo "testuser ALL=(root) NOPASSWD: /usr/bin/tee /sys/class/backlight/x/brightness" > "${FAKE_SUDOERS_D}"
   mktemp() { echo "user-mktemp"; command mktemp "$@"; }
   sudo() {
     local args=() a
-    for a in "$@"; do [ "${a}" = /etc/sudoers ] && a="${FAKE_SUDOERS}"; args+=("${a}"); done
+    for a in "$@"; do
+      [ "${a}" = /etc/sudoers ] && a="${FAKE_SUDOERS}"
+      [ "${a}" = /etc/sudoers.d/zenbook-duo ] && a="${FAKE_SUDOERS_D}"
+      args+=("${a}")
+    done
     case "$1" in
       mktemp) echo "root-mktemp" >&2; command mktemp ;;
       visudo) return 0 ;;
@@ -342,17 +354,21 @@ sudoers_tmp_output="$(FAKE_SUDOERS="${temp_root}/fake-sudoers" bash --noprofile 
     esac
   }
   TARGET_USER=testuser
-  configure_duo_sudoers
+  remove_duo_sudoers
+  [ -e "${FAKE_SUDOERS_D}" ] && echo "sudoers.d-left" >&2
+  true
 ' 2>&1)" || {
-  echo "FAIL: configure_duo_sudoers should run" >&2
+  echo "FAIL: remove_duo_sudoers should run" >&2
   printf '%s\n' "${sudoers_tmp_output}" >&2
   exit 1
 }
 
 if grep -q 'user-mktemp' <<< "${sudoers_tmp_output}" \
-  || [[ "$(grep -c 'root-mktemp' <<< "${sudoers_tmp_output}")" != 2 ]] \
-  || ! grep -q 'installed 0 -> .*sudoers$' <<< "${sudoers_tmp_output}"; then
-  echo "FAIL: sudoers temp files should be root-owned and the legacy rule removed" >&2
+  || [[ "$(grep -c 'root-mktemp' <<< "${sudoers_tmp_output}")" != 1 ]] \
+  || [[ "$(grep -c 'installed' <<< "${sudoers_tmp_output}")" != 1 ]] \
+  || ! grep -q 'installed 0 -> .*fake-sudoers$' <<< "${sudoers_tmp_output}" \
+  || grep -q 'sudoers.d-left' <<< "${sudoers_tmp_output}"; then
+  echo "FAIL: a reinstall should remove the old brightness sudoers rules, editing /etc/sudoers through root-owned temp files" >&2
   printf 'Got:\n%s\n' "${sudoers_tmp_output}" >&2
   exit 1
 fi

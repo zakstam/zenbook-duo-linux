@@ -37,7 +37,6 @@ If it can't tell which desktop you're on, clone the repo and run the setup scrip
 
 - Installs `usbutils`, `iio-sensor-proxy`, `upower`, `pactl` and your desktop's display tool (`gdctl`, `kscreen-doctor`, `niri msg` or `hyprctl`).
 - Adds a udev rule so your logged-in user can read the Duo keyboard (`/etc/udev/rules.d/90-zenbook-duo-keyboard.rules`).
-- Adds one sudoers file, `/etc/sudoers.d/zenbook-duo`, allowing the exact screen-brightness writes it needs.
 - Installs two system services (`zenbook-duo-rust-daemon`, `zenbook-duo-rust-lifecycle`) and one user service (`zenbook-duo-session-agent`).
 - Keeps your settings in `~/.config/zenbook-duo`.
 
@@ -106,7 +105,7 @@ cd zenbook-duo-linux
 ./uninstall.sh
 ```
 
-This removes the services, rules, sudoers file, the Control app and your settings. Add `--keep-ui` to keep the app or `--keep-config` to keep `~/.config/zenbook-duo`.
+This removes the services, rules, any sudoers file an older version added, the Control app and your settings. Add `--keep-ui` to keep the app or `--keep-config` to keep `~/.config/zenbook-duo`.
 
 Older versions added you to the `input` group, which is no longer needed. To remove that: `sudo gpasswd -d "$USER" input`.
 

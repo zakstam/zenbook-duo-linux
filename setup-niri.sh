@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installation script for ASUS Zenbook Duo Linux dual-screen management (Niri).
-# Installs dependencies, configures sudoers and udev rules, and installs the
+# Installs dependencies, configures udev rules, and installs the
 # Rust runtime services.
 set -euo pipefail
 

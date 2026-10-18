@@ -53,7 +53,7 @@ run_duo_setup() {
   load_duo_saved_defaults
   prompt_duo_defaults
   install_duo_dependencies
-  configure_duo_sudoers
+  remove_duo_sudoers
   configure_duo_input_access
   configure_duo_libinput_quirks
   write_duo_settings_defaults
@@ -217,25 +217,14 @@ remove_legacy_duo_sudoers() {
   sudo rm -f "${tmp}"
 }
 
-configure_duo_sudoers() {
-  # Exact brightness paths only (a '*' in sudoers args also matches
-  # spaces, so the earlier wildcard rule allowed writing any file as root).
-  # Written to sudoers.d and syntax-checked with visudo instead of appending to /etc/sudoers.
+# Screen brightness goes through logind (Session.SetBrightness), so no
+# passwordless sudo is needed any more. Reinstalls remove the per-panel
+# `tee` rules earlier versions installed, and the older wildcard rule.
+remove_duo_sudoers() {
   remove_legacy_duo_sudoers
-  if [ -n "${TARGET_USER}" ]; then
-    local tmp dir rules=""
-    for dir in /sys/class/backlight/*; do
-      [ -e "${dir}/brightness" ] || continue
-      rules+="${TARGET_USER} ALL=(root) NOPASSWD: /usr/bin/tee ${dir}/brightness"$'\n'
-    done
-    tmp="$(sudo mktemp)" || return 0
-    printf '%s' "${rules}" | sudo tee "${tmp}" >/dev/null
-    if sudo visudo -cqf "${tmp}"; then
-      sudo install -m 0440 -o root -g root "${tmp}" /etc/sudoers.d/zenbook-duo
-    else
-      echo "WARNING: generated sudoers rule failed validation; skipped" >&2
-    fi
-    sudo rm -f "${tmp}"
+  if sudo test -e /etc/sudoers.d/zenbook-duo; then
+    sudo rm -f /etc/sudoers.d/zenbook-duo
+    echo "Removed the old brightness rules (/etc/sudoers.d/zenbook-duo); brightness no longer needs sudo"
   fi
 }
 
