@@ -221,8 +221,9 @@ fn is_valid(panels: &[DisplayInfo], externals: &[DisplayInfo]) -> bool {
     reached.into_iter().all(|r| r)
 }
 
-/// The bottom panel is placed a few px off from the requested scale (1.66) and
-/// stacked with gdctl's `--below`, which uses the edge Mutter really applies.
+/// The bottom panel can sit a few px off the top one's edge (a scale off
+/// Mutter's grid, like a legacy saved 1.66, or rounding) and is stacked with
+/// gdctl's `--below`, which uses the edge Mutter really applies.
 fn snap_stacked_panels(rects: &mut [Rect]) {
     if let [top, bottom] = rects {
         let edge = top.y + top.h;
@@ -275,8 +276,9 @@ fn logical_size(display: &DisplayInfo) -> (i32, i32) {
     )
 }
 
-/// The scale Mutter applies: it snaps a requested scale (1.66) to the nearest
-/// one it supports, a multiple of 1/4 or 1/3 (5/3).
+/// The scale Mutter applies: it snaps a requested scale to the nearest one it
+/// supports, a multiple of 1/4 or 1/3. The presets (1, 1.25, 4/3, 1.5, 5/3, 2)
+/// are already on that grid; a legacy saved 1.66 becomes 5/3.
 fn snapped_scale(scale: f64) -> f64 {
     let scale = scale.max(0.1);
     let quarter = (scale * 4.0).round() / 4.0;
@@ -323,8 +325,8 @@ mod tests {
     }
 
     fn panel(connector: &str, y: i32) -> DisplayInfo {
-        // The daemon asks for 1.66; Mutter applies 5/3 (1728x1080 logical).
-        let mut p = screen(connector, 2880, 1800, 1.66, 0, y);
+        // The default scale, 5/3 (1728x1080 logical).
+        let mut p = screen(connector, 2880, 1800, 5.0 / 3.0, 0, y);
         p.primary = connector == PRIMARY_INTERNAL_CONNECTOR;
         p
     }
@@ -457,5 +459,11 @@ mod tests {
         assert_eq!(logical_size(&panel("eDP-1", 0)), (1728, 1080));
         assert_eq!(snapped_scale(1.25), 1.25);
         assert_eq!(snapped_scale(2.0), 2.0);
+        // The default is stored as 5/3 now; a legacy saved 1.66 snaps to it.
+        assert!((snapped_scale(1.66) - 5.0 / 3.0).abs() < 1e-9);
+        assert!((snapped_scale(5.0 / 3.0) - 5.0 / 3.0).abs() < 1e-9);
+        let mut legacy = panel("eDP-1", 0);
+        legacy.scale = 1.66;
+        assert_eq!(logical_size(&legacy), (1728, 1080));
     }
 }

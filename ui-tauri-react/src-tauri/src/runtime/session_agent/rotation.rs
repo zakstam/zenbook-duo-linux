@@ -288,8 +288,11 @@ fn remember_sensor_orientation(value: &str) {
 /// Table mode (the GNOME extension's display controls): the top panel alone is
 /// upside down for someone across the table. Rotation turns both panels
 /// together, so that layout never comes from it, and it stays put meanwhile.
+/// Only GNOME can switch it on; elsewhere the same transforms can be an
+/// upright UX8407AA (its top panel is mounted 180° rotated), so never there.
 fn table_mode_active() -> bool {
-    crate::hardware::display_layout::get_display_layout().is_ok_and(|layout| is_table_mode(&layout))
+    crate::runtime::session::detect_backend_from_env() == crate::ipc::protocol::SessionBackend::Gnome
+        && crate::hardware::display_layout::get_display_layout().is_ok_and(|layout| is_table_mode(&layout))
 }
 
 pub(super) fn is_table_mode(layout: &crate::models::DisplayLayout) -> bool {

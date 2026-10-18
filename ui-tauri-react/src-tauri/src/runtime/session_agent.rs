@@ -435,8 +435,18 @@ fn apply_dock_layout_unrotated(
         .as_ref()
         .and_then(|layout| dock_layout_from_base(layout, attached, scale))
     {
+        let backend = detect_ready_backend();
+        let layout = if attached {
+            with_physical_upright(
+                layout,
+                backend,
+                crate::hardware::duo::primary_panel_mounted_inverted(),
+            )
+        } else {
+            layout
+        };
         // The rules are for the panels; external screens stay as they are.
-        let layout = if detect_ready_backend() == SessionBackend::Gnome {
+        let layout = if backend == SessionBackend::Gnome {
             external_screens::gnome_with_active_externals(layout)
         } else {
             layout
@@ -455,6 +465,24 @@ fn apply_dock_layout_unrotated(
         }?;
     }
     Ok(())
+}
+
+/// Attached, [`dock_layout_from_base`] turns the top panel upright (transform
+/// 0). On the UX8407AA that panel is mounted 180° rotated and KWin does not
+/// compensate (see `primary_panel_mounted_inverted`), so there upright is 180.
+fn with_physical_upright(
+    mut layout: DisplayLayout,
+    backend: SessionBackend,
+    mounted_inverted: bool,
+) -> DisplayLayout {
+    if mounted_inverted && backend == SessionBackend::Kde {
+        for display in &mut layout.displays {
+            if display.connector == PRIMARY_INTERNAL_CONNECTOR {
+                display.transform = 180;
+            }
+        }
+    }
+    layout
 }
 
 fn stacked_logical_height(display: &DisplayInfo) -> i32 {
@@ -875,6 +903,21 @@ mod tests {
         let docked = dock_layout_from_base(&layout, true, 1.5).expect("dock layout");
         assert_eq!(docked.displays.len(), 1);
         assert_eq!(docked.displays[0].transform, 0);
+    }
+
+    #[test]
+    fn attaching_keeps_an_inverted_mount_panel_upright_on_kde() {
+        let mut layout = dual_internal_layout(120.0);
+        for display in &mut layout.displays {
+            display.transform = 90;
+        }
+        let docked = dock_layout_from_base(&layout, true, 1.5).expect("dock layout");
+        let kde = with_physical_upright(docked.clone(), SessionBackend::Kde, true);
+        assert_eq!(kde.displays[0].transform, 180);
+        for backend in [SessionBackend::Gnome, SessionBackend::Niri, SessionBackend::Hyprland] {
+            assert_eq!(with_physical_upright(docked.clone(), backend, true).displays[0].transform, 0);
+        }
+        assert_eq!(with_physical_upright(docked, SessionBackend::Kde, false).displays[0].transform, 0);
     }
 
     #[test]
