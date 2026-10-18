@@ -45,7 +45,7 @@ If it can't tell which desktop you're on, clone the repo and run the setup scrip
 - Switches between one and two screens when the keyboard is attached or removed, over USB or Bluetooth.
 - Auto-rotates the screens while the keyboard is off. Laying the Duo flat with both screens up turns only the top screen around for the person opposite. Attaching the keyboard turns the screen upright again.
 - GNOME: external screens keep their place when the keyboard is attached or removed. The screen key (right of F12) cycles the Duo screens: both, top only, bottom only, off. The Control app's Displays page names the screens as GNOME Settings does and snaps a dragged screen to a place GNOME accepts.
-- GNOME 50, optional: the [Zenbook Duo GNOME Tools](https://github.com/Antonskt/zenbook-duo-gnome-tools) extension adds window snapping across the screens, F7 display controls, F8 window swap and the Shift+F7 main-display switch, and shows this project's pop-ups (Fn lock, backlight, mic volume, keyboard battery) on screen instead of as notifications. It is made and maintained by its author, not by this project; install it from its releases page.
+- GNOME 50, optional: the [Zenbook Duo GNOME Tools](https://github.com/Antonskt/zenbook-duo-gnome-tools) extension adds window snapping across the screens, F7 display controls, F8 window swap and the Shift+F7 main-display switch, and shows this project's pop-ups (Fn lock, backlight, mic volume, keyboard battery) on screen instead of as notifications. It is made and maintained by [Antonskt](https://github.com/Antonskt), not by this project; install it from its releases page.
 - Keeps brightness in sync between the screens and handles the keyboard backlight and brightness keys, including over Bluetooth. **Controls → Display Brightness** in the Control app sets each screen on its own, or both together.
 - Optionally turns the top row into media keys when docked (F1-F3 volume, F4 backlight, F5/F6 brightness, F11 emoji).
 - On the UX8406MA keyboard, **Fn+Esc** switches the top row between media keys and F1-F12, docked and detached; hold Fn for the other one. The setting is under **Controls → Function Keys** in the Control app, where each top-row key and the screen key can also run a command, send a key combination, become a key to bind in your desktop's shortcuts, or do nothing; the F-key itself stays. The ASUS key (F12) opens the Control app.
@@ -113,3 +113,5 @@ Older versions added you to the `input` group, which is no longer needed. To rem
 ## Contributing
 
 Developer notes, checks and architecture are in [AGENTS.md](AGENTS.md).
+
+Thanks to [Antonskt](https://github.com/Antonskt) for the per-screen brightness, the keyboard's Fn lock, mic-mute light and battery warnings, the GNOME screen handling, the Function Keys page and safer sudoers rules (#34, #35, #38–#43).
