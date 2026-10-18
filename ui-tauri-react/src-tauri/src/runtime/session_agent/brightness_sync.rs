@@ -24,7 +24,7 @@ async fn watch_brightness_sync() -> Result<(), String> {
             continue;
         }
 
-        sync_secondary_brightness(level)?;
+        sync_secondary_brightness(level).await?;
         last_seen = Some(level);
     }
 }
@@ -33,7 +33,7 @@ fn brightness_sync_enabled() -> bool {
     crate::commands::settings::load_settings_local().sync_brightness
 }
 
-fn keyboard_attached_from_runtime() -> bool {
+pub(super) fn keyboard_attached_from_runtime() -> bool {
     let Ok(raw) = fs::read_to_string(paths::state_file_path()) else {
         return false;
     };
@@ -43,42 +43,29 @@ fn keyboard_attached_from_runtime() -> bool {
     state.status.keyboard_attached
 }
 
-fn sync_secondary_brightness(level: u32) -> Result<(), String> {
-    let Some(secondary) = crate::hardware::sysfs::secondary_backlight_dir() else {
+/// Gives the bottom panel the top panel's brightness (as a percentage of each
+/// one's range), through logind like GNOME's own brightness slider.
+async fn sync_secondary_brightness(level: u32) -> Result<(), String> {
+    let (Some(primary), Some(secondary)) = (
+        crate::hardware::sysfs::primary_backlight_dir(),
+        crate::hardware::sysfs::secondary_backlight_dir(),
+    ) else {
         return Ok(());
     };
-    let secondary_path = secondary.join("brightness");
-
-    if fs::write(&secondary_path, level.to_string()).is_ok() {
+    let max = |dir: &std::path::Path| {
+        fs::read_to_string(dir.join("max_brightness"))
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .unwrap_or(1)
+    };
+    use crate::hardware::panel_brightness::{level_for_percent, percent_of, set_panel_level};
+    let target = level_for_percent(max(&secondary), percent_of(level, max(&primary)));
+    // Already there (GNOME's own slider sets both panels): nothing to do.
+    let current = fs::read_to_string(secondary.join("brightness"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok());
+    if current == Some(target) {
         return Ok(());
     }
-
-    let secondary_path_string = secondary_path.to_string_lossy().into_owned();
-    let mut child = Command::new("sudo")
-        .args(["/usr/bin/tee", secondary_path_string.as_str()])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to run sudo tee for brightness sync: {e}"))?;
-
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(level.to_string().as_bytes())
-            .and_then(|_| stdin.write_all(b"\n"))
-            .map_err(|e| format!("Failed to write brightness sync value: {e}"))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed waiting for brightness sync helper: {e}"))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Brightness sync failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
+    set_panel_level(&secondary, target).await
 }

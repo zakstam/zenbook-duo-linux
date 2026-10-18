@@ -1,14 +1,17 @@
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+pub(crate) mod backlight_idle;
 pub(crate) mod brightness_sync;
+pub(crate) mod external_screens;
 mod lying_flat;
+pub(crate) mod mic_mute;
 pub(crate) mod rotation;
+pub(crate) mod screen_cycle;
 pub(crate) mod touch_mapping;
 
 use crate::hardware::duo::{
@@ -203,6 +206,22 @@ pub(crate) fn dispatch_session_command(payload: SessionCommand) -> SessionRespon
             Err(message) => SessionResponse::Error { message },
         },
         SessionCommand::OpenEmojiPicker => SessionResponse::Ack,
+        SessionCommand::KeyboardBatteryWarning { level, critical } => {
+            match crate::runtime::keyboard_battery::show_warning(level, critical) {
+                Ok(()) => SessionResponse::Ack,
+                Err(message) => SessionResponse::Error { message },
+            }
+        }
+        SessionCommand::StepMicVolume { up } => match mic_mute::step_volume(up) {
+            Ok(()) => SessionResponse::Ack,
+            Err(message) => SessionResponse::Error { message },
+        },
+        SessionCommand::CycleScreens { attached, scale } => {
+            match screen_cycle::cycle_screens(attached, scale, session::detect_backend_from_env()) {
+                Ok(()) => SessionResponse::Ack,
+                Err(message) => SessionResponse::Error { message },
+            }
+        }
     }
 }
 
@@ -383,12 +402,45 @@ pub(crate) fn apply_dock_mode(
     scale: f64,
     layout: Option<DisplayLayout>,
 ) -> Result<(), String> {
+    apply_dock_layout(attached, scale, layout)?;
+
+    if let Err(err) = send_dock_mode_notification(attached) {
+        log::warn!("failed to send dock-mode notification: {err}");
+    }
+
+    Ok(())
+}
+
+/// The screen layout for the keyboard's state, without the notification.
+pub(crate) fn apply_dock_layout(
+    attached: bool,
+    scale: f64,
+    layout: Option<DisplayLayout>,
+) -> Result<(), String> {
+    apply_dock_layout_unrotated(attached, scale, layout)?;
+    if !attached {
+        rotation::apply_last_orientation();
+    }
+    Ok(())
+}
+
+fn apply_dock_layout_unrotated(
+    attached: bool,
+    scale: f64,
+    layout: Option<DisplayLayout>,
+) -> Result<(), String> {
     let base_layout = layout.or_else(|| crate::hardware::display_layout::get_display_layout().ok());
 
     if let Some(layout) = base_layout
         .as_ref()
         .and_then(|layout| dock_layout_from_base(layout, attached, scale))
     {
+        // The rules are for the panels; external screens stay as they are.
+        let layout = if detect_ready_backend() == SessionBackend::Gnome {
+            external_screens::gnome_with_active_externals(layout)
+        } else {
+            layout
+        };
         crate::hardware::display_layout::apply_display_layout(&layout)?;
     } else {
         log::warn!(
@@ -402,11 +454,6 @@ pub(crate) fn apply_dock_mode(
             SessionBackend::Unknown => Err("Unsupported session backend for dock mode".into()),
         }?;
     }
-
-    if let Err(err) = send_dock_mode_notification(attached) {
-        log::warn!("failed to send dock-mode notification: {err}");
-    }
-
     Ok(())
 }
 
@@ -441,12 +488,20 @@ pub(crate) fn dock_layout_from_base(
                 .find(|display| is_internal_connector(&display.connector))
                 .cloned()
         })?;
+    if primary.connector == SECONDARY_INTERNAL_CONNECTOR {
+        // Only the bottom panel is on (screen cycle): the top panel has the
+        // same mode, and the bottom one is rebuilt below for detached mode.
+        primary.connector = PRIMARY_INTERNAL_CONNECTOR.to_string();
+    }
     primary.scale = target_scale;
     primary.x = 0;
     primary.y = 0;
     primary.primary = true;
 
     if attached {
+        // A laptop again: back to normal, even if the screen was rotated
+        // while detached (rotation is ignored while attached).
+        primary.transform = 0;
         return Some(DisplayLayout {
             displays: vec![primary],
         });
@@ -631,6 +686,17 @@ fn dock_mode_notification_message(attached: bool) -> &'static str {
 }
 
 fn send_dock_mode_notification(attached: bool) -> Result<(), String> {
+    let label = if attached {
+        "Keyboard attached"
+    } else {
+        "Keyboard detached"
+    };
+    if crate::runtime::osd::show_in_session(&crate::runtime::osd::Osd::new(
+        "input-keyboard-symbolic",
+        label,
+    )) {
+        return Ok(());
+    }
     send_runtime_notification(
         "Zenbook Duo Control",
         dock_mode_notification_message(attached),
@@ -798,6 +864,17 @@ mod tests {
         assert_eq!(planned.displays.len(), 2);
         assert_eq!(planned.displays[0].scale, 1.5);
         assert_eq!(planned.displays[1].scale, 1.5);
+    }
+
+    #[test]
+    fn attaching_turns_a_rotated_screen_back_to_normal() {
+        let mut layout = dual_internal_layout(120.0);
+        for display in &mut layout.displays {
+            display.transform = 90;
+        }
+        let docked = dock_layout_from_base(&layout, true, 1.5).expect("dock layout");
+        assert_eq!(docked.displays.len(), 1);
+        assert_eq!(docked.displays[0].transform, 0);
     }
 
     #[test]
@@ -1040,6 +1117,19 @@ mod tests {
             refresh_policy: RefreshPolicy::Fixed,
             supports_dynamic_refresh: false,
         }
+    }
+
+    #[test]
+    fn table_mode_is_only_the_top_panel_upside_down() {
+        let layout = |top: u32, bottom: Option<u32>| DisplayLayout {
+            displays: std::iter::once(DisplayInfo { transform: top, ..display("eDP-1", 120.0, 0, 0, false) })
+                .chain(bottom.map(|t| DisplayInfo { transform: t, ..display("eDP-2", 120.0, 0, 1080, true) }))
+                .collect(),
+        };
+        assert!(rotation::is_table_mode(&layout(180, Some(0))));
+        assert!(!rotation::is_table_mode(&layout(180, Some(180))), "the whole device turned");
+        assert!(!rotation::is_table_mode(&layout(0, Some(0))));
+        assert!(!rotation::is_table_mode(&layout(180, None)), "bottom panel off");
     }
 
     fn unique_test_socket_path(label: &str) -> PathBuf {

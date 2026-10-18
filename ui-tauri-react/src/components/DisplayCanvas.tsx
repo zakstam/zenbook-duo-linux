@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -17,6 +17,7 @@ import {
   type DisplayCanvasNodeModel,
 } from "@/lib/display-layout";
 import { cn } from "@/lib/utils";
+import { MonitorNamesContext, displayLabel } from "@/lib/display-names";
 
 interface DisplayCanvasProps {
   layout: DisplayLayout;
@@ -26,6 +27,7 @@ interface DisplayCanvasProps {
 type DisplayNodeData = DisplayCanvasNodeModel["data"];
 
 function DisplayNode({ data, selected }: NodeProps<Node<DisplayNodeData>>) {
+  const names = useContext(MonitorNamesContext);
   return (
     <div
       className={cn(
@@ -41,11 +43,11 @@ function DisplayNode({ data, selected }: NodeProps<Node<DisplayNodeData>>) {
       <div className="flex h-full flex-col justify-between p-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate font-mono text-[13px] font-semibold">
-              {data.connector}
+            <div className="truncate text-[13px] font-semibold">
+              {displayLabel(data.connector, names)}
             </div>
             <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-              {data.width}x{data.height} @ {data.refreshRate.toFixed(1)}Hz
+              {data.connector} · {data.width}x{data.height} @ {data.refreshRate.toFixed(1)}Hz
             </div>
           </div>
 

@@ -16,6 +16,12 @@ export interface DuoStatus {
   maxBrightness: number;
   serviceActive: boolean;
   orientation: Orientation;
+  /** Top row sends F1-F12 by default (toggled with Fn+Esc). */
+  fnLock: boolean;
+  /** The detachable keyboard's battery percentage, when it reports one. */
+  keyboardBattery: number | null;
+  /** Whether the default microphone is muted (the mic-mute key's LED), once known. */
+  micMuted: boolean | null;
 }
 
 export interface DisplayInfo {
@@ -58,7 +64,20 @@ export interface DuoSettings {
   setupCompleted: boolean;
   touchscreenDisabled: string[];
   savedDisplayLayout: DisplayLayout | null;
+  /** Keyboard backlight off after this many seconds without input; 0 = never. */
+  keyboardBacklightIdleSecs: number;
+  /** What the top-row keys do in place of their ASUS function, by key ("F1"–"F12"). */
+  keyOverrides: Record<string, KeyOverride>;
 }
+
+/** A top-row key's replacement for its ASUS function; the plain F-key (Fn) never changes. */
+export type KeyOverride =
+  | { action: "default" }
+  | { action: "fKey" }
+  | { action: "command"; command: string }
+  | { action: "keys"; keys: string }
+  | { action: "shortcut"; signal: string }
+  | { action: "nothing" };
 
 export interface TouchscreenDevice {
   name: string;
