@@ -25,3 +25,4 @@ Gets the app onto a machine and ready: shell installers build and install the Ru
 - The installer's scale prompt lists 1, 1.25, 1.33, 1.5, 1.67 and 2, with 1.67 as the default. (card 17880f60-1d4d-48f7-8e2d-ca8d73859792, 2026-10-16)
 - Installing once from niri also sets the app up for Hyprland when it is installed, and a terminal still carrying an earlier desktop's settings no longer makes the installer give up. (card cf1eef69-b08e-4b0c-a8a6-a0244af8f4ee, 2026-10-16)
 - Running the installer writes the brightness sudoers rules through root-owned temp files, so no program running as the user can slip its own rules in during install. (card 4070bb5c-c90c-451e-bf78-f0e4f25bba3b, 2026-10-17)
+- A Duo owner can read the README top table to see whether their model, desktop and distro are supported, and install, troubleshoot or uninstall from it alone. (card 5b8650f5-37b0-4845-863e-5b518f87b48f, 2026-10-18)
