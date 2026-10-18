@@ -26,7 +26,8 @@ export function useMonitorNames(layout: DisplayLayout) {
       .then((result) => {
         if (!cancelled) setNames(result);
       })
-      .catch(() => {});
+      // Names are cosmetic: without them screens show their connector name.
+      .catch((error) => console.debug("Monitor names unavailable:", error));
     return () => {
       cancelled = true;
     };
