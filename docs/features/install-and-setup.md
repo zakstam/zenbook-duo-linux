@@ -27,3 +27,4 @@ Gets the app onto a machine and ready: shell installers build and install the Ru
 - Running the installer writes the brightness sudoers rules through root-owned temp files, so no program running as the user can slip its own rules in during install. (card 4070bb5c-c90c-451e-bf78-f0e4f25bba3b, 2026-10-17)
 - A Duo owner can read the README top table to see whether their model, desktop and distro are supported, and install, troubleshoot or uninstall from it alone. (card 5b8650f5-37b0-4845-863e-5b518f87b48f, 2026-10-18)
 - Reinstalling keeps the saved settings as defaults and removes the old brightness sudoers rules. (card c4a4a250-49e5-4ff2-82b0-64add9a6c8e0, 2026-10-18)
+- A GNOME user reading the README learns that the optional Zenbook Duo GNOME Tools extension, made by Antonskt, adds window snapping, F7/F8 controls and on-screen pop-ups, and finds where to get it. (card b9bea0b3-16ef-4442-90d3-1a88a7756919, 2026-10-18)
