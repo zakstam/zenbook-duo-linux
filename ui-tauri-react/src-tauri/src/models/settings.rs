@@ -10,6 +10,7 @@ pub const DEFAULT_USB_MEDIA_REMAP_ENABLED: bool = true;
 pub const DEFAULT_START_ON_BOOT_MINIMIZED: bool = false;
 pub const DEFAULT_INVERT_SENSOR_ROTATION: bool = false;
 pub const DEFAULT_SETUP_COMPLETED: bool = false;
+pub const DEFAULT_DOCK_NOTIFICATIONS: bool = true;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +44,9 @@ pub struct DuoSettings {
     /// What the top-row keys do in place of their ASUS function ("F1"-"F12").
     #[serde(default)]
     pub key_overrides: crate::runtime::key_overrides::KeyOverrides,
+    /// Show a pop-up/notification when the keyboard is attached or detached.
+    #[serde(default = "default_dock_notifications")]
+    pub dock_notifications: bool,
 }
 
 impl Default for DuoSettings {
@@ -61,6 +65,7 @@ impl Default for DuoSettings {
             saved_display_layout: None,
             keyboard_backlight_idle_secs: 0,
             key_overrides: Default::default(),
+            dock_notifications: DEFAULT_DOCK_NOTIFICATIONS,
         }
     }
 }
@@ -94,6 +99,10 @@ fn default_invert_sensor_rotation() -> bool {
     DEFAULT_INVERT_SENSOR_ROTATION
 }
 
+fn default_dock_notifications() -> bool {
+    DEFAULT_DOCK_NOTIFICATIONS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +129,12 @@ mod tests {
         assert!(settings.auto_dual_screen);
         assert!(settings.sync_brightness);
         assert_eq!(settings.theme, ThemePreference::System);
+        assert_eq!(settings.dock_notifications, DEFAULT_DOCK_NOTIFICATIONS);
+    }
+
+    #[test]
+    fn settings_saved_before_dock_notifications_keep_them_on() {
+        let settings: DuoSettings = serde_json::from_str("{}").expect("empty settings");
+        assert!(settings.dock_notifications);
     }
 }

@@ -33,6 +33,7 @@ export const DEFAULT_DUO_SETTINGS: DuoSettings = {
   savedDisplayLayout: null,
   keyboardBacklightIdleSecs: 0,
   keyOverrides: {},
+  dockNotifications: true,
 };
 
 export function withDuoSettingsDefaults(settings: Partial<DuoSettings>): DuoSettings {

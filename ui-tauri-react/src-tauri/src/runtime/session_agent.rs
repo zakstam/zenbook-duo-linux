@@ -421,6 +421,19 @@ where
     }
 }
 
+/// The keyboard state this agent last applied. The daemon replays the current
+/// state on session start, lid open and resume; those replays must not
+/// announce an attach or detach that never happened.
+static LAST_DOCK_STATE: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+/// Records `attached` and returns whether it differs from the last applied
+/// state. The first apply after the agent starts only records it.
+fn dock_state_changed(last: &mut Option<bool>, attached: bool) -> bool {
+    let changed = last.is_some_and(|previous| previous != attached);
+    *last = Some(attached);
+    changed
+}
+
 pub(crate) fn apply_dock_mode(
     attached: bool,
     scale: f64,
@@ -428,8 +441,14 @@ pub(crate) fn apply_dock_mode(
 ) -> Result<(), String> {
     apply_dock_layout(attached, scale, layout)?;
 
-    if let Err(err) = send_dock_mode_notification(attached) {
-        log::warn!("failed to send dock-mode notification: {err}");
+    let changed = dock_state_changed(
+        &mut LAST_DOCK_STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+        attached,
+    );
+    if changed && crate::commands::settings::load_settings_local().dock_notifications {
+        if let Err(err) = send_dock_mode_notification(attached) {
+            log::warn!("failed to send dock-mode notification: {err}");
+        }
     }
 
     Ok(())
@@ -749,10 +768,13 @@ fn send_dock_mode_notification(attached: bool) -> Result<(), String> {
     )) {
         return Ok(());
     }
-    send_runtime_notification(
+    // Transient with a timeout, so it pops up and leaves no entry behind in
+    // notification history (Noctalia, swaync, ...).
+    spawn_notify_send(
         "Zenbook Duo Control",
         dock_mode_notification_message(attached),
         false,
+        true,
     )
 }
 
@@ -761,23 +783,40 @@ pub(crate) fn send_runtime_notification(
     message: &str,
     urgent: bool,
 ) -> Result<(), String> {
+    spawn_notify_send(title, message, urgent, false)
+}
+
+/// Timeout for transient notifications, in milliseconds.
+const TRANSIENT_NOTIFICATION_TIMEOUT_MS: &str = "4000";
+
+fn notify_send_args<'a>(title: &'a str, message: &'a str, urgent: bool, transient: bool) -> Vec<&'a str> {
+    let mut args = vec![
+        "-a",
+        "Zenbook Duo Control",
+        "-u",
+        if urgent { "critical" } else { "normal" },
+        "-i",
+        "input-keyboard",
+    ];
+    if transient {
+        args.extend(["--transient", "-t", TRANSIENT_NOTIFICATION_TIMEOUT_MS]);
+    }
+    args.extend([title, message]);
+    args
+}
+
+fn spawn_notify_send(
+    title: &str,
+    message: &str,
+    urgent: bool,
+    transient: bool,
+) -> Result<(), String> {
     let runtime_dir = env::var("XDG_RUNTIME_DIR")
         .map_err(|_| "XDG_RUNTIME_DIR is not set for runtime notifications".to_string())?;
     let bus_address = env::var("DBUS_SESSION_BUS_ADDRESS")
         .unwrap_or_else(|_| format!("unix:path={runtime_dir}/bus"));
-    let urgency = if urgent { "critical" } else { "normal" };
-
     Command::new("notify-send")
-        .args([
-            "-a",
-            "Zenbook Duo Control",
-            "-u",
-            urgency,
-            "-i",
-            "input-keyboard",
-            title,
-            message,
-        ])
+        .args(notify_send_args(title, message, urgent, transient))
         .env("XDG_RUNTIME_DIR", runtime_dir)
         .env("DBUS_SESSION_BUS_ADDRESS", bus_address)
         .stdout(std::process::Stdio::null())
@@ -796,6 +835,31 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn replays_of_an_unchanged_keyboard_state_stay_silent() {
+        let mut last = None;
+        // Session start: records the state without announcing it.
+        assert!(!dock_state_changed(&mut last, false));
+        // Resume and lid-open replays of the same state.
+        assert!(!dock_state_changed(&mut last, false));
+        assert!(!dock_state_changed(&mut last, false));
+        // A real attach, then a replay of it, then a real detach.
+        assert!(dock_state_changed(&mut last, true));
+        assert!(!dock_state_changed(&mut last, true));
+        assert!(dock_state_changed(&mut last, false));
+    }
+
+    #[test]
+    fn only_dock_notifications_are_transient() {
+        let dock = notify_send_args("Zenbook Duo Control", "Keyboard attached", false, true);
+        assert!(dock.windows(3).any(|w| w == ["--transient", "-t", "4000"]));
+        assert_eq!(&dock[dock.len() - 2..], ["Zenbook Duo Control", "Keyboard attached"]);
+
+        let warning = notify_send_args("Keyboard battery", "10% left", true, false);
+        assert!(!warning.contains(&"--transient"));
+        assert!(warning.windows(2).any(|w| w == ["-u", "critical"]));
+    }
 
     #[test]
     fn dock_mode_notification_mentions_bottom_screen_enabled_on_detach() {

@@ -317,6 +317,7 @@ data.setdefault("autoDualScreen", True)
 data.setdefault("syncBrightness", True)
 data.setdefault("theme", "system")
 data.setdefault("invertSensorRotation", False)
+data.setdefault("dockNotifications", True)
 
 data["defaultBacklight"] = default_backlight
 data["defaultScale"] = default_scale

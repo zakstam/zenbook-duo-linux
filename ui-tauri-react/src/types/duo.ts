@@ -74,6 +74,8 @@ export interface DuoSettings {
   keyboardBacklightIdleSecs: number;
   /** What the top-row keys do in place of their ASUS function, by key ("F1"–"F12"). */
   keyOverrides: Record<string, KeyOverride>;
+  /** Pop-up/notification when the keyboard is attached or detached. */
+  dockNotifications: boolean;
 }
 
 /** A top-row key's replacement for its ASUS function; the plain F-key (Fn) never changes. */

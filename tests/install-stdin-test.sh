@@ -399,6 +399,7 @@ expected = {
     "autoDualScreen": True,
     "syncBrightness": True,
     "theme": "system",
+    "dockNotifications": True,
 }
 for key, value in expected.items():
     if settings.get(key) != value:

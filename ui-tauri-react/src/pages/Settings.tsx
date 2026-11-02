@@ -34,7 +34,7 @@ export default function Settings() {
   const { setTheme } = useTheme();
   const [saving, setSaving] = useState(false);
   const [autosavingSwitch, setAutosavingSwitch] = useState<
-    Partial<Record<"startOnBootMinimized" | "invertSensorRotation", boolean>>
+    Partial<Record<"startOnBootMinimized" | "invertSensorRotation" | "dockNotifications", boolean>>
   >({});
   const [localSettings, setLocalSettings] = useState<DuoSettings>(() =>
     createSettingsDraft(settings),
@@ -68,7 +68,7 @@ export default function Settings() {
   };
 
   const saveSwitchSetting = async (
-    key: "startOnBootMinimized" | "invertSensorRotation",
+    key: "startOnBootMinimized" | "invertSensorRotation" | "dockNotifications",
     value: boolean,
     successMessage: string,
   ) => {
@@ -331,6 +331,27 @@ export default function Settings() {
               zenbook-duo-control --toggle-remap-pause
             </code>.
           </p>
+
+          <div className="h-px bg-border/50" />
+
+          <SettingRow
+            label="Attach/detach notifications"
+            description="Show a pop-up when the keyboard is attached or detached"
+          >
+            <Switch
+              checked={localSettings.dockNotifications}
+              onCheckedChange={(checked) =>
+                void saveSwitchSetting(
+                  "dockNotifications",
+                  checked,
+                  checked
+                    ? "Attach/detach notifications enabled"
+                    : "Attach/detach notifications disabled",
+                )
+              }
+              disabled={autosavingSwitch.dockNotifications}
+            />
+          </SettingRow>
         </div>
       </div>
 
