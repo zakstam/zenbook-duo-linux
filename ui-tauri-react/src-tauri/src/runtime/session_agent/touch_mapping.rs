@@ -1,5 +1,6 @@
 use crate::hardware::duo::{PRIMARY_INTERNAL_CONNECTOR, SECONDARY_INTERNAL_CONNECTOR};
 use crate::ipc::protocol::SessionBackend;
+use crate::runtime::compositor;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -57,17 +58,9 @@ fn apply_hyprland_touch_mappings() -> Result<usize, String> {
     let Some(batch) = hyprland_device_output_batch(&devices) else {
         return Ok(0);
     };
-
-    let output = Command::new("hyprctl")
-        .args(["--batch", batch.as_str()])
-        .output()
-        .map_err(|e| format!("Failed to run hyprctl: {e}"))?;
-    if output.status.success() {
-        Ok(devices.len())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(format!("hyprctl --batch failed: {stderr}"))
-    }
+    let lua = hyprland_device_output_lua(&devices);
+    compositor::hyprland_write(&lua, &["--batch", batch.as_str()])?;
+    Ok(devices.len())
 }
 
 /// Hyprland names input devices by their kernel name, lowercased with spaces
@@ -76,8 +69,23 @@ fn hyprland_device_name(name: &str) -> String {
     name.replace([' ', '\n'], "-").to_lowercase()
 }
 
-/// One `hyprctl --batch` argument setting each device's output. Hyprland keeps
-/// these until its config reloads, so the caller re-applies after each reload.
+/// `hl.device` calls setting each device's output (Hyprland 0.57+). Hyprland
+/// keeps these until its config reloads, so the caller re-applies after each reload.
+fn hyprland_device_output_lua(devices: &[NamedTouchInput]) -> String {
+    devices
+        .iter()
+        .map(|device| {
+            format!(
+                "hl.device({{ name = {}, output = {} }})",
+                compositor::lua_string(&hyprland_device_name(&device.name)),
+                compositor::lua_string(&device.connector)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The same mappings as one `hyprctl --batch` argument, for Hyprland before 0.57.
 fn hyprland_device_output_batch(devices: &[NamedTouchInput]) -> Option<String> {
     if devices.is_empty() {
         return None;
@@ -96,7 +104,7 @@ fn hyprland_device_output_batch(devices: &[NamedTouchInput]) -> Option<String> {
 }
 
 /// Watches Hyprland's event socket and calls `on_reload` after every config
-/// reload, which drops mappings set with `hyprctl keyword`. Returns when the
+/// reload, which drops mappings set at runtime. Returns when the
 /// socket closes (the session ended).
 pub(crate) fn watch_hyprland_config_reloads(
     runtime_dir: &Path,
@@ -520,6 +528,19 @@ N: Name="ASUSTeK Computer Inc. ASUS Zenbook Duo Keyboard"
                 "keyword device[elan9008:00-04f3:425b]:output eDP-1",
                 "keyword device[elan9009:00-04f3:425a-stylus]:output eDP-2",
                 "keyword device[elan9009:00-04f3:425a]:output eDP-2",
+            ]
+        );
+
+        let lua = hyprland_device_output_lua(&devices);
+        let mut calls = lua.lines().collect::<Vec<_>>();
+        calls.sort_unstable();
+        assert_eq!(
+            calls,
+            vec![
+                r#"hl.device({ name = "elan9008:00-04f3:425b", output = "eDP-1" })"#,
+                r#"hl.device({ name = "elan9008:00-04f3:425b-stylus", output = "eDP-1" })"#,
+                r#"hl.device({ name = "elan9009:00-04f3:425a", output = "eDP-2" })"#,
+                r#"hl.device({ name = "elan9009:00-04f3:425a-stylus", output = "eDP-2" })"#,
             ]
         );
     }

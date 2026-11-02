@@ -68,6 +68,56 @@ pub fn hyprland_monitors_json() -> Result<Value, String> {
     serde_json::from_str(&raw[start..]).map_err(|e| format!("Invalid hyprctl JSON: {e}"))
 }
 
+/// Applies one Hyprland config/dispatch change. Hyprland 0.57 replaced hyprlang
+/// with Lua: `hyprctl eval` runs `lua`, while `keyword` and old-style `dispatch`
+/// answer "unknown request". Older Hyprland has no `eval` and answers the same
+/// way, so `legacy` (hyprctl args) is tried only then. hyprctl exits 0 for
+/// "unknown request", so the reply text is checked too.
+pub fn hyprland_write(lua: &str, legacy: &[&str]) -> Result<(), String> {
+    let output = command_output("hyprctl", &["eval", lua])?;
+    let reply = String::from_utf8_lossy(&output.stdout);
+    if !hyprctl_reply_is_unknown_request(&reply) {
+        return hyprctl_reply_result(&output, &reply);
+    }
+    let output = command_output("hyprctl", legacy)?;
+    let reply = String::from_utf8_lossy(&output.stdout);
+    hyprctl_reply_result(&output, &reply)
+}
+
+/// A Lua string literal holding `value`.
+pub fn lua_string(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+fn hyprctl_reply_is_unknown_request(reply: &str) -> bool {
+    reply.lines().any(|line| line.trim() == "unknown request")
+}
+
+fn hyprctl_reply_result(output: &Output, reply: &str) -> Result<(), String> {
+    let failed_line = reply.lines().map(str::trim).find(|line| {
+        *line == "unknown request" || line.starts_with("error") || line.starts_with("Invalid")
+    });
+    match (output.status.success(), failed_line) {
+        (true, None) => Ok(()),
+        (_, Some(line)) => Err(format!("hyprctl rejected the request: {line}")),
+        (false, None) => {
+            let stderr = stderr_trimmed(output);
+            Err(if stderr.is_empty() { reply.trim().to_string() } else { stderr })
+        }
+    }
+}
+
 pub fn hyprland_outputs_from_value(value: &Value) -> Result<Vec<Value>, String> {
     value
         .as_array()
@@ -256,6 +306,36 @@ fn stderr_trimmed(output: &Output) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    fn hyprctl_output(code: i32, stdout: &str) -> Output {
+        Output {
+            status: ExitStatus::from_raw(code << 8),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn hyprctl_replies_that_exit_zero_can_still_fail() {
+        // Measured on Hyprland 0.57.0: removed `keyword` requests exit 0.
+        let unknown = hyprctl_output(0, "unknown request\n");
+        assert!(hyprctl_reply_is_unknown_request("unknown request\n"));
+        assert!(hyprctl_reply_result(&unknown, "unknown request\n").is_err());
+        let batch = "ok\n\nunknown request\n";
+        assert!(hyprctl_reply_result(&hyprctl_output(0, batch), batch).is_err());
+        assert!(hyprctl_reply_result(&hyprctl_output(0, "ok"), "ok").is_ok());
+        let lua_error = "error: [string]:1: hl.device: unknown field 'x'";
+        assert!(hyprctl_reply_result(&hyprctl_output(7, lua_error), lua_error).is_err());
+        assert!(!hyprctl_reply_is_unknown_request(lua_error));
+    }
+
+    #[test]
+    fn lua_strings_escape_quotes_and_backslashes() {
+        assert_eq!(lua_string("eDP-1"), "\"eDP-1\"");
+        assert_eq!(lua_string(r#"a"b\c"#), r#""a\"b\\c""#);
+    }
 
     #[test]
     fn parses_kde_output_names_and_logical_size() {

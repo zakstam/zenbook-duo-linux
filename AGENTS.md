@@ -19,6 +19,8 @@ Display backends:
 | Hyprland | `setup-hyprland.sh` | `hyprctl` |
 | niri | `setup-niri.sh` | `niri msg` |
 
+Hyprland 0.57 replaced `hyprland.conf` with `hyprland.lua` and removed `hyprctl keyword` and old-style `dispatch`. All Hyprland writes go through `compositor::hyprland_write`, which sends Lua through `hyprctl eval` and falls back to the old syntax only when Hyprland answers `unknown request`. hyprctl exits 0 for `unknown request`, so callers must check the reply, not just the exit status. The installer writes the session snippet as both `zenbook-duo.lua` and `zenbook-duo.conf`.
+
 The Hyprland backend only reconfigures the two internal panels found through DRM eDP metadata. Nonstandard connector names can be set with `ZENBOOK_DUO_UPPER_CONNECTOR` and `ZENBOOK_DUO_LOWER_CONNECTOR` in the session agent's environment.
 
 ## GNOME Shell extension (third-party)

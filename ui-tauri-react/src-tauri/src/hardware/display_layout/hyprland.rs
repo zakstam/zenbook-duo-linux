@@ -181,6 +181,22 @@ pub(super) fn get_hyprland_display_layout() -> Result<DisplayLayout, String> {
     layout_from_value(&compositor::hyprland_monitors_json()?)
 }
 
+/// The `hl.monitor` call (Hyprland 0.57+) for the same rule as `monitor_rule`.
+fn monitor_lua(display: &DisplayInfo) -> String {
+    format!(
+        "hl.monitor({{ output = {}, mode = \"{}x{}@{}\", position = \"{}x{}\", scale = {}, transform = {} }})",
+        compositor::lua_string(&display.connector),
+        display.current_mode.width,
+        display.current_mode.height,
+        format_refresh_rate(display.current_mode.refresh_rate),
+        display.x,
+        display.y,
+        format_refresh_rate(display.scale.max(0.1)),
+        transform_value(display.transform)
+    )
+}
+
+/// The legacy `keyword monitor` rule, for Hyprland before 0.57.
 fn monitor_rule(display: &DisplayInfo) -> String {
     format!(
         "{},{}x{}@{},{}x{},{},transform,{}",
@@ -251,18 +267,24 @@ fn stacked_lower_correction(
     (target != (live_lower.x, live_lower.y)).then_some(target)
 }
 
-fn run_hyprctl(args: &[&str]) -> Result<(), String> {
-    run_command("hyprctl", args).map_err(|err| {
-        log::warn!("Hyprland monitor mutation failed args={args:?}: {err}");
+fn run_hyprctl(lua: &str, legacy: &[&str]) -> Result<(), String> {
+    compositor::hyprland_write(lua, legacy).map_err(|err| {
+        log::warn!("Hyprland monitor mutation failed lua={lua:?} legacy={legacy:?}: {err}");
         err
     })
 }
 
+/// -r makes pre-0.57 Hyprland apply the rule now (keeping it over the user's
+/// config rules); `hl.monitor` through eval applies immediately on its own.
+fn apply_monitor(display: &DisplayInfo) -> Result<(), String> {
+    run_hyprctl(&monitor_lua(display), &["-r", "keyword", "monitor", &monitor_rule(display)])
+}
+
+/// Ids of the workspaces on the `lower` output.
 fn workspace_moves_from_value(
     value: &serde_json::Value,
     lower: &str,
-    target: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<i64>, String> {
     let workspaces = value
         .as_array()
         .ok_or_else(|| "Unexpected Hyprland workspaces shape".to_string())?;
@@ -271,7 +293,7 @@ fn workspace_moves_from_value(
         .filter_map(|workspace| {
             let monitor = workspace.get("monitor").and_then(|v| v.as_str())?;
             let id = workspace.get("id").and_then(|v| v.as_i64())?;
-            (monitor == lower).then(|| format!("{id} {target}"))
+            (monitor == lower).then_some(id)
         })
         .collect())
 }
@@ -285,8 +307,13 @@ fn migrate_lower_workspaces(lower: &str, target: &str) -> Result<(), String> {
     }
     let value: serde_json::Value = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Invalid Hyprland workspace JSON: {e}"))?;
-    for move_arg in workspace_moves_from_value(&value, lower, target)? {
-        run_hyprctl(&["dispatch", "moveworkspacetomonitor", &move_arg])?;
+    for id in workspace_moves_from_value(&value, lower)? {
+        let lua = format!(
+            "hl.dispatch(hl.dsp.workspace.move({{ workspace = {id}, monitor = {} }}))",
+            compositor::lua_string(target)
+        );
+        let legacy = format!("{id} {target}");
+        run_hyprctl(&lua, &["dispatch", "moveworkspacetomonitor", &legacy])?;
     }
     Ok(())
 }
@@ -366,10 +393,9 @@ pub(super) fn apply_hyprland_display_layout(layout: &DisplayLayout) -> Result<()
         "Hyprland Duo mutations configure={configure_rules:?} disable_lower={}",
         plan.disable_lower
     );
-    // -r makes Hyprland apply the rule now (keeping it over the user's config
-    // rules), so the read-back below sees the scale it actually chose.
-    for rule in &configure_rules {
-        run_hyprctl(&["-r", "keyword", "monitor", rule])?;
+    // Applied immediately, so the read-back below sees the scale Hyprland chose.
+    for display in &plan.configure {
+        apply_monitor(display)?;
     }
     if !plan.disable_lower {
         let live = get_hyprland_display_layout()?;
@@ -378,13 +404,17 @@ pub(super) fn apply_hyprland_display_layout(layout: &DisplayLayout) -> Result<()
             plan.configure.iter().find(|d| d.connector == owned.lower),
         ) {
             let placed = DisplayInfo { x, y, ..(*lower).clone() };
-            run_hyprctl(&["-r", "keyword", "monitor", &monitor_rule(&placed)])?;
+            apply_monitor(&placed)?;
         }
     }
     if plan.disable_lower {
         migrate_lower_workspaces(&owned.lower, &target.connector)?;
+        let disable_lua = format!(
+            "hl.monitor({{ output = {}, disabled = true }})",
+            compositor::lua_string(&owned.lower)
+        );
         let disable_rule = format!("{},disable", owned.lower);
-        run_hyprctl(&["keyword", "monitor", &disable_rule])?;
+        run_hyprctl(&disable_lua, &["keyword", "monitor", &disable_rule])?;
     }
     Ok(())
 }
@@ -636,9 +666,19 @@ mod tests {
         ]);
 
         assert_eq!(
-            workspace_moves_from_value(&workspaces, "eDP-2", "eDP-1").unwrap(),
-            vec!["2 eDP-1"]
+            workspace_moves_from_value(&workspaces, "eDP-2").unwrap(),
+            vec![2]
         );
+    }
+
+    #[test]
+    fn monitor_lua_matches_the_legacy_rule() {
+        let rotated = DisplayInfo { x: 0, y: 1080, transform: 90, ..display("eDP-2", false) };
+        assert_eq!(
+            monitor_lua(&rotated),
+            r#"hl.monitor({ output = "eDP-2", mode = "2880x1800@120", position = "0x1080", scale = 1.67, transform = 1 })"#
+        );
+        assert_eq!(monitor_rule(&rotated), "eDP-2,2880x1800@120,0x1080,1.67,transform,1");
     }
 
     #[test]

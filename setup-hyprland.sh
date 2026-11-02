@@ -25,31 +25,58 @@ done
 # shellcheck source=setup-common.sh
 source "${DUO_SETUP_DIR}/setup-common.sh"
 
+# Appends include_line to config unless it is already there, keeping a backup.
+add_hyprland_include() {
+  config="$1"
+  include_line="$2"
+  if ! "${run_as_target[@]}" grep -Fqx "${include_line}" "${config}"; then
+    "${run_as_target[@]}" cp -a "${config}" "${config}.bak.$(date +%Y%m%d%H%M%S)"
+    printf '\n%s\n' "${include_line}" | "${run_as_target[@]}" tee -a "${config}" >/dev/null
+  fi
+}
+
+# Writes the snippet in both config languages: hyprland.lua (Hyprland 0.57+,
+# which dropped hyprland.conf) and hyprland.conf (older Hyprland, minimaLinux).
 install_hyprland_snippet() {
   hypr_dir="${TARGET_HOME}/.config/hypr"
-  main_config="${hypr_dir}/hyprland.conf"
-  snippet="${hypr_dir}/zenbook-duo.conf"
-  include_line='source = ~/.config/hypr/zenbook-duo.conf'
+  conf_config="${hypr_dir}/hyprland.conf"
+  lua_config="${hypr_dir}/hyprland.lua"
+  conf_snippet="${hypr_dir}/zenbook-duo.conf"
+  lua_snippet="${hypr_dir}/zenbook-duo.lua"
   run_as_target=()
   if [ "${TARGET_USER}" != "${USER:-}" ] || [ "${EUID}" = 0 ]; then
     run_as_target=(sudo -u "${TARGET_USER}")
   fi
 
   "${run_as_target[@]}" mkdir -p "${hypr_dir}"
-  if [ -e "${snippet}" ]; then
-    "${run_as_target[@]}" cp -a "${snippet}" "${snippet}.bak.$(date +%Y%m%d%H%M%S)"
-  fi
-  "${run_as_target[@]}" tee "${snippet}" >/dev/null <<'EOF'
+  for snippet in "${conf_snippet}" "${lua_snippet}"; do
+    if [ -e "${snippet}" ]; then
+      "${run_as_target[@]}" cp -a "${snippet}" "${snippet}.bak.$(date +%Y%m%d%H%M%S)"
+    fi
+  done
+  "${run_as_target[@]}" tee "${conf_snippet}" >/dev/null <<'EOF'
 # Zenbook Duo session environment. Safe for Hyprland and minimaLinux configs.
 exec-once = systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
 exec-once = dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
 EOF
+  "${run_as_target[@]}" tee "${lua_snippet}" >/dev/null <<'EOF'
+-- Zenbook Duo session environment for Hyprland 0.57+ (Lua config).
+local vars = "WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE"
 
-  if [ -f "${main_config}" ] && ! "${run_as_target[@]}" grep -Fqx "${include_line}" "${main_config}"; then
-    "${run_as_target[@]}" cp -a "${main_config}" "${main_config}.bak.$(date +%Y%m%d%H%M%S)"
-    printf '\n%s\n' "${include_line}" | "${run_as_target[@]}" tee -a "${main_config}" >/dev/null
-  elif [ ! -f "${main_config}" ]; then
-    echo "Hyprland snippet created at ${snippet}; source it once from your active config."
+hl.on("hyprland.start", function()
+    hl.exec_cmd("systemctl --user import-environment " .. vars)
+    hl.exec_cmd("dbus-update-activation-environment --systemd " .. vars)
+end)
+EOF
+
+  if [ -f "${lua_config}" ]; then
+    add_hyprland_include "${lua_config}" 'require("zenbook-duo")'
+  fi
+  if [ -f "${conf_config}" ]; then
+    add_hyprland_include "${conf_config}" 'source = ~/.config/hypr/zenbook-duo.conf'
+  fi
+  if [ ! -f "${lua_config}" ] && [ ! -f "${conf_config}" ]; then
+    echo "Hyprland snippets created at ${lua_snippet} and ${conf_snippet}; load one from your active config."
   fi
 }
 
