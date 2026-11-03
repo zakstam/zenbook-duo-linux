@@ -182,9 +182,11 @@ pub(super) fn get_hyprland_display_layout() -> Result<DisplayLayout, String> {
 }
 
 /// The `hl.monitor` call (Hyprland 0.57+) for the same rule as `monitor_rule`.
+/// A new `hl.monitor` for an output keeps the fields the last one set, so
+/// `disabled = false` is needed to undo the `disabled = true` written on dock.
 fn monitor_lua(display: &DisplayInfo) -> String {
     format!(
-        "hl.monitor({{ output = {}, mode = \"{}x{}@{}\", position = \"{}x{}\", scale = {}, transform = {} }})",
+        "hl.monitor({{ output = {}, mode = \"{}x{}@{}\", position = \"{}x{}\", scale = {}, transform = {}, disabled = false }})",
         compositor::lua_string(&display.connector),
         display.current_mode.width,
         display.current_mode.height,
@@ -676,7 +678,7 @@ mod tests {
         let rotated = DisplayInfo { x: 0, y: 1080, transform: 90, ..display("eDP-2", false) };
         assert_eq!(
             monitor_lua(&rotated),
-            r#"hl.monitor({ output = "eDP-2", mode = "2880x1800@120", position = "0x1080", scale = 1.67, transform = 1 })"#
+            r#"hl.monitor({ output = "eDP-2", mode = "2880x1800@120", position = "0x1080", scale = 1.67, transform = 1, disabled = false })"#
         );
         assert_eq!(monitor_rule(&rotated), "eDP-2,2880x1800@120,0x1080,1.67,transform,1");
     }
