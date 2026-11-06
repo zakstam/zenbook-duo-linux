@@ -18,6 +18,14 @@ pub fn apply_transition_policy(
     let was_attached = display_mode_attached(previous);
     let is_attached = display_mode_attached(&state.status);
 
+    // The keyboard resets its backlight when it switches to a new link, as on
+    // attach, so plugging in the cable re-sends the level it had.
+    if state.status.connection_type == ConnectionType::UsbCable
+        && previous.connection_type != ConnectionType::UsbCable
+    {
+        actions.push(PolicyAction::SetBacklight(previous.backlight_level));
+    }
+
     if was_attached == is_attached {
         if is_attached {
             state.remembered_wifi_enabled = Some(state.status.wifi_enabled);
@@ -216,5 +224,20 @@ mod tests {
         assert!(actions.is_empty());
         assert_eq!(state.remembered_wifi_enabled, Some(false));
         assert_eq!(state.remembered_bluetooth_enabled, Some(true));
+    }
+
+    #[test]
+    fn plugging_the_cable_restores_the_backlight_without_docking() {
+        let mut state = RuntimeState::default();
+        let previous = DuoStatus {
+            connection_type: ConnectionType::Bluetooth,
+            backlight_level: 2,
+            ..DuoStatus::default()
+        };
+        state.status.connection_type = ConnectionType::UsbCable;
+
+        let actions = apply_transition_policy(&mut state, &previous);
+
+        assert_eq!(actions, vec![PolicyAction::SetBacklight(2)]);
     }
 }

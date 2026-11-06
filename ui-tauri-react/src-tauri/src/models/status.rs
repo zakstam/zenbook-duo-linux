@@ -35,8 +35,12 @@ pub struct DuoStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ConnectionType {
+    /// Docked on the bottom screen (the pogo pins).
     Usb,
     Bluetooth,
+    /// Plugged into a USB-C port by cable (e.g. to charge): detached, not docked.
+    #[serde(rename = "usb-cable")]
+    UsbCable,
     #[default]
     None,
 }

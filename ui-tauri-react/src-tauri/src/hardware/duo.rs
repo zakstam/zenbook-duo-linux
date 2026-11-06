@@ -19,6 +19,33 @@ fn board_is_duo_2026(board_name: &str) -> bool {
     board_name.trim() == "UX8407AA"
 }
 
+/// The root-hub port the docked keyboard's pogo pins are wired to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DockUsbPort {
+    /// The xHCI controller's PCI address.
+    pub controller: &'static str,
+    /// The USB `devpath` of a device directly on that port.
+    pub devpath: &'static str,
+}
+
+fn dock_usb_port_for_board(board_name: &str) -> Option<DockUsbPort> {
+    match board_name.trim() {
+        // Measured: pogo pins on port 6; USB-C on 1 and 2, USB-A on 4.
+        "UX8406CA" => Some(DockUsbPort { controller: "0000:00:14.0", devpath: "6" }),
+        _ => None,
+    }
+}
+
+/// The pogo-pin USB port on models where it is known, detected via DMI.
+pub fn dock_usb_port() -> Option<DockUsbPort> {
+    static PORT: std::sync::OnceLock<Option<DockUsbPort>> = std::sync::OnceLock::new();
+    *PORT.get_or_init(|| {
+        std::fs::read_to_string("/sys/class/dmi/id/board_name")
+            .ok()
+            .and_then(|name| dock_usb_port_for_board(&name))
+    })
+}
+
 /// Whether this is the 2026 Zenbook Duo (UX8407AA), detected via DMI.
 /// Workarounds that have only been verified on that model are gated on this
 /// so earlier models keep their existing behavior.
@@ -66,6 +93,15 @@ mod tests {
         assert!(board_is_duo_2026("UX8407AA\n"));
         assert!(!board_is_duo_2026("UX8406MA"));
         assert!(!board_is_duo_2026(""));
+    }
+
+    #[test]
+    fn dock_port_is_known_for_the_ux8406ca_only() {
+        assert_eq!(
+            dock_usb_port_for_board("UX8406CA\n"),
+            Some(DockUsbPort { controller: "0000:00:14.0", devpath: "6" })
+        );
+        assert_eq!(dock_usb_port_for_board("UX8406MA"), None);
     }
 
     #[test]

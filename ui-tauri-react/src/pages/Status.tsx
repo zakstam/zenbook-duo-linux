@@ -89,11 +89,13 @@ export default function Status() {
             <StatusRow label="Connection">
               <div className="flex items-center gap-1.5">
                 {status.connectionType === "bluetooth" && <IconBluetooth className="size-3 text-blue-500" stroke={1.5} />}
-                {status.connectionType === "usb" && <IconPlugConnected className="size-3 text-teal-500" stroke={1.5} />}
+                {(status.connectionType === "usb" || status.connectionType === "usb-cable") && <IconPlugConnected className="size-3 text-teal-500" stroke={1.5} />}
                 <span className="font-mono text-xs">
                   {status.connectionType === "none"
                     ? "Disconnected"
-                    : status.connectionType.toUpperCase()}
+                    : status.connectionType === "usb-cable"
+                      ? "USB cable"
+                      : status.connectionType.toUpperCase()}
                 </span>
               </div>
             </StatusRow>

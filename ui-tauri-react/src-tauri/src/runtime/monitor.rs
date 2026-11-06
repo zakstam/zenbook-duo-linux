@@ -53,7 +53,10 @@ pub fn start(state: Arc<RwLock<RuntimeState>>) {
                 }
                 drop(guard);
                 if previous.connection_type != updated.connection_type
-                    && updated.connection_type == crate::models::ConnectionType::Usb
+                    && matches!(
+                        updated.connection_type,
+                        crate::models::ConnectionType::Usb | crate::models::ConnectionType::UsbCable
+                    )
                 {
                     crate::runtime::mic_led::restore_after_connect("USB");
                 }
@@ -191,9 +194,14 @@ pub(crate) async fn reconcile_usb_media_remap(state: Arc<RwLock<RuntimeState>>) 
 }
 
 fn usb_media_remap_should_run(state: &RuntimeState) -> bool {
-    state.status.keyboard_attached
-        && matches!(state.status.connection_type, ConnectionType::Usb)
-        && state.settings.usb_media_remap_enabled
+    // On a USB cable the keyboard is detached but its keys (F4 backlight, media
+    // keys) still arrive over USB, so the helper runs there as when docked.
+    let usb_keys = match state.status.connection_type {
+        ConnectionType::Usb => state.status.keyboard_attached,
+        ConnectionType::UsbCable => true,
+        ConnectionType::Bluetooth | ConnectionType::None => false,
+    };
+    usb_keys && state.settings.usb_media_remap_enabled
 }
 
 fn clear_usb_media_remap_retry_cooldown(state: &mut RuntimeState) {
@@ -406,6 +414,7 @@ fn connection_label(connection_type: &ConnectionType) -> &'static str {
     match connection_type {
         ConnectionType::Usb => "usb",
         ConnectionType::Bluetooth => "bluetooth",
+        ConnectionType::UsbCable => "usb-cable",
         ConnectionType::None => "none",
     }
 }
@@ -441,6 +450,12 @@ mod tests {
         state.status.keyboard_attached = true;
         state.settings.usb_media_remap_enabled = false;
         assert!(!usb_media_remap_should_run(&state));
+
+        // A keyboard on a USB cable is detached, yet its keys still come over USB.
+        state.settings.usb_media_remap_enabled = true;
+        state.status.keyboard_attached = false;
+        state.status.connection_type = ConnectionType::UsbCable;
+        assert!(usb_media_remap_should_run(&state));
     }
 
     #[test]

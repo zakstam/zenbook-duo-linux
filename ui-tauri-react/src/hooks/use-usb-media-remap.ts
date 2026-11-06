@@ -22,7 +22,7 @@ export function useUsbMediaRemap(options: UseUsbMediaRemapOptions = {}) {
   const connectionType = useStoreSelector((s) => s.status.connectionType);
   const storeSettings = useStoreSelector((s) => s.settings);
   const dispatch = useDispatch();
-  const isUsb = connectionType === "usb";
+  const isUsb = connectionType === "usb" || connectionType === "usb-cable";
   const [remapBusy, setRemapBusy] = useState(false);
   const [remapStatus, setRemapStatus] =
     useState(defaultUsbMediaRemapStatus);
