@@ -1,4 +1,4 @@
-export type ConnectionType = "usb" | "bluetooth" | "none";
+export type ConnectionType = "usb" | "bluetooth" | "usb-cable" | "none";
 export type Orientation = "normal" | "left" | "right" | "inverted";
 export type RefreshPolicy = "fixed" | "dynamic";
 export type EventCategory = "USB" | "DISPLAY" | "KEYBOARD" | "NETWORK" | "ROTATION" | "BLUETOOTH" | "SERVICE";
